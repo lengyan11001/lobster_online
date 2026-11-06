@@ -1606,6 +1606,11 @@ class BrollConfig(BaseModel):
     duration: float = 2.5
 
 
+class ShotConfig(BaseModel):
+    template_id: str = ""
+    title: str = ""
+
+
 class BgmConfig(BaseModel):
     asset_id: str = ""
     volume: float = 0.18
@@ -1618,6 +1623,7 @@ class RenderBody(BaseModel):
     quality: str = "final"
     broll: Optional[BrollConfig] = None
     bgm: Optional[BgmConfig] = None
+    shots: Optional[List[ShotConfig]] = None
     preset: str = "标准"
     components: Optional[List[str]] = None
 
@@ -1705,7 +1711,8 @@ def koubo_recommend_templates(body: RecommendBody):
 def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
                 template_id: Optional[str] = None, title: str = "", quality: str = "final",
                 broll: Optional[Dict[str, Any]] = None,
-                bgm: Optional[Dict[str, Any]] = None) -> None:
+                bgm: Optional[Dict[str, Any]] = None,
+                shots: Optional[List[Dict[str, Any]]] = None) -> None:
     job = _RENDER_JOBS[job_id]
     try:
         project = koubo_project(project_id)
@@ -1717,7 +1724,11 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             job["message"] = message
 
         template_name = ""
-        if template_id:
+        if shots and len(shots) >= 2:
+            from ..services import koubo_template_engine
+            template_name = "分镜"
+            out = koubo_template_engine.render_multi(project, shots, progress, quality=quality, bgm=bgm)
+        elif template_id:
             from ..services import koubo_template_engine
             spec = koubo_template_engine.get_template(template_id) or {}
             template_name = str(spec.get("name") or "")
@@ -1736,6 +1747,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
                 row["render_preset"] = preset
                 row["broll"] = broll or {}
                 row["bgm"] = bgm or {}
+                row["shots"] = shots or []
                 if quality == "preview":
                     row["preview_template_id"] = template_id or ""
                     row["preview_template_name"] = template_name
@@ -1776,12 +1788,22 @@ def koubo_render(pid: str, body: RenderBody):
         running = [j for j in _RENDER_JOBS.values() if j.get("status") == "running" and j.get("project_id") == pid]
     if running:
         raise HTTPException(status_code=409, detail="该项目已有一个包装任务在跑")
+    shots = [x.model_dump() for x in body.shots] if body.shots else None
+    if shots:
+        if not 2 <= len(shots) <= 3:
+            raise HTTPException(status_code=400, detail="分镜只支持 2-3 段")
+        from ..services import koubo_template_engine
+        valid_ids = {t["id"] for t in koubo_template_engine.public_templates()}
+        for item in shots:
+            tid = str(item.get("template_id") or "")
+            if tid and tid not in valid_ids:
+                raise HTTPException(status_code=400, detail="分镜模板不存在：%s" % tid)
     job_id = uuid.uuid4().hex[:10]
     job = {"id": job_id, "project_id": pid, "status": "running", "progress": 0, "done": 0,
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[job_id] = job
-    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final", body.broll.model_dump() if body.broll else None, body.bgm.model_dump() if body.bgm else None), daemon=True).start()
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final", body.broll.model_dump() if body.broll else None, body.bgm.model_dump() if body.bgm else None, shots), daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
 
@@ -1819,7 +1841,7 @@ def _run_batch_item(batch: Dict[str, Any], item: Dict[str, Any], pid: str,
     with _RENDER_LOCK:
         _RENDER_JOBS[sub_id] = sub
     threading.Thread(target=_render_job,
-                     args=(sub_id, pid, "标准", None, template_id, title, quality, None, None),
+                     args=(sub_id, pid, "标准", None, template_id, title, quality, None, None, None),
                      daemon=True).start()
     deadline = time.time() + 3600
     while True:

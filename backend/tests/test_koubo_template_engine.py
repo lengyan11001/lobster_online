@@ -375,3 +375,34 @@ def test_broll_suggest_returns_empty_without_match(tmp_path, monkeypatch):
     r = client.post("/api/skills/digital-human-koubo/broll-suggest", json={"project_id": "p1"})
     assert r.status_code == 200
     assert r.json()["items"] == []
+
+
+def test_shot_bounds_uses_segment_starts():
+    segs = [{"start": 0.0, "end": 2.0}, {"start": 2.0, "end": 5.0}, {"start": 5.0, "end": 8.0}]
+    bounds = e._shot_bounds(segs, 8.0, 3)
+    assert len(bounds) == 4
+    assert bounds[0] == 0.0 and bounds[-1] == 8.0
+    assert bounds == sorted(bounds)
+    assert all(bounds[i + 1] - bounds[i] >= 0.8 for i in range(3))
+
+
+def test_render_rejects_bad_shots(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    (tmp_path / "p1").mkdir()
+    (tmp_path / "p1" / "final.mp4").write_bytes(b"x")
+    monkeypatch.setattr(s, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(s, "koubo_project", lambda pid: {"id": pid, "status": "generated"})
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    one = client.post("/api/skills/digital-human-koubo/projects/p1/render",
+                      json={"template_id": "premium_kinetic_v1", "shots": [{"template_id": "premium_kinetic_v1"}]})
+    assert one.status_code == 400
+    bad = client.post("/api/skills/digital-human-koubo/projects/p1/render",
+                      json={"shots": [{"template_id": "nope"}, {"template_id": "premium_kinetic_v1"}]})
+    assert bad.status_code == 400
+    assert "模板不存在" in bad.json()["detail"]

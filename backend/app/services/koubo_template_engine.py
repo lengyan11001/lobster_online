@@ -7,6 +7,7 @@ import math
 import re
 import shutil
 import tempfile
+import uuid
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -271,6 +272,146 @@ def _ensure_keywords(timeline: Dict[str, Any]) -> None:
             if end > start:
                 out.append({'text': text[:4], 'start': start, 'end': end, 'pop': 0.2})
     timeline['keywords'] = out
+
+
+def _shot_bounds(segs: List[Dict[str, Any]], duration: float, count: int) -> List[float]:
+    count = max(2, min(3, int(count or 3)))
+    bounds = [0.0]
+    for i in range(1, count):
+        target = duration * i / count
+        room = duration - 0.8 * (count - i)
+        candidates = [float(x.get('start') or 0) for x in segs
+                      if bounds[-1] + 0.8 < float(x.get('start') or 0) < room]
+        pick = min(candidates, key=lambda x: abs(x - target)) if candidates else target
+        pick = max(bounds[-1] + 0.8, min(pick, room))
+        bounds.append(round(pick, 3))
+    bounds.append(round(float(duration), 3))
+    return bounds
+
+
+def _multi_cut(src: Path, dest: Path, start: float, end: float) -> None:
+    r = kr._run([str(FFMPEG), '-y', '-loglevel', 'error', '-ss', '%.3f' % start,
+                 '-t', '%.3f' % max(0.4, end - start), '-i', str(src), '-c:v', 'libx264',
+                 '-preset', 'veryfast', '-crf', '18', '-c:a', 'aac', '-b:a', '192k', str(dest)], timeout=600)
+    if r.returncode != 0 or not dest.is_file():
+        raise RuntimeError('分镜切片失败：' + (r.stderr or '')[-400:])
+
+
+def _multi_normalize(src: Path, dest: Path, width: int, height: int) -> None:
+    vf = ('scale=%d:%d:force_original_aspect_ratio=decrease,'
+          'pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1') % (width, height, width, height)
+    r = kr._run([str(FFMPEG), '-y', '-loglevel', 'error', '-i', str(src), '-vf', vf,
+                 '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-c:a', 'aac',
+                 '-b:a', '192k', str(dest)], timeout=600)
+    if r.returncode != 0 or not dest.is_file():
+        raise RuntimeError('分镜统一画幅失败：' + (r.stderr or '')[-400:])
+
+
+def render_multi(project: Dict[str, Any], shots: List[Dict[str, Any]],
+                 progress: Optional[Callable[[int, int, str], None]] = None,
+                 quality: str = 'final', bgm: Optional[Dict[str, Any]] = None) -> Path:
+    shots = [x for x in (shots or []) if isinstance(x, dict)]
+    if len(shots) < 2:
+        raise RuntimeError('至少需要 2 个分镜')
+    shots = shots[:3]
+    pid = str(project.get('id') or '')
+    src = OUTPUT_DIR / pid / 'final.mp4'
+    if not src.is_file():
+        raise RuntimeError('还没有生成成片，无法分镜')
+    info = kr.probe(src)
+    duration = float(info.get('duration') or 0)
+    if duration < 2:
+        raise RuntimeError('底片太短，无法分镜')
+    preview_mode = (quality or '').strip().lower() == 'preview'
+    lang = kr.LANG_MAP.get((project.get('options') or {}).get('language') or 'Mandarin Chinese', 'zh')
+    tmp = Path(tempfile.mkdtemp(prefix='koubo-multi-', dir=str(DATA_DIR)))
+    sub_dirs: List[Path] = []
+    try:
+        full = kr.build_timeline(project, duration, tmp, src, lang)
+        segs = full.get('segs') or []
+        bounds = _shot_bounds(segs, duration, len(shots))
+        outputs: List[Path] = []
+        for i, shot in enumerate(shots):
+            start, end = bounds[i], bounds[i + 1]
+            clip = tmp / ('clip%d.mp4' % i)
+            _multi_cut(src, clip, start, end)
+            sub_id = '%s_s%d_%s' % (pid, i, uuid.uuid4().hex[:6])
+            sub_dir = OUTPUT_DIR / sub_id
+            sub_dir.mkdir(parents=True, exist_ok=True)
+            sub_dirs.append(sub_dir)
+            shutil.copyfile(clip, sub_dir / 'final.mp4')
+            spoken = []
+            for seg in segs:
+                for ch, ts in (seg.get('chars') or []):
+                    if start - 0.05 <= float(ts) < end - 0.02:
+                        spoken.append(str(ch))
+            text = ''.join(spoken).strip()
+            if not text:
+                texts = [str(x.get('text') or '') for x in segs
+                         if start - 0.3 <= float(x.get('start') or 0) < end - 0.05]
+                text = ''.join(texts).strip() or str(project.get('script') or '')
+            sub_project = dict(project)
+            sub_project['id'] = sub_id
+            sub_project['segments'] = [{'id': 's1', 'text': text,
+                                        'shot': project.get('shot') or 'full',
+                                        'seconds': round(end - start, 3)}]
+
+            def sub_progress(done: int, total: int, message: str, _i: int = i) -> None:
+                if progress:
+                    frac = (done / total) if total else 0
+                    overall = int(((_i + frac) / len(shots)) * 100)
+                    progress(overall, 100, '分镜 %d/%d · %s' % (_i + 1, len(shots), message))
+
+            out = render(sub_project, str(shot.get('template_id') or '') or 'premium_kinetic_v1',
+                         sub_progress, title_override=str(shot.get('title') or ''),
+                         quality=quality, broll=None, bgm=None)
+            outputs.append(out)
+        first = kr.probe(outputs[0])
+        width = _even(int(first.get('w') or 720))
+        height = _even(int(first.get('h') or 1280))
+        normalized: List[Path] = []
+        for i, out in enumerate(outputs):
+            dest = tmp / ('norm%d.mp4' % i)
+            _multi_normalize(out, dest, width, height)
+            normalized.append(dest)
+        list_file = tmp / 'list.txt'
+        list_file.write_text(''.join("file '%s'\n" % x.name for x in normalized), encoding='utf-8')
+        merged = tmp / 'merged.mp4'
+        r = kr._run([str(FFMPEG), '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0',
+                     '-i', str(list_file), '-c', 'copy', str(merged)], timeout=600)
+        if r.returncode != 0 or not merged.is_file():
+            raise RuntimeError('分镜拼接失败：' + (r.stderr or '')[-400:])
+        dest = OUTPUT_DIR / pid / ('final_preview.mp4' if preview_mode else 'final_packaged.mp4')
+        if bgm and isinstance(bgm, dict) and str(bgm.get('asset_id') or '').strip():
+            candidate = BGM_DIR / Path(str(bgm.get('asset_id'))).name
+            if candidate.is_file():
+                mixed = tmp / 'mixed.mp4'
+                vol = min(0.8, max(0.0, float(bgm.get('volume') if bgm.get('volume') is not None else 0.18)))
+                fade = min(5.0, max(0.0, float(bgm.get('fade') if bgm.get('fade') is not None else 1.0)))
+                fade_start = max(0.0, duration - fade)
+                af = ('[0:a]volume=1[v];[1:a]volume=%.3f,atrim=0:%.3f,afade=t=out:st=%.3f:d=%.3f[b];'
+                      '[v][b]amix=inputs=2:duration=first[a]') % (vol, duration, fade_start, fade)
+                rr = kr._run([str(FFMPEG), '-y', '-loglevel', 'error', '-i', str(merged),
+                              '-stream_loop', '-1', '-i', str(candidate), '-filter_complex', af,
+                              '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac',
+                              '-b:a', '192k', '-shortest', str(mixed)], timeout=600)
+                if rr.returncode == 0 and mixed.is_file():
+                    merged = mixed
+        shutil.copyfile(merged, dest)
+        qa_path = OUTPUT_DIR / pid / ('qa_%s.json' % ('preview' if preview_mode else 'final'))
+        qa_path.write_text(json.dumps({
+            'duration': duration, 'fps': 12 if preview_mode else 30,
+            'width': width, 'height': height, 'template_id': 'multi_shot',
+            'title': '', 'quality': 'preview' if preview_mode else 'final',
+            'layout_checked': True, 'layout_checks': [], 'layout_warnings': [],
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        if progress:
+            progress(100, 100, '分镜合成完成')
+        return dest
+    finally:
+        for d in sub_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',

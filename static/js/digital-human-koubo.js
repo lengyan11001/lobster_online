@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], recommendations: [], recommendFor: '', broll: null, brollOpen: false, bgm: null, bgmOpen: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], recommendations: [], recommendFor: '', broll: null, brollOpen: false, bgm: null, bgmOpen: false, shotsEnabled: false, shots: [] },
     qa: null,
     timer: null
   };
@@ -178,6 +178,13 @@
       + '#content-digital-human-koubo .kb-tpl-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;}'
       + '#content-digital-human-koubo .kb-tpl-detail{border:0;background:transparent;color:#2563eb;font-size:10.5px;cursor:pointer;padding:2px 0;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-tpl-detail:hover{text-decoration:underline;}'
+      + '#content-digital-human-koubo .kb-multi{border-top:1px solid #f1f5f9;margin-top:10px;padding-top:10px;}'
+      + '#content-digital-human-koubo .kb-multi-head{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;}'
+      + '#content-digital-human-koubo .kb-multi-head label{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#475569;}'
+      + '#content-digital-human-koubo .kb-multi-row{display:grid;grid-template-columns:44px minmax(0,1fr) minmax(0,1fr);gap:6px;align-items:center;margin-top:6px;}'
+      + '#content-digital-human-koubo .kb-multi-row span{font-size:10.5px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-multi-row select,#content-digital-human-koubo .kb-multi-row input{border:1px solid #e2e8f0;border-radius:7px;padding:5px 7px;font-size:11px;color:#334155;background:#fff;min-width:0;}'
+      + '#content-digital-human-koubo .kb-multi-note{font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.6;}'
       + '#kbBatchModal{position:fixed;inset:0;z-index:10070;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
       + '#kbBatchModal .kb-batch{width:min(94vw,720px);max-height:90vh;overflow:auto;background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
       + '#kbBatchModal .kb-batch-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}'
@@ -631,6 +638,53 @@
     modal.querySelector('.kb-sample-close').onclick = close;
   }
 
+  function renderMultiBlock() {
+    var tpls = state.render.templates || [];
+    var cur = state.render.templateId || (tpls[0] && tpls[0].id) || '';
+    if (!(state.render.shots || []).length) {
+      state.render.shots = [
+        { template_id: cur, title: '' },
+        { template_id: cur, title: '' },
+        { template_id: cur, title: '' }
+      ];
+    }
+    var labels = ['开场', '正文', '结尾'];
+    var rows = state.render.shots.slice(0, 3).map(function (x, i) {
+      var opts = tpls.map(function (t) {
+        return '<option value="' + esc(t.id) + '"' + (x.template_id === t.id ? ' selected' : '') + '>' + esc(t.name || t.id) + '</option>';
+      }).join('');
+      return '<div class="kb-multi-row"><span>' + labels[i] + '</span><select data-shot-tpl="' + i + '">' + opts + '</select><input data-shot-title="' + i + '" maxlength="24" placeholder="标题（可留空）" value="' + esc(x.title || '') + '"></div>';
+    }).join('');
+    return '<div class="kb-multi"><div class="kb-multi-head"><b>三段式分镜</b><span style="font-size:10.5px;color:#94a3b8;">开场 / 正文 / 结尾分别套模板</span><span style="flex:1"></span><label><input type="checkbox" id="kbMultiOn"' + (state.render.shotsEnabled ? ' checked' : '') + '> 开启</label></div>'
+      + '<div id="kbMultiBody" style="display:' + (state.render.shotsEnabled ? 'block' : 'none') + ';">' + rows
+      + '<div class="kb-multi-note">按口播段落自动切底片，逐段套模板后拼接；分镜模式暂不叠加 B-roll，背景音乐仍可用。预览会慢一些（约 1–2 分钟）。</div>'
+      + '</div></div>';
+  }
+
+  function bindMultiHandlers() {
+    var on = $('kbMultiOn');
+    if (on) on.onchange = function () {
+      state.render.shotsEnabled = !!on.checked;
+      if (state.render.shotsEnabled && !(state.render.shots || []).length) {
+        var cur = state.render.templateId;
+        state.render.shots = [{ template_id: cur, title: '' }, { template_id: cur, title: '' }, { template_id: cur, title: '' }];
+      }
+      renderPack();
+    };
+    $('kbPack').querySelectorAll('[data-shot-tpl]').forEach(function (sel) {
+      sel.onchange = function () {
+        var i = Number(sel.getAttribute('data-shot-tpl') || 0);
+        if (state.render.shots[i]) state.render.shots[i].template_id = sel.value;
+      };
+    });
+    $('kbPack').querySelectorAll('[data-shot-title]').forEach(function (inp) {
+      inp.oninput = function () {
+        var i = Number(inp.getAttribute('data-shot-title') || 0);
+        if (state.render.shots[i]) state.render.shots[i].title = inp.value || '';
+      };
+    });
+  }
+
   function fitBlock(t) {
     var script = String((state.project && state.project.script) || '').trim();
     var rules = t.rules || {};
@@ -1034,6 +1088,7 @@
       if (!box.innerHTML) return;
       paintTemplateGrid();
       bindTemplateTools();
+    bindMultiHandlers();
       return;
     }
     var r = state.render;
@@ -1051,6 +1106,7 @@
       + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
     box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (tpls.length || 0) + ' 个模板</small></div>'
       + '<div class="kb-title-input"><label>标题</label><input id="kbTemplateTitle" maxlength="24" placeholder="留空自动从口播稿提取" value="' + esc(r.title || '') + '"><small>可选</small></div>'
+      + renderMultiBlock()
       + ((r.recommendations && r.recommendations.length) ? '<div class="kb-recommend"><b>推荐</b>' + r.recommendations.map(function (x) { return '<button type="button" class="kb-rec-chip" data-rec="' + esc(x.template_id) + '" title="' + esc(x.reason || '') + '">' + esc(x.name) + '</button>'; }).join('') + '</div>' : '')
       + '<div class="kb-packbar" style="margin-top:2px;">'
       + (hasFinal ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
@@ -1112,7 +1168,7 @@
     renderPack();
     req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode, broll: state.render.broll ? { asset_id: state.render.broll.asset_id, mode: state.render.broll.mode || 'pip', start: Number(state.render.broll.start || 2), duration: Number(state.render.broll.duration || 2.5) } : null, bgm: state.render.bgm ? { asset_id: state.render.bgm.asset_id, volume: Number(state.render.bgm.volume != null ? state.render.bgm.volume : 0.18), fade: Number(state.render.bgm.fade != null ? state.render.bgm.fade : 1) } : null })
+      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode, broll: state.render.broll ? { asset_id: state.render.broll.asset_id, mode: state.render.broll.mode || 'pip', start: Number(state.render.broll.start || 2), duration: Number(state.render.broll.duration || 2.5) } : null, bgm: state.render.bgm ? { asset_id: state.render.bgm.asset_id, volume: Number(state.render.bgm.volume != null ? state.render.bgm.volume : 0.18), fade: Number(state.render.bgm.fade != null ? state.render.bgm.fade : 1) } : null, shots: state.render.shotsEnabled ? state.render.shots.slice(0, 3).map(function (x) { return { template_id: x.template_id || '', title: x.title || '' }; }) : null })
     }).then(function (d) {
       log((state.render.runningMode === 'preview' ? '预览任务已提交 ' : '高清任务已提交 ') + d.job_id);
       pollRender(d.job_id);
@@ -1393,6 +1449,8 @@
       state.render.brollOpen = !!state.render.broll;
       state.render.bgm = (p.bgm && p.bgm.asset_id) ? p.bgm : null;
       state.render.bgmOpen = !!state.render.bgm;
+      state.render.shots = Array.isArray(p.shots) ? p.shots : [];
+      state.render.shotsEnabled = state.render.shots.length >= 2;
       state.render.recommendFor = '';
       state.render.recommendations = [];
       if (p.photo_id) {
