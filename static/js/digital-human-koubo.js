@@ -871,9 +871,9 @@
     var cats = [];
     tpls.forEach(function (t) { if (t.category && cats.indexOf(t.category) < 0) cats.push(t.category); });
     var chips = '<button type="button" class="kb-tpl-chip' + ((r.templateCategory || 'all') === 'all' ? ' on' : '') + '" data-cat="all">全部</button>'
-      + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('')
+      + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'recent' ? ' on' : '') + '" data-cat="recent">最近</button>'
       + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'favorites' ? ' on' : '') + '" data-cat="favorites">收藏</button>'
-      + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'recent' ? ' on' : '') + '" data-cat="recent">最近</button>';
+      + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
     return '<div class="kb-card"><div class="kb-sec-title">模板库<small>' + tpls.length + ' 个模板 · 先看风格，生成后一键套用</small></div>'
       + '<div class="kb-hint" style="margin:0 0 10px;">先在左侧上传形象照、写口播稿并生成底片。模板可以先看样片；底片出来后同一段素材可反复换模板，不重复扣算力。</div>'
       + '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>'
