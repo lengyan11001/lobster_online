@@ -158,7 +158,7 @@
   function currentClipMode() {
     var select = $('mcmClipModeSelect');
     var mode = select ? String(select.value || '') : '';
-    if (mode === 'random' || mode === 'cut_only' || mode === 'single' || mode === 'original') return mode;
+    if (mode === 'fixed' || mode === 'random' || mode === 'cut_only' || mode === 'single' || mode === 'original') return mode;
     return 'original';
   }
 
