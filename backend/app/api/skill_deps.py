@@ -823,6 +823,7 @@ def _summary_row(row: Dict[str, Any], running: set) -> Dict[str, Any]:
     status = row.get("status") or "ready"
     video = OUTPUT_DIR / pid / "final.mp4"
     packaged = OUTPUT_DIR / pid / "final_packaged.mp4"
+    preview = OUTPUT_DIR / pid / "final_preview.mp4"
     if status == "generating" and pid not in running:
         status = "generated" if video.is_file() else "ready"
     return {
@@ -835,6 +836,8 @@ def _summary_row(row: Dict[str, Any], running: set) -> Dict[str, Any]:
         "segments_count": len(row.get("segments") or []),
         "has_video": video.is_file(),
         "video_v": int(video.stat().st_mtime_ns // 1_000_000) if video.is_file() else 0,
+        "preview_rendered": preview.is_file(),
+        "preview_v": int(preview.stat().st_mtime_ns // 1_000_000) if preview.is_file() else 0,
         "rendered": packaged.is_file(),
         "rendered_v": int(packaged.stat().st_mtime_ns // 1_000_000) if packaged.is_file() else 0,
     }
@@ -1455,6 +1458,7 @@ def koubo_generate_job(job_id: str):
 class RenderBody(BaseModel):
     template_id: Optional[str] = None
     title: Optional[str] = None
+    quality: str = "final"
     preset: str = "标准"
     components: Optional[List[str]] = None
 
@@ -1470,7 +1474,7 @@ def koubo_templates():
 
 
 def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
-                template_id: Optional[str] = None, title: str = "") -> None:
+                template_id: Optional[str] = None, title: str = "", quality: str = "final") -> None:
     job = _RENDER_JOBS[job_id]
     try:
         project = koubo_project(project_id)
@@ -1486,24 +1490,33 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             from ..services import koubo_template_engine
             spec = koubo_template_engine.get_template(template_id) or {}
             template_name = str(spec.get("name") or "")
-            out = koubo_template_engine.render(project, template_id, progress, title_override=title)
+            out = koubo_template_engine.render(project, template_id, progress, title_override=title, quality=quality)
         else:
             from ..services import koubo_renderer
             out = koubo_renderer.render(project, preset, components, progress)
         rows = _load_projects()
+        now_iso = datetime.now().isoformat(timespec="seconds")
         for row in rows:
             if row.get("id") == project_id:
                 row["render_preset"] = preset
-                row["template_id"] = template_id or ""
-                row["template_name"] = template_name
-                row["template_title"] = title or ""
-                row["rendered_at"] = datetime.now().isoformat(timespec="seconds")
-                row["rendered"] = True
+                if quality == "preview":
+                    row["preview_template_id"] = template_id or ""
+                    row["preview_template_name"] = template_name
+                    row["preview_template_title"] = title or ""
+                    row["preview_rendered_at"] = now_iso
+                    row["preview_rendered"] = True
+                else:
+                    row["template_id"] = template_id or ""
+                    row["template_name"] = template_name
+                    row["template_title"] = title or ""
+                    row["rendered_at"] = now_iso
+                    row["rendered"] = True
         _save_projects(rows)
         job["status"] = "done"
         job["progress"] = 100
-        job["message"] = "成片完成"
-        job["output"] = "/api/skills/digital-human-koubo/projects/%s/rendered" % project_id
+        job["message"] = "预览完成" if quality == "preview" else "成片完成"
+        job["output"] = "/api/skills/digital-human-koubo/projects/%s/%s" % (
+            project_id, "preview" if quality == "preview" else "rendered")
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc)[:1500]
@@ -1529,7 +1542,7 @@ def koubo_render(pid: str, body: RenderBody):
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[job_id] = job
-    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or ""), daemon=True).start()
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final"), daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
 
@@ -1549,6 +1562,14 @@ def koubo_qa(pid: str):
         raise HTTPException(status_code=400, detail="先生成成片，再质检")
     from ..services import koubo_renderer
     return koubo_renderer.qa(project)
+
+
+@router.get("/api/skills/digital-human-koubo/projects/{pid}/preview", summary="模板快速预览")
+def koubo_preview(pid: str):
+    path = OUTPUT_DIR / pid / "final_preview.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="预览还没有生成")
+    return FileResponse(str(path), media_type="video/mp4", filename="koubo-preview-%s.mp4" % pid)
 
 
 @router.get("/api/skills/digital-human-koubo/projects/{pid}/rendered", summary="包装后成片")

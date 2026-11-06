@@ -124,7 +124,7 @@ def _ensure_keywords(timeline: Dict[str, Any]) -> None:
 
 def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
            progress: Optional[Callable[[int, int, str], None]] = None,
-           title_override: str = '') -> Path:
+           title_override: str = '', quality: str = 'final') -> Path:
     spec = get_template(template_id) or get_template('premium_kinetic_v1')
     if not spec:
         raise RuntimeError('模板不存在')
@@ -137,7 +137,12 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
     if duration <= 0:
         raise RuntimeError('底片时长无效')
     W, H = _canvas(spec, info)
-    fps = int(spec.get('fps') or FPS)
+    preview_mode = (quality or '').strip().lower() == 'preview'
+    if preview_mode:
+        target_h = 480
+        H = target_h
+        W = _even(int(round((info.get('w') or 720) * target_h / max(1, info.get('h') or 1280))))
+    fps = 12 if preview_mode else int(spec.get('fps') or FPS)
     total_frames = max(1, int(math.ceil(duration * fps)))
     opts = project.get('options') or {}
     lang = kr.LANG_MAP.get(opts.get('language') or 'Mandarin Chinese', 'zh')
@@ -192,20 +197,20 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 page.evaluate('(t) => window.renderAt(t)', t)
                 page.screenshot(path=str(tmp / ('o%05d.png' % (i + 1))), omit_background=True, type='png')
                 if progress and (i % 10 == 0 or i == total_frames - 1):
-                    progress(i + 1, total_frames, '模板渲染 %d/%d' % (i + 1, total_frames))
+                    progress(i + 1, total_frames, ('预览渲染' if preview_mode else '模板渲染') + ' %d/%d' % (i + 1, total_frames))
             browser.close()
-        out = OUTPUT_DIR / pid / 'final_packaged.mp4'
+        out = OUTPUT_DIR / pid / ('final_preview.mp4' if preview_mode else 'final_packaged.mp4')
         fg = ('[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1[bg];[bg][1:v]overlay=0:0:format=auto[v]') % (W, H, W, H)
         cmd = [str(FFMPEG), '-y', '-loglevel', 'error', '-i', str(src),
                '-framerate', str(fps), '-start_number', '1', '-i', str(tmp / 'o%05d.png'),
                '-filter_complex', fg, '-map', '[v]', '-map', '0:a?',
-               '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p',
+               '-r', str(fps), '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p',
                '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', str(out)]
         r = kr._run(cmd, timeout=1800)
         if r.returncode != 0:
             raise RuntimeError('模板合成失败：' + (r.stderr or '')[-700:])
         if progress:
-            progress(total_frames, total_frames, '模板合成完成')
+            progress(total_frames, total_frames, '预览合成完成' if preview_mode else '模板合成完成')
         return out
     finally:
         if srv is not None:

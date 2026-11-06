@@ -14,11 +14,16 @@ def test_summary_video_version_uses_milliseconds(tmp_path, monkeypatch):
     video = project_dir / "final.mp4"
     video.write_bytes(b"x")
     os.utime(video, ns=(1234567890123456789, 1234567890123456789))
+    preview = project_dir / "final_preview.mp4"
+    preview.write_bytes(b"x")
+    os.utime(preview, ns=(1234567890456789012, 1234567890456789012))
 
     row = skill_deps._summary_row({"id": "p1", "status": "generated"}, set())
 
     assert row["has_video"] is True
     assert row["video_v"] == 1234567890123
+    assert row["preview_rendered"] is True
+    assert row["preview_v"] == 1234567890456
 
 
 def test_asset_cache_is_reused_only_for_the_same_photo(tmp_path, monkeypatch):

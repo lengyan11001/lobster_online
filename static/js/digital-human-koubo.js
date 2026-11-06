@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false },
     qa: null,
     timer: null
   };
@@ -405,8 +405,10 @@
       btn.onclick = function () {
         state.render.templateId = btn.getAttribute('data-tpl');
         state.render.packaged = false;
+        state.render.previewReady = false;
+        state.render.showPreview = false;
         state.render.job = null;
-        if (state.project) state.project.rendered = false;
+        if (state.project) { state.project.rendered = false; state.project.preview_rendered = false; }
         renderPack(); renderPreview();
         log('已选模板：' + (btn.querySelector('b') ? btn.querySelector('b').textContent : ''));
       };
@@ -420,6 +422,10 @@
     var r = state.render;
     var job = r.job && r.job.status === 'running' ? r.job : null;
     var tpls = r.templates || [];
+    var hasPreview = !!r.previewReady || !!(state.project && state.project.preview_rendered);
+    var hasFinal = !!r.packaged || !!(state.project && state.project.rendered);
+    var primaryMode = hasPreview ? 'final' : 'preview';
+    var primaryLabel = job ? ('生成中 ' + (job.progress || 0) + '%') : (!hasPreview ? '预览效果' : (hasFinal ? '重新生成高清' : '生成高清成片'));
     var cats = [];
     tpls.forEach(function (t) { if (t.category && cats.indexOf(t.category) < 0) cats.push(t.category); });
     var chips = '<button type="button" class="kb-tpl-chip' + ((r.templateCategory || 'all') === 'all' ? ' on' : '') + '" data-cat="all">全部</button>'
@@ -430,11 +436,12 @@
       + '<div class="kb-templates" id="kbTplGrid"></div>'
       + (tpls.length > tpls.filter(function (t) { return t.featured; }).length ? '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>' : '')
       + '<div class="kb-packbar" style="margin-top:12px;">'
-      + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
+      + (hasFinal ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
       + '<span style="flex:1"></span>'
-      + '<button type="button" class="kb-btn-primary" id="kbRender" style="width:auto;min-width:150px;"' + (job ? ' disabled' : '') + '>' + (job ? '生成中 ' + (job.progress || 0) + '%' : (r.packaged ? '换个模板再出片' : '生成成片')) + '</button>'
+      + (hasPreview && !job ? '<button type="button" class="kb-btn" id="kbPreviewAgain">重新预览</button>' : '')
+      + '<button type="button" class="kb-btn-primary" id="kbRender" data-mode="' + primaryMode + '" style="width:auto;min-width:150px;"' + (job ? ' disabled' : '') + '>' + primaryLabel + '</button>'
       + '</div>'
-      + '<div class="kb-hint" style="margin-top:6px;">同一段底片换模板不会重新生成，也不会再扣底片算力。</div>'
+      + '<div class="kb-hint" style="margin-top:6px;">先看 480p 快速预览，满意再出高清；同一段底片换模板不会重新生成，也不会再扣底片算力。</div>'
       + (job ? '<div style="margin-top:8px;font-size:11px;color:#64748b;">' + esc(job.message || '') + '<div style="height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:4px;"><i style="display:block;height:100%;width:' + Math.max(3, job.progress || 0) + '%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);"></i></div></div>' : '')
       + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
@@ -453,20 +460,23 @@
     var titleInput = $('kbTemplateTitle');
     if (titleInput) titleInput.oninput = function () { state.render.title = titleInput.value || ''; };
     var btn = $('kbRender');
-    if (btn) btn.onclick = startRender;
+    if (btn) btn.onclick = function () { startRender(btn.getAttribute('data-mode') || 'preview'); };
+    var again = $('kbPreviewAgain');
+    if (again) again.onclick = function () { startRender('preview'); };
     var qaBtn = $('kbQa');
     if (qaBtn) qaBtn.onclick = runQa;
   }
 
-  function startRender() {
+  function startRender(mode) {
     if (!state.project) return;
-    state.render.job = { status: 'running', progress: 0, message: '准备渲染' };
+    state.render.runningMode = mode || 'preview';
+    state.render.job = { status: 'running', progress: 0, message: state.render.runningMode === 'preview' ? '准备预览' : '准备生成高清' };
     renderPack();
     req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '' })
+      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode })
     }).then(function (d) {
-      log('包装任务已提交 ' + d.job_id);
+      log((state.render.runningMode === 'preview' ? '预览任务已提交 ' : '高清任务已提交 ') + d.job_id);
       pollRender(d.job_id);
     }).catch(function (e) {
       state.render.job = null;
@@ -483,12 +493,14 @@
         if (job.status !== 'running') {
           clearInterval(t);
           if (job.status === 'done') {
-            state.render.packaged = true;
+            var mode = state.render.runningMode || 'final';
+            if (mode === 'preview') { state.render.previewReady = true; state.render.showPreview = true; }
+            else { state.render.packaged = true; state.render.showPreview = false; }
             state.render.job = null;
-            log('包装完成');
+            log(mode === 'preview' ? '预览完成' : '高清成片完成');
             req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) { state.project = p; renderAll(); });
           } else {
-            log('包装失败：' + (job.error || job.message || ''));
+            log((state.render.runningMode === 'preview' ? '预览失败：' : '高清生成失败：') + (job.error || job.message || ''));
           }
         }
       }).catch(function () {});
@@ -513,14 +525,19 @@
       }
     }
     if (proj && proj.status === 'generated' && proj.has_video !== false) {
-      var packaged = isPreview ? !!proj.rendered : (state.render.packaged || proj.rendered);
-      var ver = packaged ? (proj.rendered_v || 0) : (proj.video_v || 0);
-      var src = API + '/api/skills/digital-human-koubo/projects/' + proj.id + (packaged ? '/rendered' : '/video') + '?v=' + (ver || Date.now());
+      var usePreview = !isPreview && state.render.showPreview && !!proj.preview_rendered;
+      var packaged = isPreview ? !!proj.rendered : (!usePreview && (state.render.packaged || proj.rendered));
+      var ver = usePreview ? (proj.preview_v || 0) : (packaged ? (proj.rendered_v || 0) : (proj.video_v || 0));
+      var kind = usePreview ? '/preview' : (packaged ? '/rendered' : '/video');
+      var src = API + '/api/skills/digital-human-koubo/projects/' + proj.id + kind + '?v=' + (ver || Date.now());
+      var badge = usePreview ? '预览版 · 480p' : (packaged ? '高清成片' : '底片');
       box.innerHTML = '<video controls playsinline preload="metadata" src="' + esc(src) + '"></video>'
         + '<div style="position:absolute;left:14px;top:12px;background:rgba(15,23,42,.72);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">'
         + (isPreview ? '历史预览：' : '当前项目：') + esc(proj.name) + '</div>'
         + (isPreview ? '<button type="button" class="kb-btn" id="kbPreviewBack" style="position:absolute;right:14px;top:10px;">返回当前</button>' : '')
-        + (packaged ? '<div style="position:absolute;left:14px;bottom:12px;background:rgba(15,23,42,.72);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">包装版</div><a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + proj.id + '/video') + '" target="_blank" style="position:absolute;right:14px;bottom:12px;color:#cbd5e1;font-size:11px;text-decoration:underline;">看原片</a>' : '');
+        + '<div style="position:absolute;left:14px;bottom:12px;background:rgba(15,23,42,.72);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">' + esc(badge) + '</div>'
+        + ((packaged || usePreview) ? '<a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + proj.id + (usePreview ? '/preview' : '/rendered')) + '" target="_blank" style="position:absolute;right:14px;bottom:12px;color:#cbd5e1;font-size:11px;text-decoration:underline;">下载' + (usePreview ? '预览' : '成片') + '</a>' : '')
+        + (packaged ? '<a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + proj.id + '/video') + '" target="_blank" style="position:absolute;right:90px;bottom:12px;color:#cbd5e1;font-size:11px;text-decoration:underline;">看原片</a>' : '');
       var vid = box.querySelector('video');
       if (vid) { try { vid.load(); } catch (e) {} }
       var back = $('kbPreviewBack');
@@ -727,8 +744,11 @@
       state.quote = { segments: p.segments || [], total_seconds: p.total_seconds || 0, total_credits: p.total_credits || 0 };
       state.job = null;
       if (p.template_id) state.render.templateId = p.template_id;
-      state.render.title = p.template_title || '';
+      else if (p.preview_template_id) state.render.templateId = p.preview_template_id;
+      state.render.title = p.template_title || p.preview_template_title || '';
       state.render.packaged = !!p.rendered;
+      state.render.previewReady = !!p.preview_rendered;
+      state.render.showPreview = !!p.preview_rendered && !p.rendered;
       if (p.photo_id) {
         state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };
       }
