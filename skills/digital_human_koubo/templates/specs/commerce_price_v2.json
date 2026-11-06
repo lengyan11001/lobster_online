@@ -22,7 +22,7 @@
     "paper": "#FFFFFF",
     "titleSize": 0.055,
     "captionSize": 0.05,
-    "keywordSize": 0.13
+    "keywordSize": 0.105
   },
   "copy": {
     "badge": "价格重点",
@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/commerce_price_v2.svg",
   "cover_title": "这个价，今天只此一次",
   "cover_sub": "价格冲击 · 强转化",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/commerce_price_v2.mp4",
+  "layout": "commercial",
+  "chapter": {
+    "show": true,
+    "no": "价格",
+    "title": "今天只此一次"
+  }
 }

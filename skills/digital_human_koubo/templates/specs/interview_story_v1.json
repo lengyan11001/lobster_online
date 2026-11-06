@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/interview_story_v1.svg",
   "cover_title": "他为什么选择这条路",
   "cover_sub": "人物故事 · 暖色访谈",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/interview_story_v1.mp4",
+  "layout": "interview",
+  "chapter": {
+    "show": true,
+    "no": "STORY",
+    "title": "人物"
+  }
 }

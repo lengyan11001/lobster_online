@@ -126,6 +126,15 @@
       + '#content-digital-human-koubo .kb-tpl.on{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12);}'
       + '#content-digital-human-koubo .kb-tpl-preview{display:block;height:58px;border-radius:10px;margin-bottom:8px;position:relative;overflow:hidden;}'
       + '#content-digital-human-koubo .kb-tpl-cover{display:block;width:100%;height:74px;object-fit:cover;border-radius:10px;margin-bottom:8px;background:#eef2f7;}'
+      + '#content-digital-human-koubo .kb-tpl-coverwrap{position:relative;margin-bottom:8px;}'
+      + '#content-digital-human-koubo .kb-tpl-coverwrap .kb-tpl-cover{margin-bottom:0;}'
+      + '#content-digital-human-koubo .kb-tpl-play{position:absolute;right:6px;bottom:6px;border:0;border-radius:999px;padding:3px 8px;background:rgba(5,9,18,.72);color:#fff;font-size:10px;cursor:pointer;backdrop-filter:blur(6px);}'
+      + '#content-digital-human-koubo .kb-tpl-play:hover{background:rgba(37,99,235,.9);}'
+      + '#kbSampleModal{position:fixed;inset:0;z-index:10050;background:rgba(5,9,18,.76);display:flex;align-items:center;justify-content:center;padding:24px;}'
+      + '#kbSampleModal .kb-sample-card{width:min(92vw,520px);background:#0b1220;border-radius:18px;padding:12px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
+      + '#kbSampleModal .kb-sample-head{display:flex;align-items:center;justify-content:space-between;color:#e2e8f0;font-size:12px;margin-bottom:8px;}'
+      + '#kbSampleModal video{width:100%;max-height:78vh;border-radius:12px;background:#000;}'
+      + '#kbSampleModal .kb-sample-close{border:1px solid rgba(255,255,255,.2);background:transparent;color:#e2e8f0;border-radius:999px;padding:4px 9px;font-size:11px;cursor:pointer;}'
       + '#content-digital-human-koubo .kb-tpl-preview:after{content:"";position:absolute;left:10%;right:10%;top:20%;height:12px;border-radius:6px;background:rgba(255,255,255,.82);box-shadow:0 10px 0 -2px rgba(255,255,255,.32);}'
       + '#content-digital-human-koubo .kb-tpl b{display:block;font-size:12px;color:#0f172a;margin-bottom:3px;}'
       + '#content-digital-human-koubo .kb-tpl p{font-size:11px;line-height:1.45;color:#64748b;margin:0 0 5px;min-height:31px;}'
@@ -384,20 +393,39 @@
       .catch(function (e) { log('质检失败：' + e.message); if (btn) { btn.disabled = false; btn.textContent = '开始质检'; } });
   }
 
+  function openTemplateSample(url, name) {
+    if (!url) return;
+    var old = document.getElementById('kbSampleModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var src = String(url).indexOf('http') === 0 ? url : API + url;
+    var modal = document.createElement('div');
+    modal.id = 'kbSampleModal';
+    modal.innerHTML = '<div class="kb-sample-card"><div class="kb-sample-head"><b>' + esc(name || '模板样片') + '</b><button type="button" class="kb-sample-close">关闭</button></div><video controls autoplay playsinline src="' + esc(src) + '"></video></div>';
+    document.body.appendChild(modal);
+    function close() {
+      var v = modal.querySelector('video'); if (v) { try { v.pause(); } catch (e) {} }
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    modal.querySelector('.kb-sample-close').onclick = close;
+  }
+
   function templateCardHtml(t) {
     var r = state.render;
     var on = t.id === r.templateId;
     var colors = t.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
     var cover = t.cover ? (String(t.cover).indexOf('http') === 0 ? t.cover : API + t.cover) : '';
+    var sample = t.sample_video_url || '';
     var visual = cover
       ? '<img class="kb-tpl-cover" src="' + esc(cover) + '" alt="">'
       : '<span class="kb-tpl-preview" style="background:linear-gradient(135deg,' + esc(colors[0] || '#FFD84D') + ',' + esc(colors[1] || '#FF4D8D') + ',' + esc(colors[2] || '#4DE1FF') + ')"></span>';
-    return '<button type="button" class="kb-tpl' + (on ? ' on' : '') + '" data-tpl="' + esc(t.id) + '">'
-      + visual
+    var play = sample ? '<button type="button" class="kb-tpl-play" data-sample="' + esc(sample) + '" data-name="' + esc(t.name || '') + '">▶ 看样片</button>' : '';
+    return '<div class="kb-tpl' + (on ? ' on' : '') + '" data-tpl="' + esc(t.id) + '">'
+      + '<div class="kb-tpl-coverwrap">' + visual + play + '</div>'
       + '<b>' + esc(t.name || t.id) + '</b>'
       + '<p>' + esc(t.description || '') + '</p>'
       + '<small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small>'
-      + '</button>';
+      + '</div>';
   }
 
   function paintTemplateGrid() {
@@ -416,9 +444,9 @@
       });
     }
     grid.innerHTML = list.map(templateCardHtml).join('') || '<span style="font-size:12px;color:#94a3b8;padding:10px 0;">没有匹配的模板</span>';
-    grid.querySelectorAll('[data-tpl]').forEach(function (btn) {
-      btn.onclick = function () {
-        state.render.templateId = btn.getAttribute('data-tpl');
+    grid.querySelectorAll('[data-tpl]').forEach(function (card) {
+      card.onclick = function () {
+        state.render.templateId = card.getAttribute('data-tpl');
         state.render.packaged = false;
         state.render.previewReady = false;
         state.render.showPreview = false;
@@ -426,7 +454,13 @@
         state.render.job = null;
         if (state.project) { state.project.rendered = false; state.project.preview_rendered = false; }
         renderPack(); renderPreview();
-        log('已选模板：' + (btn.querySelector('b') ? btn.querySelector('b').textContent : ''));
+        log('已选模板：' + (card.querySelector('b') ? card.querySelector('b').textContent : ''));
+      };
+    });
+    grid.querySelectorAll('[data-sample]').forEach(function (btn) {
+      btn.onclick = function (e) {
+        e.stopPropagation();
+        openTemplateSample(btn.getAttribute('data-sample'), btn.getAttribute('data-name'));
       };
     });
   }

@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/premium_kinetic_v1.svg",
   "cover_title": "今天聊点真的",
   "cover_sub": "一句话，讲透一件事",
-  "default": true
+  "default": true,
+  "sample_video_url": "/static/koubo/templates/samples/premium_kinetic_v1.mp4",
+  "layout": "kinetic",
+  "chapter": {
+    "show": true,
+    "no": "01",
+    "title": "开场"
+  }
 }

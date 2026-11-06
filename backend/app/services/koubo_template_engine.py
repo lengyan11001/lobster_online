@@ -75,6 +75,7 @@ def public_templates() -> List[Dict[str, Any]]:
             'variant': spec.get('variant') or 'kinetic',
             'colors': [style.get('accent'), style.get('accent2'), style.get('accent3')],
             'cover': spec.get('cover') or '',
+            'sample_video_url': spec.get('sample_video_url') or '',
             'default': bool(spec.get('default')),
         })
     return out
@@ -175,6 +176,10 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 .replace('__INK__', str(style.get('ink') or '#080B14'))
                 .replace('__PAPER__', str(style.get('paper') or '#FFFFFF'))
                 .replace('__VARIANT__', str(spec.get('variant') or 'kinetic'))
+                .replace('__LAYOUT__', str(spec.get('layout') or 'kinetic'))
+                .replace('__CH_SHOW__', 'true' if (spec.get('chapter') or {}).get('show') else 'false')
+                .replace('__CH_NO__', json.dumps(str((spec.get('chapter') or {}).get('no') or ''), ensure_ascii=False))
+                .replace('__CH_TITLE__', json.dumps(str((spec.get('chapter') or {}).get('title') or ''), ensure_ascii=False))
                 .replace('__BADGE__', str(copy.get('badge') or 'AI 数字人'))
                 .replace('__LOWER_TITLE__', str(copy.get('lowerTitle') or '数字人 3.0'))
                 .replace('__LOWER_SUB__', str(copy.get('lowerSub') or 'AI 口播'))

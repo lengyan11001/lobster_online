@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/tutorial_step_v1.svg",
   "cover_title": "照着做，一次学会",
   "cover_sub": "步骤教程 · 清单感",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/tutorial_step_v1.mp4",
+  "layout": "tutorial",
+  "chapter": {
+    "show": true,
+    "no": "STEP",
+    "title": "步骤"
+  }
 }

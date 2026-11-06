@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/review_compare_v1.svg",
   "cover_title": "到底谁更强",
   "cover_sub": "实测对比 · 参数说话",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/review_compare_v1.mp4",
+  "layout": "review",
+  "chapter": {
+    "show": true,
+    "no": "VS",
+    "title": "实测对比"
+  }
 }

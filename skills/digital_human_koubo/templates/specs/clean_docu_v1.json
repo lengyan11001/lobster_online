@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/clean_docu_v1.svg",
   "cover_title": "把复杂的事讲清楚",
   "cover_sub": "质感访谈 · 克制留白",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/clean_docu_v1.mp4",
+  "layout": "clean",
+  "chapter": {
+    "show": true,
+    "no": "NOTE",
+    "title": "观点"
+  }
 }

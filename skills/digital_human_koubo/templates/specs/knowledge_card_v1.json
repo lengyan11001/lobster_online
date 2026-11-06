@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/knowledge_card_v1.svg",
   "cover_title": "三步讲明白",
   "cover_sub": "知识卡片 · 步骤提炼",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/knowledge_card_v1.mp4",
+  "layout": "knowledge",
+  "chapter": {
+    "show": true,
+    "no": "TIP",
+    "title": "知识点"
+  }
 }

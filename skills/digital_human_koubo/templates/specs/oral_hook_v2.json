@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/oral_hook_v2.svg",
   "cover_title": "我不同意这个说法",
   "cover_sub": "荧光钩子 · 强观点",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/oral_hook_v2.mp4",
+  "layout": "kinetic",
+  "chapter": {
+    "show": true,
+    "no": "观点",
+    "title": "输出"
+  }
 }

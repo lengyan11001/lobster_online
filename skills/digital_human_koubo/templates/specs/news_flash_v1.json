@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/news_flash_v1.svg",
   "cover_title": "刚刚，传来消息",
   "cover_sub": "快节奏 · 重点信息",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/news_flash_v1.mp4",
+  "layout": "news",
+  "chapter": {
+    "show": true,
+    "no": "NEWS",
+    "title": "快讯"
+  }
 }

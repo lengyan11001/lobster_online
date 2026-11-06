@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/matrix_batch_v1.svg",
   "cover_title": "每天一条，稳定输出",
   "cover_sub": "批量矩阵 · 统一风格",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/matrix_batch_v1.mp4",
+  "layout": "matrix",
+  "chapter": {
+    "show": false,
+    "no": "NO.",
+    "title": "每日一条"
+  }
 }

@@ -38,5 +38,12 @@
   "cover": "/static/koubo/templates/commercial_hook_v1.svg",
   "cover_title": "这个价格，真香",
   "cover_sub": "强钩子 · 强转化",
-  "default": false
+  "default": false,
+  "sample_video_url": "/static/koubo/templates/samples/commercial_hook_v1.mp4",
+  "layout": "commercial",
+  "chapter": {
+    "show": true,
+    "no": "重点",
+    "title": "限时"
+  }
 }
