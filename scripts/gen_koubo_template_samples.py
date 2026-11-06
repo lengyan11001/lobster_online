@@ -51,6 +51,7 @@ def main() -> None:
     project["id"] = pid
 
     done = []
+    failed = []
     try:
         for tid in ids:
             target = out_dir / (tid + ".mp4")
@@ -58,15 +59,19 @@ def main() -> None:
                 print("skip %s" % tid, flush=True)
                 continue
             print("render %s" % tid, flush=True)
-            out = engine.render(project, tid, quality="preview")
-            shutil.copyfile(out, target)
-            size = target.stat().st_size
-            done.append({"id": tid, "size": size})
-            print("ok %s %d" % (tid, size), flush=True)
+            try:
+                out = engine.render(project, tid, quality="preview")
+                shutil.copyfile(out, target)
+                size = target.stat().st_size
+                done.append({"id": tid, "size": size})
+                print("ok %s %d" % (tid, size), flush=True)
+            except Exception as exc:
+                print("fail %s %s" % (tid, str(exc)[:300]), flush=True)
+                failed.append({"id": tid, "error": str(exc)[:300]})
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    print(json.dumps({"generated": done, "count": len(done)}, ensure_ascii=False))
+    print(json.dumps({"generated": done, "failed": failed, "count": len(done)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
