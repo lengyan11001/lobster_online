@@ -1,7 +1,7 @@
 {
-  "version": "2.0.243",
-  "build": 544,
-  "applied_at": "2026-11-06T11:56:15+08:00",
-  "note": "作品提取：导出TXT/CSV改走本机导出接口，落盘提示路径",
-  "bundle_sha256": "9a03ccb66e8c43b9af654f80bf56b9fe2806d2633dfd6c7f976c944cdce4c3b0"
+  "version": "2.0.244",
+  "build": 545,
+  "applied_at": "2026-11-06T17:42:11+08:00",
+  "note": "剪辑大师：单片剪辑/原片套模板/模式下拉/结果9:16；模板字幕保持到片尾",
+  "bundle_sha256": "92da66250ac9ad8f5d16556ea22639328ee1acce7e00da73fcd2503ebc45dd0d"
 }
