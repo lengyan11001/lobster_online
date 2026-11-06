@@ -727,6 +727,22 @@ async def koubo_upload(file: UploadFile = File(...)):
     }
 
 
+@router.get("/api/skills/digital-human-koubo/uploads", summary="已上传的形象照列表")
+def koubo_uploads_list():
+    items = []
+    if UPLOAD_DIR.is_dir():
+        for path in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                continue
+            if path.stem.endswith("_9x16"):
+                continue
+            items.append({"id": path.name,
+                          "url": "/api/skills/digital-human-koubo/uploads/" + path.name,
+                          "name": path.name, "size": path.stat().st_size,
+                          "mtime": int(path.stat().st_mtime)})
+    return {"uploads": items[:60]}
+
+
 @router.get("/api/skills/digital-human-koubo/uploads/{name}", summary="读取已上传的形象照")
 def koubo_upload_get(name: str):
     if "/" in name or "\\" in name or ".." in name:
@@ -1814,6 +1830,191 @@ def koubo_render_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+class BatchCreateBody(BaseModel):
+    scripts: List[str] = []
+    photo_ids: List[str] = []
+    options: Optional[Dict[str, Any]] = None
+    shot: str = "full"
+    host: str = "tank"
+    name_prefix: str = ""
+
+
+@router.post("/api/skills/digital-human-koubo/projects/batch", summary="多文案多形象批量建项目")
+def koubo_projects_batch(body: BatchCreateBody):
+    scripts = []
+    for raw in body.scripts or []:
+        text = str(raw or "").strip()
+        if text and text not in scripts:
+            scripts.append(text)
+    if not scripts:
+        raise HTTPException(status_code=400, detail="至少一条文案")
+    photos = [str(x or "").strip() for x in (body.photo_ids or []) if str(x or "").strip()]
+    photos = photos or [""]
+    total = len(scripts) * len(photos)
+    if total > 20:
+        raise HTTPException(status_code=400, detail="一次最多创建 20 个项目（当前 %d）" % total)
+    opts = _sanitize_options(body.options)
+    if not body.options:
+        if body.shot in {"full", "pip", "vlog", "depth"}:
+            opts["shot"] = body.shot
+        if body.host in _HOSTS:
+            opts["host"] = body.host
+    rows = []
+    now = datetime.now().isoformat(timespec="seconds")
+    prefix = (body.name_prefix or "矩阵").strip()
+    idx = 0
+    for script in scripts:
+        segs = _build_segments(script, opts["shot"])
+        if not segs:
+            continue
+        res = opts["resolution"] or ("480p" if opts["shot"] == "pip" else "720p")
+        for seg in segs:
+            seg["resolution"] = res
+            seg["credits"] = seg["seconds"] * CREDITS_PER_SEC[res]
+        for photo in photos:
+            idx += 1
+            rows.append({
+                "id": uuid.uuid4().hex[:8],
+                "name": "%s %02d %s" % (prefix, idx, script[:8]),
+                "script": script, "shot": opts["shot"], "host": opts["host"],
+                "photo_id": photo, "options": opts, "segments": segs,
+                "total_seconds": sum(x["seconds"] for x in segs),
+                "total_credits": sum(x["credits"] for x in segs),
+                "status": "ready", "created_at": now,
+            })
+    if not rows:
+        raise HTTPException(status_code=400, detail="文案为空")
+    items = _load_projects()
+    _save_projects((rows + items)[:200])
+    return {"projects": [_summary_row(r, set()) for r in rows], "count": len(rows),
+            "total_credits": sum(r["total_credits"] for r in rows)}
+
+
+class BatchGenerateBody(BaseModel):
+    project_ids: List[str] = []
+    all: bool = True
+
+
+_BATCH_GEN: Dict[str, Dict[str, Any]] = {}
+
+
+def _batch_gen_job(batch_id: str, ids: List[str], token: str, installation_id: str, all_segments: bool) -> None:
+    batch = _BATCH_GEN[batch_id]
+    total = len(ids)
+    try:
+        for idx, pid in enumerate(ids, 1):
+            item = next((x for x in batch.get("items") or [] if x.get("project_id") == pid), None)
+            if item is None:
+                continue
+            if batch.get("cancel"):
+                item["status"] = "skipped"
+                item["message"] = "已取消"
+                continue
+            item["status"] = "running"
+            item["message"] = "提交生成"
+            sub_id = uuid.uuid4().hex[:10]
+            sub = {"id": sub_id, "project_id": pid, "status": "running", "progress": 0,
+                   "message": "提交生成", "error": "", "started_at": time.time()}
+            with _GEN_LOCK:
+                _GEN[sub_id] = sub
+            _gen_job(sub_id, pid, token, not all_segments, installation_id)
+            if sub.get("status") == "done":
+                item["status"] = "done"
+                item["progress"] = 100
+                item["message"] = "底片完成"
+                item["output"] = "/api/skills/digital-human-koubo/projects/%s/video" % pid
+            else:
+                item["status"] = "error"
+                item["error"] = str(sub.get("error") or "生成失败")[:600]
+                item["message"] = "生成失败"
+            batch["done"] = idx
+            batch["progress"] = int(idx * 100 / total) if total else 100
+            batch["message"] = "已生成 %d/%d" % (idx, total)
+        ok = sum(1 for x in batch.get("items") or [] if x.get("status") == "done")
+        batch["ok_count"] = ok
+        batch["status"] = "cancelled" if batch.get("cancel") else "done"
+        batch["message"] = "批量生成完成：成功 %d / %d" % (ok, total) if not batch.get("cancel") else "批量生成已取消"
+    except Exception as exc:
+        batch["status"] = "error"
+        batch["error"] = str(exc)[:1200]
+        batch["message"] = "批量生成失败"
+    finally:
+        batch["finished_at"] = time.time()
+
+
+@router.post("/api/skills/digital-human-koubo/batch-generate", summary="批量生成底片")
+def koubo_batch_generate(body: BatchGenerateBody, request: Request):
+    ids = []
+    for raw in body.project_ids or []:
+        pid = str(raw or "").strip()
+        if pid and pid not in ids:
+            ids.append(pid)
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要生成的项目")
+    if len(ids) > 10:
+        raise HTTPException(status_code=400, detail="一次最多生成 10 个，避免算力失控")
+    headers = _auth_header(request)
+    installation_id = (request.headers.get("X-Installation-Id") or "").strip()
+    rows = {str(r.get("id")): r for r in _load_projects()}
+    items = []
+    skipped = []
+    for pid in ids:
+        row = rows.get(pid)
+        if not row:
+            skipped.append({"project_id": pid, "reason": "项目不存在"})
+            continue
+        if row.get("status") == "generating":
+            skipped.append({"project_id": pid, "name": row.get("name"), "reason": "已在生成中"})
+            continue
+        if not row.get("segments"):
+            skipped.append({"project_id": pid, "name": row.get("name"), "reason": "没有分段"})
+            continue
+        items.append({"project_id": pid, "name": row.get("name") or pid,
+                      "credits": row.get("total_credits") or 0, "status": "pending",
+                      "progress": 0, "message": "等待中", "output": "", "error": ""})
+    if not items:
+        raise HTTPException(status_code=400, detail=skipped[0]["reason"] if skipped else "没有可生成的项目")
+    batch_id = uuid.uuid4().hex[:10]
+    batch = {"id": batch_id, "status": "running", "progress": 0, "done": 0, "total": len(items),
+             "items": items, "skipped": skipped, "message": "准备批量生成",
+             "total_credits": sum(x["credits"] for x in items), "error": "",
+             "started_at": time.time()}
+    with _GEN_LOCK:
+        _BATCH_GEN[batch_id] = batch
+    threading.Thread(target=_batch_gen_job,
+                     args=(batch_id, [x["project_id"] for x in items], headers["Authorization"],
+                           installation_id, bool(body.all)),
+                     daemon=True).start()
+    return {"ok": True, "job_id": batch_id, "items": items, "skipped": skipped,
+            "total": len(items), "total_credits": batch["total_credits"]}
+
+
+@router.get("/api/skills/digital-human-koubo/batch-generate/jobs/{job_id}", summary="批量生成进度")
+def koubo_batch_generate_job(job_id: str):
+    with _GEN_LOCK:
+        job = _BATCH_GEN.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
+@router.post("/api/skills/digital-human-koubo/batch-generate/jobs/{job_id}/cancel", summary="取消批量生成")
+def koubo_batch_generate_cancel(job_id: str):
+    with _GEN_LOCK:
+        job = _BATCH_GEN.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if job.get("status") != "running":
+            return {"ok": True, "status": job.get("status")}
+        job["cancel"] = True
+        for item in job.get("items") or []:
+            if item.get("status") == "pending":
+                item["status"] = "skipped"
+                item["message"] = "已取消"
+        job["message"] = "正在取消：当前这条完成后停止"
+    return {"ok": True, "status": "cancelling"}
 
 
 _BATCH_JOBS: Dict[str, Dict[str, Any]] = {}

@@ -185,6 +185,25 @@
       + '#content-digital-human-koubo .kb-multi-row span{font-size:10.5px;color:#94a3b8;}'
       + '#content-digital-human-koubo .kb-multi-row select,#content-digital-human-koubo .kb-multi-row input{border:1px solid #e2e8f0;border-radius:7px;padding:5px 7px;font-size:11px;color:#334155;background:#fff;min-width:0;}'
       + '#content-digital-human-koubo .kb-multi-note{font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.6;}'
+      + '#kbMatrixModal{position:fixed;inset:0;z-index:10080;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
+      + '#kbMatrixModal .kb-matrix{width:min(94vw,760px);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
+      + '#kbMatrixModal .kb-matrix-head{display:flex;align-items:center;justify-content:space-between;}'
+      + '#kbMatrixModal h3{margin:0;font-size:17px;color:#0f172a;}'
+      + '#kbMatrixModal .kb-matrix-sec{margin-top:12px;}'
+      + '#kbMatrixModal .kb-matrix-sec>b{display:block;font-size:12px;color:#0f172a;margin-bottom:6px;}'
+      + '#kbMatrixModal .kb-matrix-sec small{font-size:10.5px;color:#94a3b8;margin-left:6px;}'
+      + '#kbMatrixModal textarea{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;font-size:12px;color:#0f172a;resize:vertical;min-height:96px;}'
+      + '#kbMatrixModal .kb-matrix-photos{display:flex;gap:8px;flex-wrap:wrap;max-height:150px;overflow:auto;border:1px solid #eef2f7;border-radius:10px;padding:8px;}'
+      + '#kbMatrixModal .kb-matrix-photo{display:flex;align-items:center;gap:6px;border:1px solid #e2e8f0;border-radius:9px;padding:4px 7px;font-size:10.5px;color:#475569;cursor:pointer;}'
+      + '#kbMatrixModal .kb-matrix-photo img{width:28px;height:28px;object-fit:cover;border-radius:6px;}'
+      + '#kbMatrixModal .kb-matrix-photo.on{border-color:#93c5fd;background:#eff6ff;color:#1d4ed8;}'
+      + '#kbMatrixModal .kb-matrix-sum{font-size:11.5px;color:#64748b;margin-top:10px;}'
+      + '#kbMatrixModal .kb-matrix-actions{display:flex;gap:8px;align-items:center;margin-top:12px;}'
+      + '#kbMatrixModal .kb-matrix-list{max-height:200px;overflow:auto;border:1px solid #eef2f7;border-radius:10px;padding:8px;margin-top:8px;}'
+      + '#kbMatrixModal .kb-matrix-item{display:flex;align-items:center;gap:8px;font-size:11px;color:#475569;padding:5px 2px;border-bottom:1px dashed #f1f5f9;}'
+      + '#kbMatrixModal .kb-matrix-item b{flex:1;font-weight:500;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+      + '#kbMatrixModal .kb-matrix-bar{height:5px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:8px;}'
+      + '#kbMatrixModal .kb-matrix-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3b82f6,#8b5cf6);}'
       + '#kbBatchModal{position:fixed;inset:0;z-index:10070;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
       + '#kbBatchModal .kb-batch{width:min(94vw,720px);max-height:90vh;overflow:auto;background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
       + '#kbBatchModal .kb-batch-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}'
@@ -685,6 +704,156 @@
     });
   }
 
+  function openMatrixModal() {
+    var old = document.getElementById('kbMatrixModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var modal = document.createElement('div');
+    modal.id = 'kbMatrixModal';
+    document.body.appendChild(modal);
+    var photos = [];
+    var created = [];
+    var timer = null;
+    var genJob = '';
+
+    function close() {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+
+    function scripts() {
+      var ta = modal.querySelector('#kbMatrixScripts');
+      return (ta ? ta.value : '').split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean);
+    }
+
+    function selectedPhotos() {
+      var ids = [];
+      modal.querySelectorAll('[data-photo]').forEach(function (box) { if (box.checked) ids.push(box.value); });
+      return ids;
+    }
+
+    function updateSum() {
+      var n = scripts().length;
+      var p = Math.max(1, selectedPhotos().length);
+      var total = n * p;
+      var el = modal.querySelector('#kbMatrixSum');
+      if (el) el.textContent = '将创建 ' + total + ' 个项目' + (total > 20 ? '（超过 20 个上限，请减少文案或形象）' : '');
+    }
+
+    function paintForm() {
+      modal.innerHTML = '<div class="kb-matrix">'
+        + '<div class="kb-matrix-head"><h3>矩阵批量</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-matrix-sec"><b>文案<small>每行一条，重复的会自动去重</small></b><textarea id="kbMatrixScripts" placeholder="第一条口播文案\n第二条口播文案\n第三条口播文案"></textarea></div>'
+        + '<div class="kb-matrix-sec"><b>形象照<small>可多选；不选则用当前项目形象</small></b><div class="kb-matrix-photos" id="kbMatrixPhotos">加载中…</div></div>'
+        + '<div class="kb-matrix-sum" id="kbMatrixSum">将创建 0 个项目</div>'
+        + '<div class="kb-matrix-actions"><span style="flex:1"></span><button type="button" class="kb-btn-primary" id="kbMatrixCreate">创建项目</button></div>'
+        + '</div>';
+      modal.querySelector('[data-close]').onclick = close;
+      modal.querySelector('#kbMatrixScripts').oninput = updateSum;
+      modal.querySelector('#kbMatrixCreate').onclick = createProjects;
+      updateSum();
+      req('/api/skills/digital-human-koubo/uploads', { headers: headers() }).then(function (d) {
+        photos = d.uploads || [];
+        var box = modal.querySelector('#kbMatrixPhotos');
+        if (!photos.length) { box.innerHTML = '<span style="font-size:11px;color:#94a3b8;">还没有上传过形象照</span>'; return; }
+        box.innerHTML = photos.map(function (x) {
+          return '<label class="kb-matrix-photo"><input type="checkbox" data-photo value="' + esc(x.id) + '"><img src="' + esc(API + x.url) + '" alt="">' + esc(x.name.slice(0, 14)) + '</label>';
+        }).join('');
+        box.querySelectorAll('[data-photo]').forEach(function (cb) {
+          cb.onchange = function () { cb.parentNode.classList.toggle('on', cb.checked); updateSum(); };
+        });
+      }).catch(function () {
+        var box = modal.querySelector('#kbMatrixPhotos');
+        if (box) box.innerHTML = '<span style="font-size:11px;color:#94a3b8;">读取形象照失败，可稍后重试</span>';
+      });
+    }
+
+    function createProjects() {
+      var list = scripts();
+      if (!list.length) { log('先写至少一条文案'); return; }
+      var btn = modal.querySelector('#kbMatrixCreate');
+      btn.disabled = true; btn.textContent = '创建中…';
+      req('/api/skills/digital-human-koubo/projects/batch', {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ scripts: list, photo_ids: selectedPhotos(), options: state.form || null })
+      }).then(function (d) {
+        created = d.projects || [];
+        loadProjects();
+        paintCreated(d);
+        log('矩阵已创建 ' + created.length + ' 个项目');
+      }).catch(function (e) {
+        btn.disabled = false; btn.textContent = '创建项目';
+        log('创建矩阵失败：' + e.message);
+      });
+    }
+
+    function paintCreated(d) {
+      var rows = (d.projects || []).map(function (x) {
+        return '<div class="kb-matrix-item"><b>' + esc(x.name) + '</b><span style="color:#94a3b8;">' + (x.total_credits || 0) + ' credits</span></div>';
+      }).join('');
+      modal.innerHTML = '<div class="kb-matrix">'
+        + '<div class="kb-matrix-head"><h3>矩阵已创建</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-matrix-sum">共 ' + created.length + ' 个项目，预计消耗 ' + (d.total_credits || 0) + ' credits（生成底片时扣除）</div>'
+        + '<div class="kb-matrix-list">' + rows + '</div>'
+        + '<div class="kb-matrix-actions"><span style="font-size:10.5px;color:#94a3b8;">生成后可用「批量出片」统一套模板</span><span style="flex:1"></span><button type="button" class="kb-btn-primary" id="kbMatrixGen">批量生成底片（' + (d.total_credits || 0) + ' credits）</button></div>'
+        + '</div>';
+      modal.querySelector('[data-close]').onclick = close;
+      modal.querySelector('#kbMatrixGen').onclick = startGenerate;
+    }
+
+    function startGenerate() {
+      if (!window.confirm('将按顺序生成 ' + created.length + ' 个项目，预计消耗 ' + (created.reduce(function (a, x) { return a + (x.total_credits || 0); }, 0)) + ' credits。继续？')) return;
+      var ids = created.map(function (x) { return x.id; });
+      req('/api/skills/digital-human-koubo/batch-generate', {
+        method: 'POST', headers: headers(), body: JSON.stringify({ project_ids: ids, all: true })
+      }).then(function (d) {
+        genJob = d.job_id;
+        paintGen(d);
+        timer = setInterval(pollGen, 2000);
+        pollGen();
+      }).catch(function (e) { log('批量生成失败：' + e.message); });
+    }
+
+    function paintGen(d) {
+      var items = d.items || [];
+      var rows = items.map(function (x) {
+        var pill = x.status === 'done' ? '完成' : (x.status === 'error' ? '失败' : (x.status === 'running' ? '生成中' : '等待'));
+        return '<div class="kb-matrix-item"><b>' + esc(x.name) + '</b><span style="font-size:10.5px;color:' + (x.status === 'error' ? '#b91c1c' : '#64748b') + ';">' + pill + ' ' + esc(x.message || '') + '</span></div>';
+      }).join('');
+      modal.innerHTML = '<div class="kb-matrix">'
+        + '<div class="kb-matrix-head"><h3>批量生成底片</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-matrix-sum">' + esc(d.message || '') + ' · ' + (d.done || 0) + '/' + (d.total || items.length) + '</div>'
+        + '<div class="kb-matrix-bar"><i style="width:' + Math.max(2, d.progress || 0) + '%"></i></div>'
+        + '<div class="kb-matrix-list">' + rows + '</div>'
+        + '<div class="kb-matrix-actions"><span style="font-size:10.5px;color:#94a3b8;">' + (d.status === 'running' ? '后台生成中，可关闭窗口' : '完成后可用「批量出片」套模板') + '</span><span style="flex:1"></span>'
+        + (d.status === 'running' ? '<button type="button" class="kb-btn" data-cancel>取消剩余</button>' : '')
+        + '</div></div>';
+      modal.querySelector('[data-close]').onclick = close;
+      var c = modal.querySelector('[data-cancel]');
+      if (c) c.onclick = function () {
+        c.disabled = true; c.textContent = '正在取消…';
+        req('/api/skills/digital-human-koubo/batch-generate/jobs/' + encodeURIComponent(genJob) + '/cancel', { method: 'POST', headers: headers() })
+          .then(function () { pollGen(); }).catch(function () { c.disabled = false; c.textContent = '取消剩余'; });
+      };
+    }
+
+    function pollGen() {
+      if (!genJob) return;
+      req('/api/skills/digital-human-koubo/batch-generate/jobs/' + encodeURIComponent(genJob), { headers: headers() })
+        .then(function (d) {
+          if (!document.getElementById('kbMatrixModal')) { if (timer) clearInterval(timer); return; }
+          paintGen(d);
+          if (d.status !== 'running') {
+            if (timer) { clearInterval(timer); timer = null; }
+            loadProjects(); renderPack();
+            log('批量生成：' + (d.message || d.status));
+          }
+        }).catch(function () { });
+    }
+
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    paintForm();
+  }
+
   function fitBlock(t) {
     var script = String((state.project && state.project.script) || '').trim();
     var rules = t.rules || {};
@@ -1078,6 +1247,8 @@
     if (refresh) refresh.onclick = function () { state.render.featuredPage = (state.render.featuredPage || 0) + 1; renderPack(); };
     var batchOpen = $('kbBatchOpen');
     if (batchOpen) batchOpen.onclick = openBatchModal;
+    var matrixOpen = $('kbMatrixOpen');
+    if (matrixOpen) matrixOpen.onclick = openMatrixModal;
   }
 
   function renderPack() {
@@ -1123,6 +1294,7 @@
           + (!r.showAllTemplates && (r.templateCategory || 'all') === 'all' && !(r.templateQuery || '').trim() ? '<button type="button" class="kb-tpl-more" id="kbTplRefresh">换一批</button>' : '')
           + '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>'
           + ((state.projects || []).filter(function (x) { return x.has_video; }).length ? '<button type="button" class="kb-tpl-more" id="kbBatchOpen">批量出片（' + (state.projects || []).filter(function (x) { return x.has_video; }).length + ' 个底片）</button>' : '')
+          + '<button type="button" class="kb-tpl-more" id="kbMatrixOpen">矩阵批量（多文案 × 多形象）</button>'
           + '</div>' : '')
       + renderBrollBlock()
       + renderBgmBlock()
@@ -1145,6 +1317,9 @@
     if (refresh) refresh.onclick = function () { state.render.featuredPage = (state.render.featuredPage || 0) + 1; renderPack(); };
     var batchOpen = $('kbBatchOpen');
     if (batchOpen) batchOpen.onclick = openBatchModal;
+    var matrixOpen = $('kbMatrixOpen');
+    if (matrixOpen) matrixOpen.onclick = openMatrixModal;
+    bindMultiHandlers();
     var titleInput = $('kbTemplateTitle');
     if (titleInput) titleInput.oninput = function () { state.render.title = titleInput.value || ''; };
     var btn = $('kbRender');

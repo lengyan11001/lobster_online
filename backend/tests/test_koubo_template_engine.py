@@ -406,3 +406,105 @@ def test_render_rejects_bad_shots(tmp_path, monkeypatch):
                       json={"shots": [{"template_id": "nope"}, {"template_id": "premium_kinetic_v1"}]})
     assert bad.status_code == 400
     assert "模板不存在" in bad.json()["detail"]
+
+
+def test_uploads_list_excludes_variants(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    (tmp_path / "a_9x16.jpg").write_bytes(b"x")
+    (tmp_path / "note.txt").write_text("x")
+    monkeypatch.setattr(s, "UPLOAD_DIR", tmp_path)
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    data = client.get("/api/skills/digital-human-koubo/uploads").json()
+    assert [x["id"] for x in data["uploads"]] == ["a.jpg"]
+
+
+def test_matrix_create_projects(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    saved = {"rows": []}
+    monkeypatch.setattr(s, "_load_projects", lambda: saved["rows"])
+    monkeypatch.setattr(s, "_save_projects", lambda rows: saved.update(rows=rows))
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/projects/batch", json={
+        "scripts": ["第一条文案", "第二条文案"],
+        "photo_ids": ["a.jpg", "b.jpg"],
+        "options": {"shot": "full", "host": "photo", "resolution": "720p", "language": "Mandarin Chinese"},
+    })
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["count"] == 4
+    assert data["total_credits"] > 0
+    assert len(saved["rows"]) == 4
+
+
+def test_batch_generate_happy_path(monkeypatch):
+    import time
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    monkeypatch.setattr(s, "_load_projects", lambda: [{
+        "id": "p1", "name": "n1", "status": "ready", "total_credits": 100,
+        "segments": [{"text": "文案", "seconds": 6}],
+    }])
+
+    def fake_gen(job_id, pid, token, first_only, installation_id):
+        job = s._GEN[job_id]
+        job["status"] = "done"
+        job["progress"] = 100
+
+    monkeypatch.setattr(s, "_gen_job", fake_gen)
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/batch-generate",
+                    json={"project_ids": ["p1"], "all": True},
+                    headers={"Authorization": "Bearer test"})
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+    data = {}
+    for _ in range(40):
+        data = client.get("/api/skills/digital-human-koubo/batch-generate/jobs/%s" % job_id).json()
+        if data["status"] != "running":
+            break
+        time.sleep(0.1)
+    assert data["status"] == "done"
+    assert data["items"][0]["status"] == "done"
+    assert data["total_credits"] == 100
+
+
+def test_batch_generate_cancel_marks_pending():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    job_id = "gen-cancel-test"
+    with s._GEN_LOCK:
+        s._BATCH_GEN[job_id] = {
+            "id": job_id, "status": "running", "items": [
+                {"project_id": "p1", "status": "done"},
+                {"project_id": "p2", "status": "pending"},
+            ],
+        }
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/batch-generate/jobs/%s/cancel" % job_id)
+    assert r.status_code == 200
+    with s._GEN_LOCK:
+        assert [x["status"] for x in s._BATCH_GEN[job_id]["items"]] == ["done", "skipped"]
