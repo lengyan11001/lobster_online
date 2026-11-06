@@ -45,5 +45,12 @@
     "show": true,
     "no": "价格",
     "title": "今天只此一次"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.08
+  },
+  "transitions": {
+    "cut": "flash"
   }
 }

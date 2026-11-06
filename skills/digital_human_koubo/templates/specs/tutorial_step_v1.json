@@ -45,5 +45,12 @@
     "show": true,
     "no": "STEP",
     "title": "步骤"
+  },
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
   }
 }

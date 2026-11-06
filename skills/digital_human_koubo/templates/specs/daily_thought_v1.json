@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "今天想明白一件事",
   "cover_sub": "日更 · 低干扰",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
 }

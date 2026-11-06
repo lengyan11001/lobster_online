@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "刚刚确认",
   "cover_sub": "突发 · 快讯",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "push",
+    "strength": 0.05
+  },
+  "transitions": {
+    "cut": "flash"
+  }
 }

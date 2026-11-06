@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "这 3 点先存下",
   "cover_sub": "清单 · 极简干货",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
 }

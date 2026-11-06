@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "你可能一直想错了",
   "cover_sub": "反常识 · 引号观点",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
 }

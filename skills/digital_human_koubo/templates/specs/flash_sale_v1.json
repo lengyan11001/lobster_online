@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "今天只开 2 小时",
   "cover_sub": "限时 · 强转化",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "push",
+    "strength": 0.05
+  },
+  "transitions": {
+    "cut": "flash"
+  }
 }

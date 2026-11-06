@@ -45,5 +45,12 @@
     "show": true,
     "no": "反转",
     "title": "情绪点"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.08
+  },
+  "transitions": {
+    "cut": "flash"
   }
 }

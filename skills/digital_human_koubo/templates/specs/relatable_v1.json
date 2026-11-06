@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "说的是不是你",
   "cover_sub": "共鸣 · 暖粉引号",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
 }

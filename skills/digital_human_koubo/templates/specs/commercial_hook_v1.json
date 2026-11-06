@@ -45,5 +45,12 @@
     "show": true,
     "no": "重点",
     "title": "限时"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.08
+  },
+  "transitions": {
+    "cut": "flash"
   }
 }

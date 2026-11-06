@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "这个真的可以闭眼入",
   "cover_sub": "好物 · 单品推荐",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "push",
+    "strength": 0.06
+  },
+  "transitions": {
+    "cut": "flash"
+  }
 }

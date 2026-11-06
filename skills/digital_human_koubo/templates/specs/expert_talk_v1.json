@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "听专家怎么说",
   "cover_sub": "专家访谈 · 深蓝质感",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
 }

@@ -45,5 +45,12 @@
     "show": true,
     "no": "01",
     "title": "开场"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.06
+  },
+  "transitions": {
+    "cut": "flash"
   }
 }

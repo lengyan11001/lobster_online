@@ -45,5 +45,12 @@
     "show": true,
     "no": "STORY",
     "title": "人物"
+  },
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
   }
 }

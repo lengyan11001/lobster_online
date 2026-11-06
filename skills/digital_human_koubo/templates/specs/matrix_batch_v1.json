@@ -45,5 +45,12 @@
     "show": false,
     "no": "NO.",
     "title": "每日一条"
+  },
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
   }
 }

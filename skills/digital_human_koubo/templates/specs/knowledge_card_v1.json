@@ -45,5 +45,12 @@
     "show": true,
     "no": "TIP",
     "title": "知识点"
+  },
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
   }
 }

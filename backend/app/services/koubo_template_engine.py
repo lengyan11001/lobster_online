@@ -180,6 +180,7 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 .replace('__CH_SHOW__', 'true' if (spec.get('chapter') or {}).get('show') else 'false')
                 .replace('__CH_NO__', json.dumps(str((spec.get('chapter') or {}).get('no') or ''), ensure_ascii=False))
                 .replace('__CH_TITLE__', json.dumps(str((spec.get('chapter') or {}).get('title') or ''), ensure_ascii=False))
+                .replace('__FLASH__', 'true' if (spec.get('transitions') or {}).get('cut') == 'flash' else 'false')
                 .replace('__BADGE__', str(copy.get('badge') or 'AI 数字人'))
                 .replace('__LOWER_TITLE__', str(copy.get('lowerTitle') or '数字人 3.0'))
                 .replace('__LOWER_SUB__', str(copy.get('lowerSub') or 'AI 口播'))
@@ -241,7 +242,24 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                     progress(i + 1, total_frames, ('预览渲染' if preview_mode else '模板渲染') + ' %d/%d' % (i + 1, total_frames))
             browser.close()
         out = OUTPUT_DIR / pid / ('final_preview.mp4' if preview_mode else 'final_packaged.mp4')
-        fg = ('[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1[bg];[bg][1:v]overlay=0:0:format=auto[v]') % (W, H, W, H)
+        motion = spec.get('motion') or {}
+        motion_type = str(motion.get('type') or 'none').strip().lower()
+        motion_strength = float(motion.get('strength') or 0.0)
+        if motion_type in ('push', 'pull') and motion_strength > 0:
+            sw = _even(int(round(W * 1.12)))
+            sh = _even(int(round(H * 1.12)))
+            frames = max(1, total_frames)
+            if motion_type == 'pull':
+                zexpr = "max(1.0,1.0+%.4f-%.4f*on/%d)" % (motion_strength, motion_strength, frames)
+            else:
+                zexpr = "1.0+%.4f*on/%d" % (motion_strength, frames)
+            base_filter = ("[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1,"
+                           "zoompan=z='%s':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=%dx%d:fps=%d[bg]") % (
+                               sw, sh, sw, sh, zexpr, W, H, fps)
+        else:
+            base_filter = ("[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1[bg]") % (
+                W, H, W, H)
+        fg = base_filter + ';[bg][1:v]overlay=0:0:format=auto[v]'
         cmd = [str(FFMPEG), '-y', '-loglevel', 'error', '-i', str(src),
                '-framerate', str(fps), '-start_number', '1', '-i', str(tmp / 'o%05d.png'),
                '-filter_complex', fg, '-map', '[v]', '-map', '0:a?',

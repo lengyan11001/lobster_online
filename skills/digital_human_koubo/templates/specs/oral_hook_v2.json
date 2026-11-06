@@ -45,5 +45,12 @@
     "show": true,
     "no": "观点",
     "title": "输出"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.06
+  },
+  "transitions": {
+    "cut": "flash"
   }
 }

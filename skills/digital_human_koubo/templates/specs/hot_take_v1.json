@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "这事我得说两句",
   "cover_sub": "强观点 · 红黑高对比",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "push",
+    "strength": 0.06
+  },
+  "transitions": {
+    "cut": "flash"
+  }
 }

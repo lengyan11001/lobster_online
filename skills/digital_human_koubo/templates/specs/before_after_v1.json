@@ -45,5 +45,12 @@
   "sample_video_url": "",
   "cover_title": "用前 vs 用后",
   "cover_sub": "前后对比 · 效果说话",
-  "default": false
+  "default": false,
+  "motion": {
+    "type": "pull",
+    "strength": 0.06
+  },
+  "transitions": {
+    "cut": "flash"
+  }
 }

@@ -45,5 +45,12 @@
     "show": true,
     "no": "VS",
     "title": "实测对比"
+  },
+  "motion": {
+    "type": "pull",
+    "strength": 0.06
+  },
+  "transitions": {
+    "cut": "flash"
   }
 }
