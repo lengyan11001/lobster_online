@@ -1454,6 +1454,7 @@ def koubo_generate_job(job_id: str):
 
 class RenderBody(BaseModel):
     template_id: Optional[str] = None
+    title: Optional[str] = None
     preset: str = "标准"
     components: Optional[List[str]] = None
 
@@ -1469,7 +1470,7 @@ def koubo_templates():
 
 
 def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
-                template_id: Optional[str] = None) -> None:
+                template_id: Optional[str] = None, title: str = "") -> None:
     job = _RENDER_JOBS[job_id]
     try:
         project = koubo_project(project_id)
@@ -1485,7 +1486,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             from ..services import koubo_template_engine
             spec = koubo_template_engine.get_template(template_id) or {}
             template_name = str(spec.get("name") or "")
-            out = koubo_template_engine.render(project, template_id, progress)
+            out = koubo_template_engine.render(project, template_id, progress, title_override=title)
         else:
             from ..services import koubo_renderer
             out = koubo_renderer.render(project, preset, components, progress)
@@ -1495,6 +1496,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
                 row["render_preset"] = preset
                 row["template_id"] = template_id or ""
                 row["template_name"] = template_name
+                row["template_title"] = title or ""
                 row["rendered_at"] = datetime.now().isoformat(timespec="seconds")
                 row["rendered"] = True
         _save_projects(rows)
@@ -1527,7 +1529,7 @@ def koubo_render(pid: str, body: RenderBody):
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[job_id] = job
-    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id), daemon=True).start()
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or ""), daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
 

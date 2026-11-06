@@ -31,5 +31,6 @@
     "titleChars": 12,
     "captionMaxChars": 20,
     "safeArea": 0.06
-  }
+  },
+  "cover": "/static/koubo/templates/commercial_hook_v1.svg"
 }

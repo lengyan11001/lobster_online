@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, templateId: 'premium_kinetic_v1', templates: [] },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, templateId: 'premium_kinetic_v1', templates: [], title: '' },
     qa: null,
     timer: null
   };
@@ -125,10 +125,15 @@
       + '#content-digital-human-koubo .kb-tpl:hover{transform:translateY(-1px);box-shadow:0 8px 20px -10px rgba(15,23,42,.25);}'
       + '#content-digital-human-koubo .kb-tpl.on{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12);}'
       + '#content-digital-human-koubo .kb-tpl-preview{display:block;height:58px;border-radius:10px;margin-bottom:8px;position:relative;overflow:hidden;}'
+      + '#content-digital-human-koubo .kb-tpl-cover{display:block;width:100%;height:74px;object-fit:cover;border-radius:10px;margin-bottom:8px;background:#eef2f7;}'
       + '#content-digital-human-koubo .kb-tpl-preview:after{content:"";position:absolute;left:10%;right:10%;top:20%;height:12px;border-radius:6px;background:rgba(255,255,255,.82);box-shadow:0 10px 0 -2px rgba(255,255,255,.32);}'
       + '#content-digital-human-koubo .kb-tpl b{display:block;font-size:12px;color:#0f172a;margin-bottom:3px;}'
       + '#content-digital-human-koubo .kb-tpl p{font-size:11px;line-height:1.45;color:#64748b;margin:0 0 5px;min-height:31px;}'
       + '#content-digital-human-koubo .kb-tpl small{font-size:10px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-title-input{display:flex;align-items:center;gap:8px;margin-bottom:10px;}'
+      + '#content-digital-human-koubo .kb-title-input label{font-size:12px;color:#334155;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-title-input input{flex:1;min-width:0;border:1px solid #e2e8f0;border-radius:9px;padding:8px 10px;font-size:12px;color:#0f172a;background:#fff;}'
+      + '#content-digital-human-koubo .kb-title-input small{font-size:10px;color:#94a3b8;white-space:nowrap;}'
       + '#content-digital-human-koubo #kbQuote,#content-digital-human-koubo #kbSave,#content-digital-human-koubo #kbExport{display:none;}'
       + '#content-digital-human-koubo .kb-log{max-height:52px;overflow:auto;}'
       + '#content-digital-human-koubo .kb-proj{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid #f1f5f9;font-size:12px;}'
@@ -369,14 +374,19 @@
     var cards = tpls.map(function (t) {
       var on = t.id === r.templateId;
       var colors = t.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
+      var cover = t.cover ? (String(t.cover).indexOf('http') === 0 ? t.cover : API + t.cover) : '';
+      var visual = cover
+        ? '<img class="kb-tpl-cover" src="' + esc(cover) + '" alt="">'
+        : '<span class="kb-tpl-preview" style="background:linear-gradient(135deg,' + esc(colors[0] || '#FFD84D') + ',' + esc(colors[1] || '#FF4D8D') + ',' + esc(colors[2] || '#4DE1FF') + ')"></span>';
       return '<button type="button" class="kb-tpl' + (on ? ' on' : '') + '" data-tpl="' + esc(t.id) + '">'
-        + '<span class="kb-tpl-preview" style="background:linear-gradient(135deg,' + esc(colors[0] || '#FFD84D') + ',' + esc(colors[1] || '#FF4D8D') + ',' + esc(colors[2] || '#4DE1FF') + ')"></span>'
+        + visual
         + '<b>' + esc(t.name || t.id) + '</b>'
         + '<p>' + esc(t.description || '') + '</p>'
         + '<small>' + esc((t.tags || []).join(' · ')) + '</small>'
         + '</button>';
     }).join('');
     box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (tpls.length || 0) + ' 个模板</small></div>'
+      + '<div class="kb-title-input"><label>标题</label><input id="kbTemplateTitle" maxlength="24" placeholder="留空自动从口播稿提取" value="' + esc(r.title || '') + '"><small>可选</small></div>'
       + '<div class="kb-templates">' + (cards || '<span style="font-size:12px;color:#94a3b8;">模板加载中…</span>') + '</div>'
       + '<div class="kb-packbar" style="margin-top:12px;">'
       + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
@@ -398,6 +408,8 @@
         log('已选模板：' + (btn.querySelector('b') ? btn.querySelector('b').textContent : ''));
       };
     });
+    var titleInput = $('kbTemplateTitle');
+    if (titleInput) titleInput.oninput = function () { state.render.title = titleInput.value || ''; };
     var btn = $('kbRender');
     if (btn) btn.onclick = startRender;
     var qaBtn = $('kbQa');
@@ -410,7 +422,7 @@
     renderPack();
     req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ template_id: state.render.templateId })
+      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '' })
     }).then(function (d) {
       log('包装任务已提交 ' + d.job_id);
       pollRender(d.job_id);
@@ -673,6 +685,7 @@
       state.quote = { segments: p.segments || [], total_seconds: p.total_seconds || 0, total_credits: p.total_credits || 0 };
       state.job = null;
       if (p.template_id) state.render.templateId = p.template_id;
+      state.render.title = p.template_title || '';
       state.render.packaged = !!p.rendered;
       if (p.photo_id) {
         state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };

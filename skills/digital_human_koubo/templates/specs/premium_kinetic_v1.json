@@ -32,5 +32,6 @@
     "captionMaxChars": 22,
     "safeArea": 0.06
   },
-  "default": true
+  "default": true,
+  "cover": "/static/koubo/templates/premium_kinetic_v1.svg"
 }

@@ -31,5 +31,6 @@
     "titleChars": 16,
     "captionMaxChars": 26,
     "safeArea": 0.07
-  }
+  },
+  "cover": "/static/koubo/templates/clean_docu_v1.svg"
 }

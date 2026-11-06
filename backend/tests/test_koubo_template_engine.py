@@ -8,7 +8,7 @@ def test_public_templates_puts_default_first():
     assert len(templates) >= 3
     assert templates[0]["id"] == "premium_kinetic_v1"
     assert templates[0]["default"] is True
-    assert all(t["id"] and t["name"] and t["description"] for t in templates)
+    assert all(t["id"] and t["name"] and t["description"] and t.get("cover") for t in templates)
 
 
 def test_ensure_keywords_has_positive_duration():
@@ -30,6 +30,8 @@ def test_title_is_short_and_clean():
     spec = e.get_template("premium_kinetic_v1")
     assert spec
     project = {"segments": [{"text": "全身边走边介绍 APEC！"}], "name": "x"}
+    title = e._title_for(project, spec, "我的一段标题")
+    assert title == "我的一段标题"
     title = e._title_for(project, spec)
     assert len(title) <= int(spec["rules"]["titleChars"])
     assert " " not in title and "！" not in title

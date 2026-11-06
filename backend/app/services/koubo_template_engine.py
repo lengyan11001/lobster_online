@@ -71,6 +71,7 @@ def public_templates() -> List[Dict[str, Any]]:
             'ratio': spec.get('ratio') or 'source',
             'variant': spec.get('variant') or 'kinetic',
             'colors': [style.get('accent'), style.get('accent2'), style.get('accent3')],
+            'cover': spec.get('cover') or '',
             'default': bool(spec.get('default')),
         })
     return out
@@ -89,9 +90,9 @@ def _canvas(spec: Dict[str, Any], info: Dict[str, Any]) -> Tuple[int, int]:
     return _even(info.get('w') or 720), _even(info.get('h') or 1280)
 
 
-def _title_for(project: Dict[str, Any], spec: Dict[str, Any]) -> str:
+def _title_for(project: Dict[str, Any], spec: Dict[str, Any], title_override: str = '') -> str:
     opts = project.get('options') or {}
-    raw = str(opts.get('title') or '').strip()
+    raw = str(title_override or opts.get('title') or '').strip()
     if not raw:
         for seg in project.get('segments') or []:
             raw = str(seg.get('text') or '').strip()
@@ -119,7 +120,8 @@ def _ensure_keywords(timeline: Dict[str, Any]) -> None:
 
 
 def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
-           progress: Optional[Callable[[int, int, str], None]] = None) -> Path:
+           progress: Optional[Callable[[int, int, str], None]] = None,
+           title_override: str = '') -> Path:
     spec = get_template(template_id) or get_template('premium_kinetic_v1')
     if not spec:
         raise RuntimeError('模板不存在')
@@ -143,7 +145,7 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
         _ensure_keywords(timeline)
         style = spec.get('style') or {}
         copy = spec.get('copy') or {}
-        title = _title_for(project, spec)
+        title = _title_for(project, spec, title_override)
         _FontHandler.font_dir = FONTS_DIR
         srv = ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(_FontHandler, directory=str(FONTS_DIR)))
         port = srv.server_address[1]
