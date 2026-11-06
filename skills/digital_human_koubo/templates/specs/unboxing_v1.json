@@ -42,7 +42,7 @@
     "title": "开箱"
   },
   "cover": "/static/koubo/templates/unboxing_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/unboxing_v1.mp4",
   "cover_title": "开箱第一眼",
   "cover_sub": "开箱 · 实测对比",
   "default": false,

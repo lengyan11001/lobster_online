@@ -42,7 +42,7 @@
     "title": "人物"
   },
   "cover": "/static/koubo/templates/founder_story_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/founder_story_v1.mp4",
   "cover_title": "他为什么从大厂离开",
   "cover_sub": "创业者 · 人物故事",
   "default": false,

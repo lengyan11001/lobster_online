@@ -42,7 +42,7 @@
     "title": "榜单"
   },
   "cover": "/static/koubo/templates/top3_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/top3_v1.mp4",
   "cover_title": "只说前三名",
   "cover_sub": "榜单 · 黑金质感",
   "default": false,

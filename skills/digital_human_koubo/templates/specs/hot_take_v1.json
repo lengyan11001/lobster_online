@@ -42,7 +42,7 @@
     "title": "热点"
   },
   "cover": "/static/koubo/templates/hot_take_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/hot_take_v1.mp4",
   "cover_title": "这事我得说两句",
   "cover_sub": "强观点 · 红黑高对比",
   "default": false,

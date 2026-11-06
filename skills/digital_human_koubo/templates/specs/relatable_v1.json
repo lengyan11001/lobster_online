@@ -42,7 +42,7 @@
     "title": ""
   },
   "cover": "/static/koubo/templates/relatable_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/relatable_v1.mp4",
   "cover_title": "说的是不是你",
   "cover_sub": "共鸣 · 暖粉引号",
   "default": false,

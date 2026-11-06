@@ -42,7 +42,7 @@
     "title": ""
   },
   "cover": "/static/koubo/templates/contrarian_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/contrarian_v1.mp4",
   "cover_title": "你可能一直想错了",
   "cover_sub": "反常识 · 引号观点",
   "default": false,

@@ -42,7 +42,7 @@
     "title": "反转"
   },
   "cover": "/static/koubo/templates/plot_twist_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/plot_twist_v1.mp4",
   "cover_title": "你以为结束了？",
   "cover_sub": "剧情 · 强反转",
   "default": false,

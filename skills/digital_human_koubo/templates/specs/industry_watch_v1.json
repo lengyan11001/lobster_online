@@ -42,7 +42,7 @@
     "title": "行业观察"
   },
   "cover": "/static/koubo/templates/industry_watch_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/industry_watch_v1.mp4",
   "cover_title": "这个行业变了",
   "cover_sub": "行业观察 · 大编号",
   "default": false,

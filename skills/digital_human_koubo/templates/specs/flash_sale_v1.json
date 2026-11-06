@@ -42,7 +42,7 @@
     "title": "限时"
   },
   "cover": "/static/koubo/templates/flash_sale_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/flash_sale_v1.mp4",
   "cover_title": "今天只开 2 小时",
   "cover_sub": "限时 · 强转化",
   "default": false,

@@ -42,7 +42,7 @@
     "title": ""
   },
   "cover": "/static/koubo/templates/daily_matrix_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/daily_matrix_v1.mp4",
   "cover_title": "每天一条，不断更",
   "cover_sub": "矩阵 · 极简日更",
   "default": false,

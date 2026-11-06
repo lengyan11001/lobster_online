@@ -42,7 +42,7 @@
     "title": "专家"
   },
   "cover": "/static/koubo/templates/expert_talk_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/expert_talk_v1.mp4",
   "cover_title": "听专家怎么说",
   "cover_sub": "专家访谈 · 深蓝质感",
   "default": false,

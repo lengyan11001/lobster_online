@@ -42,7 +42,7 @@
     "title": "用前 / 用后"
   },
   "cover": "/static/koubo/templates/before_after_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/before_after_v1.mp4",
   "cover_title": "用前 vs 用后",
   "cover_sub": "前后对比 · 效果说话",
   "default": false,

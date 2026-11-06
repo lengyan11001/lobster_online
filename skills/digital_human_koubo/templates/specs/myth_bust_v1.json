@@ -42,7 +42,7 @@
     "title": ""
   },
   "cover": "/static/koubo/templates/myth_bust_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/myth_bust_v1.mp4",
   "cover_title": "别再被这句话骗了",
   "cover_sub": "辟谣 · 反常识",
   "default": false,

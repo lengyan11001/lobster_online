@@ -42,7 +42,7 @@
     "title": "一分钟"
   },
   "cover": "/static/koubo/templates/how_to_v1.svg",
-  "sample_video_url": "",
+  "sample_video_url": "/static/koubo/templates/samples/how_to_v1.mp4",
   "cover_title": "一分钟学会",
   "cover_sub": "短教程 · 步骤感",
   "default": false,
