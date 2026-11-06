@@ -328,3 +328,50 @@ def test_bgm_upload_rejects_non_audio(tmp_path, monkeypatch):
     r = client.post("/api/skills/digital-human-koubo/bgm-uploads",
                     files={"file": ("x.txt", b"hello", "text/plain")})
     assert r.status_code == 400
+
+
+def test_broll_suggest_matches_filename(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    broll = tmp_path / "broll"
+    broll.mkdir()
+    (broll / "降噪耳机特写.jpg").write_bytes(b"x")
+    (broll / "办公室空镜.mp4").write_bytes(b"x")
+    monkeypatch.setattr(s, "BROLL_DIR", broll)
+    monkeypatch.setattr(s, "_load_projects", lambda: [{
+        "id": "p1", "script": "降噪耳机原价三百九十九，现在只要一百九十九",
+        "segments": [{"text": "降噪耳机原价三百九十九", "seconds": 6}],
+    }])
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/broll-suggest", json={"project_id": "p1", "limit": 1})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["matched"] is True
+    assert data["items"][0]["asset_id"] == "降噪耳机特写.jpg"
+    assert "降噪" in data["items"][0]["reason"] or "耳机" in data["items"][0]["reason"]
+
+
+def test_broll_suggest_returns_empty_without_match(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    broll = tmp_path / "broll"
+    broll.mkdir()
+    (broll / "办公室空镜.mp4").write_bytes(b"x")
+    monkeypatch.setattr(s, "BROLL_DIR", broll)
+    monkeypatch.setattr(s, "_load_projects", lambda: [{
+        "id": "p1", "script": "降噪耳机原价三百九十九", "segments": [{"text": "降噪耳机", "seconds": 6}],
+    }])
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/broll-suggest", json={"project_id": "p1"})
+    assert r.status_code == 200
+    assert r.json()["items"] == []

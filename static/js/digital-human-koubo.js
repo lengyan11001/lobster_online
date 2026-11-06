@@ -508,16 +508,18 @@
     var open = !!state.render.brollOpen;
     return '<div class="kb-broll"><div class="kb-broll-head"><b>插入素材</b><small>可选 · B-roll / 画中画</small><span style="flex:1"></span><button type="button" class="kb-btn" id="kbBrollToggle">' + (open ? '收起' : '展开') + '</button></div>'
       + '<div id="kbBrollBody" style="display:' + (open ? 'block' : 'none') + ';">'
-      + '<div class="kb-broll-row"><button type="button" class="kb-btn" id="kbBrollPick">上传图片/视频</button><span class="kb-broll-name" id="kbBrollName">' + esc(b ? (b.name || b.asset_id || '已选素材') : '未选择素材') + '</span>' + (b ? '<button type="button" class="kb-btn" id="kbBrollRemove">移除</button>' : '') + '</div>'
+      + '<div class="kb-broll-row"><button type="button" class="kb-btn" id="kbBrollPick">上传图片/视频</button><button type="button" class="kb-btn" id="kbBrollAuto">自动匹配</button><span class="kb-broll-name" id="kbBrollName">' + esc(b ? (b.name || b.asset_id || '已选素材') : '未选择素材') + '</span>' + (b ? '<button type="button" class="kb-btn" id="kbBrollRemove">移除</button>' : '') + '</div>'
       + '<div class="kb-broll-row"><label>方式<select id="kbBrollMode"><option value="pip"' + (b && b.mode === 'pip' ? ' selected' : '') + '>画中画</option><option value="full"' + (b && b.mode === 'full' ? ' selected' : '') + '>全屏插入</option></select></label><label>开始<input id="kbBrollStart" type="number" min="0" step="0.5" value="' + esc(b ? (b.start || 2) : 2) + '"> 秒</label><label>时长<input id="kbBrollDuration" type="number" min="0.8" step="0.5" value="' + esc(b ? (b.duration || 2.5) : 2.5) + '"> 秒</label></div>'
       + '<input type="file" id="kbBrollFile" accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp" style="display:none;">'
-      + '<div class="kb-broll-note">素材插在底片上，原口播声音不变；画中画放在右下角，全屏插入会暂时盖住人物。</div>'
+      + '<div class="kb-broll-note">素材插在底片上，原口播声音不变；画中画放在右下角，全屏插入会暂时盖住人物。' + (b && b.reason ? ' 已自动匹配：' + esc(b.reason) : '') + '</div>'
       + '</div></div>';
   }
 
   function bindBrollHandlers() {
     var toggle = $('kbBrollToggle');
     if (toggle) toggle.onclick = function () { state.render.brollOpen = !state.render.brollOpen; renderPack(); };
+    var auto = $('kbBrollAuto');
+    if (auto) auto.onclick = autoBroll;
     var pick = $('kbBrollPick');
     var file = $('kbBrollFile');
     if (pick && file) pick.onclick = function () { file.click(); };
@@ -530,6 +532,23 @@
     if (dur) dur.oninput = function () { if (state.render.broll) state.render.broll.duration = Number(dur.value || 2.5); };
     var remove = $('kbBrollRemove');
     if (remove) remove.onclick = function () { state.render.broll = null; state.render.brollOpen = true; renderPack(); };
+  }
+
+  function autoBroll() {
+    if (!state.project) { log('先保存项目再自动匹配'); return; }
+    log('按口播稿匹配素材…');
+    req('/api/skills/digital-human-koubo/broll-suggest', {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ project_id: state.project.id, limit: 1 })
+    }).then(function (d) {
+      var item = (d.items || [])[0];
+      if (!item) { log('素材文件名里没有匹配到口播关键词；把素材命名成「产品名_特写.jpg」这类再试'); return; }
+      state.render.broll = { asset_id: item.asset_id, url: item.url, name: item.name, kind: item.kind,
+        mode: item.mode || 'pip', start: item.start || 2, duration: item.duration || 2.5, reason: item.reason || '' };
+      state.render.brollOpen = true;
+      renderPack();
+      log('已匹配素材 ' + item.name + '（' + (item.reason || '') + '）');
+    }).catch(function (e) { log('自动匹配失败：' + e.message); });
   }
 
   function uploadBroll(f) {

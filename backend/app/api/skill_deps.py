@@ -764,6 +764,78 @@ async def koubo_broll_upload(file: UploadFile = File(...)):
     }
 
 
+def _text_tokens(text: str) -> set:
+    out = set()
+    raw = str(text or "")
+    for word in re.findall(r"[A-Za-z0-9]{2,12}", raw):
+        out.add(word.lower())
+    for n in (2, 3, 4):
+        for i in range(max(0, len(raw) - n + 1)):
+            chunk = raw[i:i + n]
+            if re.fullmatch(r"[\u4e00-\u9fff]+", chunk):
+                out.add(chunk)
+    return out
+
+
+@router.get("/api/skills/digital-human-koubo/broll-assets", summary="B-roll 素材列表")
+def koubo_broll_assets():
+    items = []
+    if BROLL_DIR.is_dir():
+        for path in sorted(BROLL_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if path.suffix.lower() not in _BROLL_EXT:
+                continue
+            items.append({"id": path.name,
+                          "url": "/api/skills/digital-human-koubo/broll-uploads/" + path.name,
+                          "name": path.stem,
+                          "kind": "video" if path.suffix.lower() in _BROLL_VIDEO_EXT else "image",
+                          "size": path.stat().st_size})
+    return {"assets": items[:100]}
+
+
+class BrollSuggestBody(BaseModel):
+    project_id: str
+    limit: int = 1
+
+
+@router.post("/api/skills/digital-human-koubo/broll-suggest", summary="按口播稿自动匹配 B-roll")
+def koubo_broll_suggest(body: BrollSuggestBody):
+    row = next((r for r in _load_projects() if r.get("id") == body.project_id), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    text = str(row.get("script") or "")
+    script_tokens = _text_tokens(text)
+    assets = []
+    if BROLL_DIR.is_dir():
+        for path in BROLL_DIR.iterdir():
+            if path.suffix.lower() not in _BROLL_EXT:
+                continue
+            name_tokens = _text_tokens(path.stem)
+            hits = [t for t in name_tokens & script_tokens if len(t) >= 2]
+            if not hits:
+                continue
+            score = sum(len(t) * len(t) for t in hits)
+            assets.append((score, path, sorted(hits, key=len, reverse=True)))
+    assets.sort(key=lambda x: -x[0])
+    limit = max(1, min(5, int(body.limit or 1)))
+    out = []
+    for score, path, hits in assets[:limit]:
+        start = 1.6
+        elapsed = 0.0
+        for seg in row.get("segments") or []:
+            seg_text = str(seg.get("text") or "")
+            if any(h in seg_text for h in hits):
+                start = elapsed + min(1.2, max(0.4, float(seg.get("seconds") or 6) / 4.0))
+                break
+            elapsed += float(seg.get("seconds") or 0)
+        out.append({"asset_id": path.name,
+                    "url": "/api/skills/digital-human-koubo/broll-uploads/" + path.name,
+                    "name": path.name,
+                    "kind": "video" if path.suffix.lower() in _BROLL_VIDEO_EXT else "image",
+                    "start": round(start, 2), "duration": 2.5, "mode": "pip",
+                    "reason": "命中「%s」" % " / ".join(hits[:2])})
+    return {"items": out, "matched": bool(out)}
+
+
 @router.get("/api/skills/digital-human-koubo/broll-uploads/{name}", summary="读取 B-roll / 画中画素材")
 def koubo_broll_get(name: str):
     if "/" in name or "\\" in name or ".." in name:
