@@ -1681,6 +1681,139 @@ def koubo_render_job(job_id: str):
     return job
 
 
+_BATCH_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+class BatchRenderBody(BaseModel):
+    project_ids: List[str] = []
+    template_id: Optional[str] = None
+    title: str = ""
+    quality: str = "preview"
+
+
+def _batch_render_job(batch_id: str, project_ids: List[str], template_id: Optional[str],
+                      title: str, quality: str) -> None:
+    batch = _BATCH_JOBS[batch_id]
+    total = len(project_ids)
+    try:
+        for idx, pid in enumerate(project_ids, 1):
+            item = None
+            for x in batch.get("items") or []:
+                if x.get("project_id") == pid:
+                    item = x
+                    break
+            if item is None:
+                continue
+            if batch.get("cancel"):
+                item["status"] = "skipped"
+                item["message"] = "已取消"
+                continue
+            item["status"] = "running"
+            item["message"] = "开始渲染"
+            item["progress"] = 0
+            batch["current"] = idx
+            batch["message"] = "第 %d/%d 个：%s" % (idx, total, item.get("name") or pid)
+            sub_id = uuid.uuid4().hex[:10]
+            sub = {"id": sub_id, "project_id": pid, "status": "running", "progress": 0, "done": 0,
+                   "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
+            with _RENDER_LOCK:
+                _RENDER_JOBS[sub_id] = sub
+            threading.Thread(target=_render_job,
+                             args=(sub_id, pid, "标准", None, template_id, title, quality, None),
+                             daemon=True).start()
+            while True:
+                time.sleep(0.4)
+                with _RENDER_LOCK:
+                    st = sub.get("status")
+                    item["progress"] = int(sub.get("progress") or 0)
+                    item["message"] = sub.get("message") or ""
+                if st in ("done", "error"):
+                    break
+                if time.time() - float(sub.get("started_at") or time.time()) > 3600:
+                    item["status"] = "error"
+                    item["error"] = "渲染超时"
+                    break
+            if item.get("status") == "error":
+                pass
+            elif sub.get("status") == "done":
+                item["status"] = "done"
+                item["progress"] = 100
+                qa = sub.get("qa") or {}
+                item["score"] = qa.get("score")
+                item["ok"] = bool(qa.get("ok"))
+                item["message"] = sub.get("message") or "完成"
+                item["output"] = "/api/skills/digital-human-koubo/projects/%s/%s" % (
+                    pid, "preview" if quality == "preview" else "rendered")
+            else:
+                item["status"] = "error"
+                item["error"] = str(sub.get("error") or "渲染失败")[:600]
+                item["message"] = "渲染失败"
+            batch["done"] = idx
+            batch["progress"] = int(idx * 100 / total) if total else 100
+        ok_count = sum(1 for x in batch.get("items") or [] if x.get("status") == "done")
+        batch["ok_count"] = ok_count
+        batch["status"] = "cancelled" if batch.get("cancel") else "done"
+        batch["message"] = ("批量出片完成：成功 %d / %d" % (ok_count, total)) if not batch.get("cancel") else "批量出片已取消"
+    except Exception as exc:
+        batch["status"] = "error"
+        batch["error"] = str(exc)[:1200]
+        batch["message"] = "批量出片失败"
+    finally:
+        batch["finished_at"] = time.time()
+
+
+@router.post("/api/skills/digital-human-koubo/batch-render", summary="批量套模板出片")
+def koubo_batch_render(body: BatchRenderBody):
+    ids: List[str] = []
+    for raw in body.project_ids or []:
+        pid = str(raw or "").strip()
+        if pid and pid not in ids:
+            ids.append(pid)
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要出片的项目")
+    if len(ids) > 20:
+        raise HTTPException(status_code=400, detail="一次最多 20 个项目")
+    quality = "preview" if str(body.quality or "preview") == "preview" else "final"
+    rows = {str(r.get("id")): r for r in _load_projects()}
+    items: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for pid in ids:
+        row = rows.get(pid)
+        if not row:
+            skipped.append({"project_id": pid, "reason": "项目不存在"})
+            continue
+        if not (OUTPUT_DIR / pid / "final.mp4").is_file():
+            skipped.append({"project_id": pid, "name": row.get("name") or pid, "reason": "还没有生成底片"})
+            continue
+        items.append({"project_id": pid, "name": row.get("name") or pid, "status": "pending",
+                      "progress": 0, "message": "等待中", "output": "", "score": None,
+                      "ok": False, "error": ""})
+    if not items:
+        reason = skipped[0]["reason"] if skipped else "没有可出片的项目"
+        raise HTTPException(status_code=400, detail=reason)
+    batch_id = uuid.uuid4().hex[:10]
+    batch = {"id": batch_id, "status": "running", "progress": 0, "done": 0,
+             "total": len(items), "current": 0, "message": "准备批量出片",
+             "template_id": body.template_id or "", "quality": quality,
+             "items": items, "skipped": skipped, "error": "", "started_at": time.time()}
+    with _RENDER_LOCK:
+        _BATCH_JOBS[batch_id] = batch
+    threading.Thread(target=_batch_render_job,
+                     args=(batch_id, [x["project_id"] for x in items], body.template_id,
+                           body.title or "", quality),
+                     daemon=True).start()
+    return {"ok": True, "job_id": batch_id, "items": items, "skipped": skipped, "total": len(items)}
+
+
+@router.get("/api/skills/digital-human-koubo/batch-render/jobs/{job_id}", summary="批量出片进度")
+def koubo_batch_render_job(job_id: str):
+    with _RENDER_LOCK:
+        job = _BATCH_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
 @router.post("/api/skills/digital-human-koubo/projects/{pid}/qa", summary="逐段回听质检")
 def koubo_qa(pid: str):
     project = koubo_project(pid)

@@ -174,6 +174,30 @@
       + '#content-digital-human-koubo .kb-tpl-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;}'
       + '#content-digital-human-koubo .kb-tpl-detail{border:0;background:transparent;color:#2563eb;font-size:10.5px;cursor:pointer;padding:2px 0;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-tpl-detail:hover{text-decoration:underline;}'
+      + '#kbBatchModal{position:fixed;inset:0;z-index:10070;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
+      + '#kbBatchModal .kb-batch{width:min(94vw,720px);max-height:90vh;overflow:auto;background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
+      + '#kbBatchModal .kb-batch-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}'
+      + '#kbBatchModal .kb-batch-head h3{margin:0;font-size:17px;color:#0f172a;}'
+      + '#kbBatchModal .kb-batch-sub{font-size:11.5px;color:#64748b;margin-top:6px;line-height:1.7;}'
+      + '#kbBatchModal .kb-batch-sub b{color:#2563eb;}'
+      + '#kbBatchModal .kb-batch-list{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow:auto;margin:10px 0;border:1px solid #eef2f7;border-radius:10px;padding:8px;}'
+      + '#kbBatchModal .kb-batch-row{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;padding:5px 2px;}'
+      + '#kbBatchModal .kb-batch-row input{accent-color:#2563eb;}'
+      + '#kbBatchModal .kb-batch-row small{color:#94a3b8;font-size:10.5px;margin-left:auto;}'
+      + '#kbBatchModal .kb-batch-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;}'
+      + '#kbBatchModal .kb-batch-actions label{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:#475569;}'
+      + '#kbBatchModal .kb-batch-actions .kb-btn-primary{width:auto;min-width:140px;margin:0;}'
+      + '#kbBatchModal .kb-batch-bar{height:5px;background:#eef2f7;border-radius:999px;overflow:hidden;margin:10px 0;}'
+      + '#kbBatchModal .kb-batch-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3b82f6,#8b5cf6);transition:width .3s;}'
+      + '#kbBatchModal .kb-batch-item{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#475569;padding:7px 2px;border-bottom:1px dashed #f1f5f9;}'
+      + '#kbBatchModal .kb-batch-item:last-child{border-bottom:0;}'
+      + '#kbBatchModal .kb-batch-item b{flex:1;min-width:0;font-weight:500;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+      + '#kbBatchModal .kb-batch-item a{color:#2563eb;text-decoration:none;font-size:11px;white-space:nowrap;}'
+      + '#kbBatchModal .kb-batch-pill{font-size:10px;padding:2px 7px;border-radius:999px;background:#eef2f7;color:#475569;white-space:nowrap;}'
+      + '#kbBatchModal .kb-batch-pill.run{background:#dbeafe;color:#1d4ed8;}'
+      + '#kbBatchModal .kb-batch-pill.done{background:#dcfce7;color:#15803d;}'
+      + '#kbBatchModal .kb-batch-pill.err{background:#fee2e2;color:#b91c1c;}'
+      + '#kbBatchModal .kb-batch-close{border:1px solid #e2e8f0;background:#fff;color:#475569;border-radius:999px;padding:4px 10px;font-size:11px;cursor:pointer;}'
       + '#content-digital-human-koubo .kb-tpl-preview:after{content:"";position:absolute;left:10%;right:10%;top:20%;height:12px;border-radius:6px;background:rgba(255,255,255,.82);box-shadow:0 10px 0 -2px rgba(255,255,255,.32);}'
       + '#content-digital-human-koubo .kb-tpl b{display:block;font-size:12px;color:#0f172a;margin-bottom:3px;}'
       + '#content-digital-human-koubo .kb-tpl p{font-size:11px;line-height:1.45;color:#64748b;margin:0 0 5px;min-height:31px;}'
@@ -619,6 +643,118 @@
       .catch(function () {});
   }
 
+  function openBatchModal() {
+    var ready = (state.projects || []).filter(function (p) {
+      return p.has_video && p.status !== 'generating';
+    });
+    if (!ready.length) { log('还没有可批量出片的底片，先生成一个项目'); return; }
+    var old = document.getElementById('kbBatchModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var tpl = (state.render.templates || []).filter(function (t) { return t.id === state.render.templateId; })[0] || {};
+    var tplName = tpl.name || state.render.templateId || '默认模板';
+    var modal = document.createElement('div');
+    modal.id = 'kbBatchModal';
+    document.body.appendChild(modal);
+    var timer = null;
+    var jobId = '';
+
+    function close() {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+
+    function pill(x) {
+      if (x.status === 'done') return '<span class="kb-batch-pill done">完成</span>';
+      if (x.status === 'error') return '<span class="kb-batch-pill err">失败</span>';
+      if (x.status === 'skipped') return '<span class="kb-batch-pill">已跳过</span>';
+      if (x.status === 'running') return '<span class="kb-batch-pill run">' + (x.progress || 0) + '%</span>';
+      return '<span class="kb-batch-pill">等待</span>';
+    }
+
+    function paintForm() {
+      var rows = ready.map(function (p, i) {
+        return '<label class="kb-batch-row"><input type="checkbox" data-pid="' + esc(p.id) + '"' + (i < 20 ? ' checked' : '') + '>'
+          + '<span>' + esc(p.name || p.id) + '</span><small>' + esc(p.created_at || '') + (p.rendered ? ' · 已出过高清' : '') + '</small></label>';
+      }).join('');
+      modal.innerHTML = '<div class="kb-batch">'
+        + '<div class="kb-batch-head"><h3>批量出片</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-batch-sub">当前模板 <b>' + esc(tplName) + '</b> · 选多个已生成底片，后台按顺序套同一个模板；一次最多 20 个。</div>'
+        + '<div class="kb-batch-list">' + rows + '</div>'
+        + '<div class="kb-batch-actions"><button type="button" class="kb-btn" data-all>全选 / 全不选</button>'
+        + '<label><input type="radio" name="kbBatchQ" value="preview" checked> 快速预览</label>'
+        + '<label><input type="radio" name="kbBatchQ" value="final"> 高清成片</label>'
+        + '<span style="flex:1"></span><button type="button" class="kb-btn-primary" data-start>开始批量出片</button></div>'
+        + '</div>';
+      modal.querySelector('[data-close]').onclick = close;
+      modal.querySelector('[data-all]').onclick = function () {
+        var boxes = modal.querySelectorAll('[data-pid]');
+        var allOn = true;
+        boxes.forEach(function (b) { if (!b.checked) allOn = false; });
+        boxes.forEach(function (b) { b.checked = !allOn; });
+      };
+      modal.querySelector('[data-start]').onclick = function () {
+        var ids = [];
+        modal.querySelectorAll('[data-pid]').forEach(function (b) { if (b.checked && ids.length < 20) ids.push(b.getAttribute('data-pid')); });
+        if (!ids.length) { log('先勾选要出片的项目'); return; }
+        var q = modal.querySelector('input[name="kbBatchQ"]:checked');
+        var quality = q ? q.value : 'preview';
+        modal.querySelector('[data-start]').disabled = true;
+        req('/api/skills/digital-human-koubo/batch-render', {
+          method: 'POST', headers: headers(),
+          body: JSON.stringify({ project_ids: ids, template_id: state.render.templateId, quality: quality })
+        }).then(function (d) {
+          jobId = d.job_id;
+          paintJob(d);
+          timer = setInterval(poll, 1500);
+          poll();
+        }).catch(function (e) {
+          modal.querySelector('[data-start]').disabled = false;
+          log('批量出片失败：' + e.message);
+        });
+      };
+    }
+
+    function paintJob(d) {
+      var items = d.items || [];
+      var rows = items.map(function (x) {
+        var extra = x.status === 'done'
+          ? (x.score != null ? '<span style="font-size:10.5px;color:#15803d;">质检 ' + x.score + ' 分</span>' : '')
+            + (x.output ? '<a href="' + esc(API + x.output) + '" target="_blank" download>下载</a>' : '')
+          : (x.status === 'error' ? '<span style="font-size:10.5px;color:#b91c1c;" title="' + esc(x.error || '') + '">' + esc((x.error || '失败').slice(0, 24)) + '</span>' : '<span style="font-size:10.5px;color:#94a3b8;">' + esc(x.message || '') + '</span>');
+        return '<div class="kb-batch-item">' + pill(x) + '<b>' + esc(x.name || x.project_id) + '</b>' + extra + '</div>';
+      }).join('');
+      var skipped = (d.skipped || []).map(function (s) {
+        return '<div class="kb-batch-item"><span class="kb-batch-pill">跳过</span><b>' + esc(s.name || s.project_id) + '</b><span style="font-size:10.5px;color:#94a3b8;">' + esc(s.reason || '') + '</span></div>';
+      }).join('');
+      modal.innerHTML = '<div class="kb-batch">'
+        + '<div class="kb-batch-head"><h3>批量出片</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-batch-sub">' + esc(d.message || '') + ' · ' + (d.done || 0) + '/' + (d.total || items.length) + '</div>'
+        + '<div class="kb-batch-bar"><i style="width:' + Math.max(2, d.progress || 0) + '%"></i></div>'
+        + '<div class="kb-batch-list">' + (rows + skipped || '<span style="font-size:12px;color:#94a3b8;">没有任务</span>') + '</div>'
+        + '<div class="kb-batch-actions"><span style="font-size:11px;color:#94a3b8;">' + (d.status === 'running' ? '后台渲染中，可以关闭窗口，任务会继续。' : '已完成，可逐条下载或到项目记录查看。') + '</span></div>'
+        + '</div>';
+      modal.querySelector('[data-close]').onclick = close;
+    }
+
+    function poll() {
+      if (!jobId) return;
+      req('/api/skills/digital-human-koubo/batch-render/jobs/' + encodeURIComponent(jobId), { headers: headers() })
+        .then(function (d) {
+          if (!document.getElementById('kbBatchModal')) { if (timer) clearInterval(timer); return; }
+          paintJob(d);
+          if (d.status !== 'running') {
+            if (timer) { clearInterval(timer); timer = null; }
+            loadProjects(); renderPack();
+            log('批量出片：' + (d.message || d.status));
+          }
+        })
+        .catch(function () {});
+    }
+
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    paintForm();
+  }
+
   function selectTemplate(id) {
     if (!id) return;
     state.render.templateId = id;
@@ -761,7 +897,9 @@
       + '<div class="kb-templates" id="kbTplGrid"></div>'
       + (tpls.length > 6 ? '<div class="kb-tpl-bottom-actions">'
           + (!r.showAllTemplates && (r.templateCategory || 'all') === 'all' && !(r.templateQuery || '').trim() ? '<button type="button" class="kb-tpl-more" id="kbTplRefresh">换一批</button>' : '')
-          + '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button></div>' : '')
+          + '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>'
+          + ((state.projects || []).filter(function (x) { return x.has_video; }).length ? '<button type="button" class="kb-tpl-more" id="kbBatchOpen">批量出片（' + (state.projects || []).filter(function (x) { return x.has_video; }).length + ' 个底片）</button>' : '')
+          + '</div>' : '')
       + renderBrollBlock()
       + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">口播质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
@@ -780,6 +918,8 @@
     if (more) more.onclick = function () { state.render.showAllTemplates = !state.render.showAllTemplates; if (!state.render.showAllTemplates) { state.render.templateCategory = 'all'; state.render.templateQuery = ''; state.render.featuredPage = 0; } renderPack(); };
     var refresh = $('kbTplRefresh');
     if (refresh) refresh.onclick = function () { state.render.featuredPage = (state.render.featuredPage || 0) + 1; renderPack(); };
+    var batchOpen = $('kbBatchOpen');
+    if (batchOpen) batchOpen.onclick = openBatchModal;
     var titleInput = $('kbTemplateTitle');
     if (titleInput) titleInput.oninput = function () { state.render.title = titleInput.value || ''; };
     var btn = $('kbRender');

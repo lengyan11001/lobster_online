@@ -75,3 +75,61 @@ def test_template_detail_exposes_scenes_and_motion():
     assert d["transition_label"] == "闪白转场"
     assert "字幕安全区" in d["features"]
     assert e.template_detail("does_not_exist") is None
+
+
+def test_batch_render_runs_selected_projects(tmp_path, monkeypatch):
+    import time
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    monkeypatch.setattr(s, "OUTPUT_DIR", tmp_path)
+    (tmp_path / "p1").mkdir()
+    (tmp_path / "p1" / "final.mp4").write_bytes(b"x")
+    monkeypatch.setattr(s, "_load_projects", lambda: [{"id": "p1", "name": "第一条"}])
+
+    def fake_render(job_id, *args, **kwargs):
+        job = s._RENDER_JOBS[job_id]
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = "预览完成"
+        job["qa"] = {"ok": True, "score": 96}
+        job["finished_at"] = time.time()
+
+    monkeypatch.setattr(s, "_render_job", fake_render)
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/batch-render",
+                    json={"project_ids": ["p1", "p1"], "template_id": "premium_kinetic_v1", "quality": "preview"})
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 1
+    job_id = r.json()["job_id"]
+    data = {}
+    for _ in range(60):
+        data = client.get("/api/skills/digital-human-koubo/batch-render/jobs/%s" % job_id).json()
+        if data["status"] != "running":
+            break
+        time.sleep(0.1)
+    assert data["status"] == "done"
+    assert data["items"][0]["status"] == "done"
+    assert data["items"][0]["score"] == 96
+    assert data["items"][0]["output"].endswith("/preview")
+
+
+def test_batch_render_rejects_empty_or_unknown_projects():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    empty = client.post("/api/skills/digital-human-koubo/batch-render", json={"project_ids": []})
+    assert empty.status_code == 400
+    unknown = client.post("/api/skills/digital-human-koubo/batch-render", json={"project_ids": ["nope"]})
+    assert unknown.status_code == 400
+    assert "项目不存在" in unknown.json()["detail"]
