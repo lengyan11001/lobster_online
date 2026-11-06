@@ -1,7 +1,7 @@
 {
-  "version": "2.0.242",
-  "build": 543,
-  "applied_at": "2026-11-06T09:24:33+08:00",
-  "note": "剪辑大师：AI优化(口播/画面)+调色风格；模板竖排/行距/字距/贴边缩字",
-  "bundle_sha256": "35141fdfa93c70160eb98c46e4e0b7fed0dd827c1f11e228cda08b5e59079810"
+  "version": "2.0.243",
+  "build": 544,
+  "applied_at": "2026-11-06T11:56:15+08:00",
+  "note": "作品提取：导出TXT/CSV改走本机导出接口，落盘提示路径",
+  "bundle_sha256": "9a03ccb66e8c43b9af654f80bf56b9fe2806d2633dfd6c7f976c944cdce4c3b0"
 }
