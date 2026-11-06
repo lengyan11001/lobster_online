@@ -144,6 +144,14 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
         W = _even(int(round((info.get('w') or 720) * target_h / max(1, info.get('h') or 1280))))
     fps = 12 if preview_mode else int(spec.get('fps') or FPS)
     total_frames = max(1, int(math.ceil(duration * fps)))
+    qa_quality = 'preview' if preview_mode else 'final'
+    layout_checks: List[Dict[str, Any]] = []
+    layout_warnings: List[str] = []
+    qa_targets = [duration * frac for frac in (0.08, 0.35, 0.65, 0.90)]
+    qa_done: set = set()
+    safe_ratio = float((spec.get('rules') or {}).get('safeArea') or 0.06)
+    margin_x = W * safe_ratio
+    margin_y = H * safe_ratio
     opts = project.get('options') or {}
     lang = kr.LANG_MAP.get(opts.get('language') or 'Mandarin Chinese', 'zh')
     tmp = Path(tempfile.mkdtemp(prefix='koubo-template-', dir=str(DATA_DIR)))
@@ -192,9 +200,37 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 page.evaluate('() => document.fonts.ready')
             except Exception:
                 pass
+            qa_js = "() => { const ids=['title','caption','keyword','cta','lowerThird']; const out={}; for (const id of ids) { const el=document.getElementById(id); if(!el) continue; const r=el.getBoundingClientRect(); const cs=getComputedStyle(el); out[id]={left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height,opacity:parseFloat(cs.opacity||'1'),scrollW:el.scrollWidth,clientW:el.clientWidth,scrollH:el.scrollHeight,clientH:el.clientHeight}; } return out; }"
             for i in range(total_frames):
                 t = i / float(fps)
                 page.evaluate('(t) => window.renderAt(t)', t)
+                for qi, qt in enumerate(qa_targets):
+                    if qi in qa_done or t < qt:
+                        continue
+                    qa_done.add(qi)
+                    try:
+                        rects = page.evaluate(qa_js)
+                    except Exception:
+                        rects = {}
+                    labels = {'title': '标题', 'caption': '字幕', 'keyword': '关键词', 'cta': 'CTA', 'lowerThird': '姓名条'}
+                    for key, label in labels.items():
+                        rect = rects.get(key) if isinstance(rects, dict) else None
+                        if not rect or float(rect.get('opacity') or 0) <= 0.05 or float(rect.get('width') or 0) <= 0:
+                            continue
+                        left = float(rect.get('left') or 0); top = float(rect.get('top') or 0)
+                        right = float(rect.get('right') or 0); bottom = float(rect.get('bottom') or 0)
+                        hit = left < margin_x - 1 or top < margin_y - 1 or right > W - margin_x + 1 or bottom > H - margin_y + 1
+                        clipped = key == 'caption' and (int(rect.get('scrollW') or 0) > int(rect.get('clientW') or 0) + 8 or int(rect.get('scrollH') or 0) > int(rect.get('clientH') or 0) + 8)
+                        if hit or clipped:
+                            parts = []
+                            if hit:
+                                parts.append('超出安全区')
+                            if clipped:
+                                parts.append('文字可能被截断')
+                            detail = '%s：%s' % (label, '，'.join(parts))
+                            if detail not in layout_warnings:
+                                layout_warnings.append(detail)
+                                layout_checks.append({'name': '安全区', 'ok': False, 'detail': detail + '（%.2fs）' % t})
                 page.screenshot(path=str(tmp / ('o%05d.png' % (i + 1))), omit_background=True, type='png')
                 if progress and (i % 10 == 0 or i == total_frames - 1):
                     progress(i + 1, total_frames, ('预览渲染' if preview_mode else '模板渲染') + ' %d/%d' % (i + 1, total_frames))
@@ -209,6 +245,12 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
         r = kr._run(cmd, timeout=1800)
         if r.returncode != 0:
             raise RuntimeError('模板合成失败：' + (r.stderr or '')[-700:])
+        qa_path = OUTPUT_DIR / pid / ('qa_%s.json' % qa_quality)
+        qa_path.write_text(json.dumps({
+            'duration': duration, 'fps': fps, 'width': W, 'height': H,
+            'template_id': spec.get('id'), 'title': title, 'quality': qa_quality,
+            'layout_checked': True, 'layout_checks': layout_checks, 'layout_warnings': layout_warnings,
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
         if progress:
             progress(total_frames, total_frames, '预览合成完成' if preview_mode else '模板合成完成')
         return out

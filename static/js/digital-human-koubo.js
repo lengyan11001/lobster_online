@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false },
     qa: null,
     timer: null
   };
@@ -135,6 +135,11 @@
       + '#content-digital-human-koubo .kb-tpl-chip{border:1px solid #e2e8f0;background:#fff;border-radius:999px;padding:4px 9px;font-size:10.5px;color:#475569;cursor:pointer;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-tpl-chip.on{background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;}'
       + '#content-digital-human-koubo .kb-tpl-more{width:100%;border:1px dashed #bfdbfe;background:#f8fbff;color:#2563eb;border-radius:10px;padding:8px;font-size:11px;cursor:pointer;margin-top:10px;}'
+      + '#content-digital-human-koubo .kb-visual-qa{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;margin:8px 0 2px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #eef2f7;}'
+      + '#content-digital-human-koubo .kb-visual-qa b{font-size:11px;color:#334155;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-visual-qa .kb-qa-pill{font-size:10.5px;padding:2px 7px;border-radius:999px;background:#e0f2fe;color:#0369a1;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-visual-qa .kb-qa-pill.warn{background:#fef3c7;color:#92400e;}'
+      + '#content-digital-human-koubo .kb-visual-qa small{font-size:10.5px;color:#64748b;line-height:1.5;}'
       + '#content-digital-human-koubo .kb-title-input{display:flex;align-items:center;gap:8px;margin-bottom:10px;}'
       + '#content-digital-human-koubo .kb-title-input label{font-size:12px;color:#334155;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-title-input input{flex:1;min-width:0;border:1px solid #e2e8f0;border-radius:9px;padding:8px 10px;font-size:12px;color:#0f172a;background:#fff;}'
@@ -346,6 +351,16 @@
     if ($('kbSegCount')) $('kbSegCount').textContent = q.segments.length + ' 段';
   }
 
+  function renderVisualQa(q) {
+    if (!q) return '';
+    var warnings = q.warnings || [];
+    var ok = !!q.ok;
+    var score = q.score || 0;
+    return '<div class="kb-visual-qa"><b>画面质检</b><span class="kb-qa-pill' + (ok ? '' : ' warn') + '">' + (ok ? '通过' : '需注意') + ' · ' + score + ' 分</span>'
+      + (warnings.length ? '<small>' + warnings.slice(0, 3).map(function (w) { return esc(w); }).join('；') + (warnings.length > 3 ? '…' : '') + '</small>' : '<small>黑帧、音轨、帧率、安全区均正常</small>')
+      + '</div>';
+  }
+
   function renderQaResult(q) {
     if (!q.ok) return '<div style="margin-top:8px;font-size:11px;color:#dc2626;">' + esc(q.error || '质检失败') + '</div>';
     var rows = (q.segments || []).map(function (x) {
@@ -407,6 +422,7 @@
         state.render.packaged = false;
         state.render.previewReady = false;
         state.render.showPreview = false;
+        state.render.qa = null;
         state.render.job = null;
         if (state.project) { state.project.rendered = false; state.project.preview_rendered = false; }
         renderPack(); renderPreview();
@@ -440,10 +456,11 @@
       + '</div>'
       + '<div class="kb-hint" style="margin:6px 0 10px;">先看 480p 快速预览，满意再出高清；同一段底片换模板不会重新生成，也不会再扣底片算力。</div>'
       + (job ? '<div style="margin-bottom:10px;font-size:11px;color:#64748b;">' + esc(job.message || '') + '<div style="height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:4px;"><i style="display:block;height:100%;width:' + Math.max(3, job.progress || 0) + '%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);"></i></div></div>' : '')
+      + renderVisualQa(r.qa)
       + (r.showAllTemplates ? '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>' : '')
       + '<div class="kb-templates" id="kbTplGrid"></div>'
       + (tpls.length > tpls.filter(function (t) { return t.featured; }).length ? '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>' : '')
-      + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
+      + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">口播质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
       + '</div>';
     paintTemplateGrid();
@@ -497,6 +514,7 @@
             if (mode === 'preview') { state.render.previewReady = true; state.render.showPreview = true; }
             else { state.render.packaged = true; state.render.showPreview = false; }
             state.render.job = null;
+            state.render.qa = job.qa || null;
             log(mode === 'preview' ? '预览完成' : '高清成片完成');
             req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) { state.project = p; renderAll(); });
           } else {
@@ -749,6 +767,7 @@
       state.render.packaged = !!p.rendered;
       state.render.previewReady = !!p.preview_rendered;
       state.render.showPreview = !!p.preview_rendered && !p.rendered;
+      state.render.qa = p.rendered ? (p.qa_final || null) : (p.qa_preview || null);
       if (p.photo_id) {
         state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };
       }

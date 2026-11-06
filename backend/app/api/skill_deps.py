@@ -836,6 +836,8 @@ def _summary_row(row: Dict[str, Any], running: set) -> Dict[str, Any]:
         "segments_count": len(row.get("segments") or []),
         "has_video": video.is_file(),
         "video_v": int(video.stat().st_mtime_ns // 1_000_000) if video.is_file() else 0,
+        "qa_final_ok": bool((row.get("qa_final") or {}).get("ok")),
+        "qa_preview_ok": bool((row.get("qa_preview") or {}).get("ok")),
         "preview_rendered": preview.is_file(),
         "preview_v": int(preview.stat().st_mtime_ns // 1_000_000) if preview.is_file() else 0,
         "rendered": packaged.is_file(),
@@ -1494,6 +1496,10 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
         else:
             from ..services import koubo_renderer
             out = koubo_renderer.render(project, preset, components, progress)
+        from ..services import koubo_render_qa
+        qa = koubo_render_qa.check_render(project_id, quality)
+        job["qa"] = qa
+        qa_summary = {k: qa.get(k) for k in ("ok", "score", "warnings", "checked_at", "quality")}
         rows = _load_projects()
         now_iso = datetime.now().isoformat(timespec="seconds")
         for row in rows:
@@ -1505,16 +1511,18 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
                     row["preview_template_title"] = title or ""
                     row["preview_rendered_at"] = now_iso
                     row["preview_rendered"] = True
+                    row["qa_preview"] = qa_summary
                 else:
                     row["template_id"] = template_id or ""
                     row["template_name"] = template_name
                     row["template_title"] = title or ""
                     row["rendered_at"] = now_iso
                     row["rendered"] = True
+                    row["qa_final"] = qa_summary
         _save_projects(rows)
         job["status"] = "done"
         job["progress"] = 100
-        job["message"] = "预览完成" if quality == "preview" else "成片完成"
+        job["message"] = ("预览完成" if quality == "preview" else "成片完成") + (" · 质检 %d 分" % int(qa.get("score") or 0))
         job["output"] = "/api/skills/digital-human-koubo/projects/%s/%s" % (
             project_id, "preview" if quality == "preview" else "rendered")
     except Exception as exc:
