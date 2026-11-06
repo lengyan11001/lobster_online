@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import uuid
 import zipfile
 from datetime import datetime
@@ -38,6 +39,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "data" / "koubo"
 UPLOAD_DIR = DATA_DIR / "uploads"
 BROLL_DIR = DATA_DIR / "broll"
+BGM_DIR = DATA_DIR / "bgm"
 PROJECTS_PATH = DATA_DIR / "projects.json"
 DEPS = ROOT / "deps"
 SKILL_DIR = ROOT / "skills" / "digital_human_koubo"
@@ -767,6 +769,36 @@ def koubo_broll_get(name: str):
     if "/" in name or "\\" in name or ".." in name:
         raise HTTPException(status_code=400, detail="非法文件名")
     path = BROLL_DIR / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(str(path))
+
+
+_BGM_EXT = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+
+
+@router.post("/api/skills/digital-human-koubo/bgm-uploads", summary="上传背景音乐")
+async def koubo_bgm_upload(file: UploadFile = File(...)):
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _BGM_EXT:
+        raise HTTPException(status_code=400, detail="只支持 mp3 / wav / m4a / aac / ogg / flac")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(raw) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件超过 50MB")
+    BGM_DIR.mkdir(parents=True, exist_ok=True)
+    name = uuid.uuid4().hex[:16] + ext
+    (BGM_DIR / name).write_bytes(raw)
+    return {"id": name, "url": "/api/skills/digital-human-koubo/bgm-uploads/" + name,
+            "name": file.filename or name, "size": len(raw)}
+
+
+@router.get("/api/skills/digital-human-koubo/bgm-uploads/{name}", summary="读取背景音乐")
+def koubo_bgm_get(name: str):
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    path = BGM_DIR / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(str(path))
@@ -1502,11 +1534,18 @@ class BrollConfig(BaseModel):
     duration: float = 2.5
 
 
+class BgmConfig(BaseModel):
+    asset_id: str = ""
+    volume: float = 0.18
+    fade: float = 1.0
+
+
 class RenderBody(BaseModel):
     template_id: Optional[str] = None
     title: Optional[str] = None
     quality: str = "final"
     broll: Optional[BrollConfig] = None
+    bgm: Optional[BgmConfig] = None
     preset: str = "标准"
     components: Optional[List[str]] = None
 
@@ -1593,7 +1632,8 @@ def koubo_recommend_templates(body: RecommendBody):
 
 def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
                 template_id: Optional[str] = None, title: str = "", quality: str = "final",
-                broll: Optional[Dict[str, Any]] = None) -> None:
+                broll: Optional[Dict[str, Any]] = None,
+                bgm: Optional[Dict[str, Any]] = None) -> None:
     job = _RENDER_JOBS[job_id]
     try:
         project = koubo_project(project_id)
@@ -1609,7 +1649,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             from ..services import koubo_template_engine
             spec = koubo_template_engine.get_template(template_id) or {}
             template_name = str(spec.get("name") or "")
-            out = koubo_template_engine.render(project, template_id, progress, title_override=title, quality=quality, broll=broll)
+            out = koubo_template_engine.render(project, template_id, progress, title_override=title, quality=quality, broll=broll, bgm=bgm)
         else:
             from ..services import koubo_renderer
             out = koubo_renderer.render(project, preset, components, progress)
@@ -1623,6 +1663,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             if row.get("id") == project_id:
                 row["render_preset"] = preset
                 row["broll"] = broll or {}
+                row["bgm"] = bgm or {}
                 if quality == "preview":
                     row["preview_template_id"] = template_id or ""
                     row["preview_template_name"] = template_name
@@ -1668,7 +1709,7 @@ def koubo_render(pid: str, body: RenderBody):
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[job_id] = job
-    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final", body.broll.model_dump() if body.broll else None), daemon=True).start()
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final", body.broll.model_dump() if body.broll else None, body.bgm.model_dump() if body.bgm else None), daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
 
@@ -1691,65 +1732,72 @@ class BatchRenderBody(BaseModel):
     quality: str = "preview"
 
 
+def _run_batch_item(batch: Dict[str, Any], item: Dict[str, Any], pid: str,
+                    template_id: Optional[str], title: str, quality: str) -> None:
+    if batch.get("cancel"):
+        item["status"] = "skipped"
+        item["message"] = "已取消"
+        return
+    item["status"] = "running"
+    item["message"] = "开始渲染"
+    item["progress"] = 0
+    sub_id = uuid.uuid4().hex[:10]
+    sub = {"id": sub_id, "project_id": pid, "status": "running", "progress": 0, "done": 0,
+           "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
+    with _RENDER_LOCK:
+        _RENDER_JOBS[sub_id] = sub
+    threading.Thread(target=_render_job,
+                     args=(sub_id, pid, "标准", None, template_id, title, quality, None, None),
+                     daemon=True).start()
+    deadline = time.time() + 3600
+    while True:
+        time.sleep(0.4)
+        with _RENDER_LOCK:
+            st = sub.get("status")
+            item["progress"] = int(sub.get("progress") or 0)
+            item["message"] = sub.get("message") or ""
+        if st in ("done", "error"):
+            break
+        if time.time() > deadline:
+            item["status"] = "error"
+            item["error"] = "渲染超时"
+            item["message"] = "渲染超时"
+            break
+    if item.get("status") == "error":
+        return
+    if sub.get("status") == "done":
+        item["status"] = "done"
+        item["progress"] = 100
+        qa = sub.get("qa") or {}
+        item["score"] = qa.get("score")
+        item["ok"] = bool(qa.get("ok"))
+        item["message"] = sub.get("message") or "完成"
+        item["output"] = "/api/skills/digital-human-koubo/projects/%s/%s" % (
+            pid, "preview" if quality == "preview" else "rendered")
+    else:
+        item["status"] = "error"
+        item["error"] = str(sub.get("error") or "渲染失败")[:600]
+        item["message"] = "渲染失败"
+
+
 def _batch_render_job(batch_id: str, project_ids: List[str], template_id: Optional[str],
                       title: str, quality: str) -> None:
     batch = _BATCH_JOBS[batch_id]
     total = len(project_ids)
     try:
-        for idx, pid in enumerate(project_ids, 1):
-            item = None
-            for x in batch.get("items") or []:
-                if x.get("project_id") == pid:
-                    item = x
-                    break
-            if item is None:
-                continue
-            if batch.get("cancel"):
-                item["status"] = "skipped"
-                item["message"] = "已取消"
-                continue
-            item["status"] = "running"
-            item["message"] = "开始渲染"
-            item["progress"] = 0
-            batch["current"] = idx
-            batch["message"] = "第 %d/%d 个：%s" % (idx, total, item.get("name") or pid)
-            sub_id = uuid.uuid4().hex[:10]
-            sub = {"id": sub_id, "project_id": pid, "status": "running", "progress": 0, "done": 0,
-                   "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
-            with _RENDER_LOCK:
-                _RENDER_JOBS[sub_id] = sub
-            threading.Thread(target=_render_job,
-                             args=(sub_id, pid, "标准", None, template_id, title, quality, None),
-                             daemon=True).start()
-            while True:
-                time.sleep(0.4)
-                with _RENDER_LOCK:
-                    st = sub.get("status")
-                    item["progress"] = int(sub.get("progress") or 0)
-                    item["message"] = sub.get("message") or ""
-                if st in ("done", "error"):
-                    break
-                if time.time() - float(sub.get("started_at") or time.time()) > 3600:
-                    item["status"] = "error"
-                    item["error"] = "渲染超时"
-                    break
-            if item.get("status") == "error":
-                pass
-            elif sub.get("status") == "done":
-                item["status"] = "done"
-                item["progress"] = 100
-                qa = sub.get("qa") or {}
-                item["score"] = qa.get("score")
-                item["ok"] = bool(qa.get("ok"))
-                item["message"] = sub.get("message") or "完成"
-                item["output"] = "/api/skills/digital-human-koubo/projects/%s/%s" % (
-                    pid, "preview" if quality == "preview" else "rendered")
-            else:
-                item["status"] = "error"
-                item["error"] = str(sub.get("error") or "渲染失败")[:600]
-                item["message"] = "渲染失败"
-            batch["done"] = idx
-            batch["progress"] = int(idx * 100 / total) if total else 100
+        workers = max(1, min(4, int(os.environ.get("KOUBO_BATCH_WORKERS", "2") or 2)))
+        items = [x for x in (batch.get("items") or []) if x.get("project_id") in set(project_ids)]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_run_batch_item, batch, item, item["project_id"],
+                                       template_id, title, quality) for item in items]
+            for idx, future in enumerate(as_completed(futures), 1):
+                try:
+                    future.result()
+                except Exception as exc:
+                    batch.setdefault("errors", []).append(str(exc)[:300])
+                batch["done"] = idx
+                batch["progress"] = int(idx * 100 / total) if total else 100
+                batch["message"] = "已完成 %d/%d 个" % (idx, total)
         ok_count = sum(1 for x in batch.get("items") or [] if x.get("status") == "done")
         batch["ok_count"] = ok_count
         batch["status"] = "cancelled" if batch.get("cancel") else "done"

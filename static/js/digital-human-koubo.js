@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], recommendations: [], recommendFor: '', broll: null, brollOpen: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], recommendations: [], recommendFor: '', broll: null, brollOpen: false, bgm: null, bgmOpen: false },
     qa: null,
     timer: null
   };
@@ -547,6 +547,54 @@
       .catch(function (e) { log('上传插入素材失败：' + e.message); });
   }
 
+  function renderBgmBlock() {
+    var b = state.render.bgm;
+    var open = !!state.render.bgmOpen;
+    var vol = Math.round(Number(b && b.volume != null ? b.volume : 0.18) * 100);
+    var fade = !b || b.fade !== 0;
+    return '<div class="kb-broll"><div class="kb-broll-head"><b>背景音乐</b><small>可选 · 原声保留</small><span style="flex:1"></span><button type="button" class="kb-btn" id="kbBgmToggle">' + (open ? '收起' : '展开') + '</button></div>'
+      + '<div id="kbBgmBody" style="display:' + (open ? 'block' : 'none') + ';">'
+      + '<div class="kb-broll-row"><button type="button" class="kb-btn" id="kbBgmPick">上传音频</button><span class="kb-broll-name" id="kbBgmName">' + esc(b ? (b.name || b.asset_id || '已选音乐') : '未选择音乐') + '</span>' + (b ? '<button type="button" class="kb-btn" id="kbBgmRemove">移除</button>' : '') + '</div>'
+      + '<div class="kb-broll-row"><label>音量<input id="kbBgmVolume" type="range" min="0" max="50" step="1" value="' + vol + '"> <span id="kbBgmVolText">' + vol + '%</span></label><label><input type="checkbox" id="kbBgmFade"' + (fade ? ' checked' : '') + '> 片尾淡出</label></div>'
+      + '<input type="file" id="kbBgmFile" accept="audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,audio/flac" style="display:none;">'
+      + '<div class="kb-broll-note">背景音乐只垫在人声下面，默认 18%，口播原声不变；片尾自动淡出。</div>'
+      + '</div></div>';
+  }
+
+  function bindBgmHandlers() {
+    var toggle = $('kbBgmToggle');
+    if (toggle) toggle.onclick = function () { state.render.bgmOpen = !state.render.bgmOpen; renderPack(); };
+    var pick = $('kbBgmPick');
+    var file = $('kbBgmFile');
+    if (pick && file) pick.onclick = function () { file.click(); };
+    if (file) file.onchange = function () { if (file.files && file.files[0]) uploadBgm(file.files[0]); };
+    var vol = $('kbBgmVolume');
+    if (vol) vol.oninput = function () {
+      var text = $('kbBgmVolText');
+      if (text) text.textContent = vol.value + '%';
+      if (state.render.bgm) state.render.bgm.volume = Number(vol.value || 0) / 100;
+    };
+    var fade = $('kbBgmFade');
+    if (fade) fade.onchange = function () { if (state.render.bgm) state.render.bgm.fade = fade.checked ? 1 : 0; };
+    var remove = $('kbBgmRemove');
+    if (remove) remove.onclick = function () { state.render.bgm = null; state.render.bgmOpen = true; renderPack(); };
+  }
+
+  function uploadBgm(f) {
+    var fd = new FormData();
+    fd.append('file', f);
+    log('上传背景音乐 ' + f.name + '…');
+    fetch(API + '/api/skills/digital-human-koubo/bgm-uploads', { method: 'POST', headers: authOnly(), body: fd })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)); return d; }); })
+      .then(function (d) {
+        state.render.bgm = { asset_id: d.id, url: d.url, name: d.name || d.id, volume: 0.18, fade: 1 };
+        state.render.bgmOpen = true;
+        renderPack();
+        log('背景音乐已上传 ' + (d.name || d.id));
+      })
+      .catch(function (e) { log('上传背景音乐失败：' + e.message); });
+  }
+
   function openTemplateSample(url, name) {
     if (!url) return;
     var old = document.getElementById('kbSampleModal');
@@ -1002,6 +1050,7 @@
           + ((state.projects || []).filter(function (x) { return x.has_video; }).length ? '<button type="button" class="kb-tpl-more" id="kbBatchOpen">批量出片（' + (state.projects || []).filter(function (x) { return x.has_video; }).length + ' 个底片）</button>' : '')
           + '</div>' : '')
       + renderBrollBlock()
+      + renderBgmBlock()
       + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">口播质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
       + '</div>';
@@ -1033,6 +1082,7 @@
     var qaBtn = $('kbQa');
     if (qaBtn) qaBtn.onclick = runQa;
     bindBrollHandlers();
+    bindBgmHandlers();
     loadRecommendations();
   }
 
@@ -1043,7 +1093,7 @@
     renderPack();
     req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode, broll: state.render.broll ? { asset_id: state.render.broll.asset_id, mode: state.render.broll.mode || 'pip', start: Number(state.render.broll.start || 2), duration: Number(state.render.broll.duration || 2.5) } : null })
+      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode, broll: state.render.broll ? { asset_id: state.render.broll.asset_id, mode: state.render.broll.mode || 'pip', start: Number(state.render.broll.start || 2), duration: Number(state.render.broll.duration || 2.5) } : null, bgm: state.render.bgm ? { asset_id: state.render.bgm.asset_id, volume: Number(state.render.bgm.volume != null ? state.render.bgm.volume : 0.18), fade: Number(state.render.bgm.fade != null ? state.render.bgm.fade : 1) } : null })
     }).then(function (d) {
       log((state.render.runningMode === 'preview' ? '预览任务已提交 ' : '高清任务已提交 ') + d.job_id);
       pollRender(d.job_id);
@@ -1322,6 +1372,8 @@
       state.render.qa = p.rendered ? (p.qa_final || null) : (p.qa_preview || null);
       state.render.broll = (p.broll && p.broll.asset_id) ? p.broll : null;
       state.render.brollOpen = !!state.render.broll;
+      state.render.bgm = (p.bgm && p.bgm.asset_id) ? p.bgm : null;
+      state.render.bgmOpen = !!state.render.bgm;
       state.render.recommendFor = '';
       state.render.recommendations = [];
       if (p.photo_id) {

@@ -20,6 +20,7 @@ OVERLAY_HTML = Path(__file__).with_name("koubo_template_overlay.html")
 OUTPUT_DIR = kr.OUTPUT_DIR
 DATA_DIR = kr.DATA_DIR
 BROLL_DIR = DATA_DIR / 'broll'
+BGM_DIR = DATA_DIR / 'bgm'
 BROLL_VIDEO_EXT = {'.mp4', '.mov', '.webm', '.m4v'}
 FONTS_DIR = kr.FONTS_DIR
 FFMPEG = kr.FFMPEG
@@ -42,19 +43,105 @@ class _FontHandler(SimpleHTTPRequestHandler):
             return None
 
 
+_LAYOUTS = {
+    'kinetic', 'clean', 'commercial', 'news', 'tutorial', 'review', 'story',
+    'interview', 'matrix', 'knowledge', 'minimal', 'quote', 'banner', 'magazine',
+}
+_VARIANTS = {'kinetic', 'clean', 'commercial', 'news'}
+_RATIOS = {'source', '9:16', '16:9'}
+_MOTIONS = {'none', 'push', 'pull'}
+_CUTS = {'none', 'flash'}
+_LOAD_ISSUES: Dict[str, List[str]] = {}
+
+
+def validate_spec(spec: Dict[str, Any]) -> List[str]:
+    issues: List[str] = []
+    if not isinstance(spec, dict):
+        return ['spec 不是对象']
+    for key in ('id', 'name', 'category', 'layout', 'variant'):
+        if not str(spec.get(key) or '').strip():
+            issues.append('缺少 %s' % key)
+    if str(spec.get('layout') or '') not in _LAYOUTS:
+        issues.append('layout 不支持：%s' % spec.get('layout'))
+    if str(spec.get('variant') or '') not in _VARIANTS:
+        issues.append('variant 不支持：%s' % spec.get('variant'))
+    if str(spec.get('ratio') or 'source') not in _RATIOS:
+        issues.append('ratio 不支持：%s' % spec.get('ratio'))
+    style = spec.get('style') or {}
+    for key in ('accent', 'accent2', 'accent3'):
+        if not re.fullmatch(r'#[0-9A-Fa-f]{6}', str(style.get(key) or '')):
+            issues.append('style.%s 不是 6 位色值' % key)
+    for key, lo, hi in (('titleSize', 0.02, 0.2), ('captionSize', 0.02, 0.2), ('keywordSize', 0.04, 0.3)):
+        try:
+            value = float(style.get(key))
+        except Exception:
+            issues.append('style.%s 不是数字' % key)
+            continue
+        if not lo <= value <= hi:
+            issues.append('style.%s 超出范围 %.2f-%.2f' % (key, lo, hi))
+    rules = spec.get('rules') or {}
+    for key, lo, hi in (('titleChars', 4, 24), ('captionMaxChars', 6, 40)):
+        try:
+            value = int(rules.get(key))
+        except Exception:
+            issues.append('rules.%s 不是整数' % key)
+            continue
+        if not lo <= value <= hi:
+            issues.append('rules.%s 超出范围 %d-%d' % (key, lo, hi))
+    try:
+        safe = float(rules.get('safeArea', 0.06))
+        if not 0 <= safe <= 0.2:
+            issues.append('rules.safeArea 超出范围 0-0.2')
+    except Exception:
+        issues.append('rules.safeArea 不是数字')
+    motion = spec.get('motion') or {}
+    if str(motion.get('type') or 'none') not in _MOTIONS:
+        issues.append('motion.type 不支持：%s' % motion.get('type'))
+    try:
+        strength = float(motion.get('strength') or 0)
+        if not 0 <= strength <= 0.5:
+            issues.append('motion.strength 超出范围 0-0.5')
+    except Exception:
+        issues.append('motion.strength 不是数字')
+    cut = str((spec.get('transitions') or {}).get('cut') or 'none')
+    if cut not in _CUTS:
+        issues.append('transitions.cut 不支持：%s' % cut)
+    try:
+        if int(spec.get('order') or 0) <= 0:
+            issues.append('order 必须为正整数')
+    except Exception:
+        issues.append('order 不是整数')
+    for key in ('cover', 'sample_video_url'):
+        value = str(spec.get(key) or '')
+        if value and not value.startswith('/'):
+            issues.append('%s 必须是站内路径' % key)
+    return issues
+
+
 def load_templates() -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
+    _LOAD_ISSUES.clear()
     if not SPEC_DIR.is_dir():
         return out
     for path in sorted(SPEC_DIR.glob('*.json')):
         try:
             spec = json.loads(path.read_text(encoding='utf-8'))
-        except Exception:
+        except Exception as exc:
+            _LOAD_ISSUES[path.stem] = ['JSON 解析失败：%s' % exc]
             continue
         tid = str(spec.get('id') or path.stem).strip()
+        issues = validate_spec(spec)
+        if issues:
+            _LOAD_ISSUES[tid or path.stem] = issues
+            continue
         if tid:
             out[tid] = spec
     return out
+
+
+def template_issues() -> Dict[str, List[str]]:
+    load_templates()
+    return dict(_LOAD_ISSUES)
 
 
 def get_template(template_id: str) -> Optional[Dict[str, Any]]:
@@ -189,7 +276,8 @@ def _ensure_keywords(timeline: Dict[str, Any]) -> None:
 def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
            progress: Optional[Callable[[int, int, str], None]] = None,
            title_override: str = '', quality: str = 'final',
-           broll: Optional[Dict[str, Any]] = None) -> Path:
+           broll: Optional[Dict[str, Any]] = None,
+           bgm: Optional[Dict[str, Any]] = None) -> Path:
     spec = get_template(template_id) or get_template('premium_kinetic_v1')
     if not spec:
         raise RuntimeError('模板不存在')
@@ -340,6 +428,21 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 except (TypeError, ValueError):
                     broll_dur = 2.5
                 broll_dur = min(max(0.8, duration - broll_start), broll_dur)
+        bgm_path = None
+        bgm_volume = 0.18
+        bgm_fade = 1.0
+        if isinstance(bgm, dict) and str(bgm.get('asset_id') or '').strip():
+            candidate = BGM_DIR / Path(str(bgm.get('asset_id'))).name
+            if candidate.is_file():
+                bgm_path = candidate
+                try:
+                    bgm_volume = min(0.8, max(0.0, float(bgm.get('volume') if bgm.get('volume') is not None else 0.18)))
+                except (TypeError, ValueError):
+                    bgm_volume = 0.18
+                try:
+                    bgm_fade = min(5.0, max(0.0, float(bgm.get('fade') if bgm.get('fade') is not None else 1.0)))
+                except (TypeError, ValueError):
+                    bgm_fade = 1.0
         motion = spec.get('motion') or {}
         motion_type = str(motion.get('type') or 'none').strip().lower()
         motion_strength = float(motion.get('strength') or 0.0)
@@ -380,9 +483,28 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 cmd += ['-i', str(broll_path)]
             else:
                 cmd += ['-loop', '1', '-framerate', str(fps), '-t', '%.3f' % broll_dur, '-i', str(broll_path)]
-        cmd += ['-filter_complex', fg, '-map', '[v]', '-map', '0:a?',
-               '-r', str(fps), '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p',
-               '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', str(out)]
+        preset = 'veryfast' if preview_mode else 'medium'
+        crf = '21' if preview_mode else '18'
+        if bgm_path is not None:
+            cmd += ['-stream_loop', '-1', '-i', str(bgm_path)]
+        audio_map = '0:a?'
+        if bgm_path is not None:
+            bgm_idx = 3 if broll_path is not None else 2
+            fade_start = max(0.0, float(duration) - bgm_fade)
+            has_voice = bool((kr._run([str(kr.FFPROBE), '-v', 'error', '-select_streams', 'a:0',
+                                       '-show_entries', 'stream=index', '-of', 'csv=p=0',
+                                       str(src)], timeout=30).stdout or '').strip())
+            if has_voice:
+                fg += (';[0:a]volume=1.0[voice];[%d:a]volume=%.3f,atrim=0:%.3f,afade=t=out:st=%.3f:d=%.3f[bgm];'
+                       '[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[a]') % (
+                           bgm_idx, bgm_volume, float(duration), fade_start, bgm_fade)
+            else:
+                fg += (';[%d:a]volume=%.3f,atrim=0:%.3f,afade=t=out:st=%.3f:d=%.3f[a]') % (
+                    bgm_idx, bgm_volume, float(duration), fade_start, bgm_fade)
+            audio_map = '[a]'
+        cmd += ['-filter_complex', fg, '-map', '[v]', '-map', audio_map,
+               '-r', str(fps), '-c:v', 'libx264', '-crf', crf, '-preset', preset, '-pix_fmt', 'yuv420p',
+               '-c:a', 'aac', '-b:a', '160k' if preview_mode else '192k', '-shortest', '-movflags', '+faststart', str(out)]
         r = kr._run(cmd, timeout=1800)
         if r.returncode != 0:
             raise RuntimeError('模板合成失败：' + (r.stderr or '')[-700:])

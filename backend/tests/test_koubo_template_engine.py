@@ -238,3 +238,93 @@ def test_batch_retry_restarts_only_failed_items(monkeypatch):
     assert r.status_code == 200
     assert r.json()["job_id"] == "new-job"
     assert captured == {"ids": ["bad1"], "template_id": "clean_docu_v1", "title": "t", "quality": "final"}
+
+
+def test_all_template_specs_pass_validation():
+    issues = e.template_issues()
+    assert issues == {}
+    for tpl in e.public_templates():
+        assert e.validate_spec(e.get_template(tpl["id"])) == []
+
+
+def test_invalid_spec_reports_issues():
+    issues = e.validate_spec({"id": "broken"})
+    assert any("name" in x for x in issues)
+    assert any("layout" in x for x in issues)
+    assert any("style.accent" in x for x in issues)
+
+
+def test_batch_render_runs_items_in_parallel(monkeypatch, tmp_path):
+    import threading
+    import time
+
+    from backend.app.api import skill_deps as s
+
+    monkeypatch.setenv("KOUBO_BATCH_WORKERS", "2")
+    lock = threading.Lock()
+    state = {"active": 0, "max": 0}
+
+    def fake_render(job_id, *args, **kwargs):
+        with lock:
+            state["active"] += 1
+            state["max"] = max(state["max"], state["active"])
+        time.sleep(0.15)
+        with lock:
+            state["active"] -= 1
+        job = s._RENDER_JOBS[job_id]
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = "done"
+        job["qa"] = {"ok": True, "score": 90}
+
+    monkeypatch.setattr(s, "_render_job", fake_render)
+    items = [{"project_id": "p%d" % i, "name": "p%d" % i, "status": "pending",
+              "progress": 0, "message": "", "output": "", "score": None, "ok": False, "error": ""}
+             for i in range(4)]
+    batch_id = "batch-parallel-test"
+    with s._RENDER_LOCK:
+        s._BATCH_JOBS[batch_id] = {"id": batch_id, "status": "running", "progress": 0, "done": 0,
+                                   "total": 4, "items": items, "template_id": "premium_kinetic_v1",
+                                   "title": "", "quality": "preview"}
+    s._batch_render_job(batch_id, ["p0", "p1", "p2", "p3"], "premium_kinetic_v1", "", "preview")
+    with s._RENDER_LOCK:
+        batch = s._BATCH_JOBS[batch_id]
+    assert batch["status"] == "done"
+    assert all(x["status"] == "done" for x in items)
+    assert state["max"] >= 2
+
+
+def test_bgm_upload_and_defaults(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    monkeypatch.setattr(s, "BGM_DIR", tmp_path / "bgm")
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/bgm-uploads",
+                    files={"file": ("bgm.wav", b"RIFF0000WAVEfmt ", "audio/wav")})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["id"].endswith(".wav")
+    assert data["url"].startswith("/api/skills/digital-human-koubo/bgm-uploads/")
+    assert (tmp_path / "bgm" / data["id"]).is_file()
+    cfg = s.BgmConfig()
+    assert cfg.asset_id == "" and cfg.volume == 0.18 and cfg.fade == 1.0
+
+
+def test_bgm_upload_rejects_non_audio(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    monkeypatch.setattr(s, "BGM_DIR", tmp_path / "bgm")
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/bgm-uploads",
+                    files={"file": ("x.txt", b"hello", "text/plain")})
+    assert r.status_code == 400
