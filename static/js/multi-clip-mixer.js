@@ -158,8 +158,13 @@
   function currentClipMode() {
     var checked = document.querySelector('input[name="mcmClipMode"]:checked');
     var mode = checked ? String(checked.value || '') : '';
-    if (mode === 'random' || mode === 'cut_only') return mode;
+    if (mode === 'random' || mode === 'cut_only' || mode === 'single') return mode;
     return 'fixed';
+  }
+
+  function isRandomLikeMode() {
+    var mode = currentClipMode();
+    return mode === 'random' || mode === 'single';
   }
 
   function currentTemplateProvider() {
@@ -261,8 +266,79 @@
     return { start: Math.round(start * 10) / 10, end: Math.round(end * 10) / 10 };
   }
 
+  function singleSegmentSeconds() {
+    var value = Number((($('mcmSingleSegmentSeconds') || {}).value || 3));
+    if (!Number.isFinite(value) || value <= 0) value = 3;
+    return Math.max(0.5, Math.min(value, 600));
+  }
+
+  function singleTargetSeconds() {
+    var value = Number((($('mcmSingleTargetDuration') || {}).value || 0));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  function singleSegmentCount() {
+    var seconds = singleSegmentSeconds();
+    var target = singleTargetSeconds();
+    var count;
+    if (target > 0) count = Math.round(target / seconds);
+    else count = parseInt((($('mcmSingleSegmentCount') || {}).value || 5), 10);
+    if (!Number.isFinite(count) || count < 1) count = 1;
+    return Math.min(count, 20);
+  }
+
+  function pickSingleSegments(duration, seconds, count) {
+    var total = Math.max(0, Number(duration || 0));
+    var span = Math.max(0.5, Math.min(Number(seconds || 3), total > 0 ? total : Number(seconds || 3)));
+    var result = [];
+    var index;
+    if (total <= 0) return [{ start: 0, end: span }];
+    if (span * count <= total - 0.05) {
+      // 空档够用：把剩余时长随机分配到各段之间，保证不重叠
+      var slack = total - span * count;
+      var weights = [];
+      var sum = 0;
+      for (index = 0; index <= count; index += 1) {
+        var weight = Math.random() + (index === count ? 0.5 : 0);
+        weights.push(weight);
+        sum += weight;
+      }
+      var cursor = (weights[0] / sum) * slack;
+      for (index = 0; index < count; index += 1) {
+        var start = Math.min(Math.max(0, cursor), Math.max(0, total - span));
+        result.push({ start: start, end: Math.min(total, start + span) });
+        cursor += span + (weights[index + 1] / sum) * slack;
+      }
+      return result;
+    }
+    // 素材不够长：允许重叠，仍然随机取位
+    for (index = 0; index < count; index += 1) {
+      var free = Math.max(0, total - span);
+      var s = free > 0 ? Math.random() * free : 0;
+      result.push({ start: s, end: Math.min(total, s + span) });
+    }
+    return result;
+  }
+
+  function buildSinglePlan() {
+    if (state.clips.length !== 1) {
+      throw new Error('单片剪辑只支持 1 个视频，请先移除多余素材（当前 ' + state.clips.length + ' 个）。');
+    }
+    var clip = state.clips[0];
+    var duration = Number(clip.duration || 0) || Math.max(Number(clip.endSec || 0), Number(clip.startSec || 0));
+    var segments = pickSingleSegments(duration, singleSegmentSeconds(), singleSegmentCount());
+    return segments.map(function (segment) {
+      return {
+        asset_id: clip.assetId,
+        start_sec: Math.round(segment.start * 10) / 10,
+        end_sec: Math.round(segment.end * 10) / 10
+      };
+    });
+  }
+
   function buildClipPlan(outputIndex) {
     var mode = currentClipMode();
+    if (mode === 'single') return buildSinglePlan();
     var randomSeconds = Number((($('mcmRandomSegmentSeconds') || {}).value || 3));
     return state.clips.map(function(clip) {
       var segment = mode === 'random'
@@ -273,8 +349,9 @@
   }
 
   function outputCount() {
-    if (currentClipMode() !== 'random') return 1;
-    var count = parseInt((($('mcmRandomOutputCount') || {}).value || 1), 10);
+    if (!isRandomLikeMode()) return 1;
+    var countInput = currentClipMode() === 'single' ? $('mcmSingleOutputCount') : $('mcmRandomOutputCount');
+    var count = parseInt(((countInput || {}).value || 1), 10);
     return Math.max(1, Math.min(Number.isFinite(count) ? count : 1, 20));
   }
 
@@ -294,8 +371,14 @@
     var mode = currentClipMode();
     if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = !(mode === 'fixed' || mode === 'cut_only');
     if ($('mcmRandomModePanel')) $('mcmRandomModePanel').hidden = mode !== 'random';
-    if ($('mcmTemplateRandomRow')) $('mcmTemplateRandomRow').hidden = mode !== 'random';
-    if ($('mcmMusicRandomRow')) $('mcmMusicRandomRow').hidden = mode !== 'random';
+    if ($('mcmSingleModePanel')) $('mcmSingleModePanel').hidden = mode !== 'single';
+    if ($('mcmTemplateRandomRow')) $('mcmTemplateRandomRow').hidden = !isRandomLikeMode();
+    if ($('mcmMusicRandomRow')) $('mcmMusicRandomRow').hidden = !isRandomLikeMode();
+    if (mode === 'single' && $('mcmTemplateSwitch') && !$('mcmTemplateSwitch').checked) {
+      $('mcmTemplateSwitch').checked = true;
+      if ($('mcmTemplatePanel')) $('mcmTemplatePanel').hidden = false;
+      if (!state.templateCatalog.length) loadTemplates(true).catch(function () {});
+    }
     renderClips();
     renderTemplates();
     renderMusicOptions();
@@ -360,7 +443,7 @@
       created_at: Number(raw.created_at || Date.now()),
       completed_at: Number(raw.completed_at || 0),
       title: String(raw.title || '剪辑大师'),
-      clip_mode: raw.clip_mode === 'random' ? 'random' : 'fixed',
+      clip_mode: raw.clip_mode === 'random' || raw.clip_mode === 'single' ? raw.clip_mode : 'fixed',
       total_runs: Math.max(1, Number(raw.total_runs || results.length || 1)),
       clip_count: Math.max(0, Number(raw.clip_count || 0)),
       template_name: String(raw.template_name || ''),
@@ -399,7 +482,7 @@
 
   function activeHistoryTemplateName(options) {
     if (!options || !options.useTemplate) return '';
-    if (currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked)) return '随机模板';
+    if (isRandomLikeMode() && (($('mcmRandomTemplateSwitch') || {}).checked)) return '随机模板';
     return String((state.selectedTemplate || {}).name || '定制模板');
   }
 
@@ -499,6 +582,7 @@
   function batchLabel(batch) {
     var parts = [String(batch.title || '剪辑大师')];
     if (batch.clip_mode === 'random') parts.push('随机');
+    if (batch.clip_mode === 'single') parts.push('单片');
     if (batch.template_name) parts.push(batch.template_name);
     return parts.join(' · ');
   }
@@ -668,9 +752,11 @@
       var poster = clip.localPosterUrl || clip.posterObjectUrl || '';
       var modeLabel = currentClipMode() === 'random'
         ? '随机抽段时会重新计算'
-        : (currentClipMode() === 'cut_only'
-          ? ('只裁切 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒，单独出片')
-          : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒'));
+        : (currentClipMode() === 'single'
+          ? ('单片抽段：每段 ' + singleSegmentSeconds().toFixed(1) + ' 秒 × ' + singleSegmentCount() + ' 段，随机取位后拼接')
+          : (currentClipMode() === 'cut_only'
+            ? ('只裁切 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒，单独出片')
+            : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒')));
       return '<article class="mcm-clip-item' + (clip.audioMaster ? ' is-audio-master' : '') + '" data-clip-index="' + index + '">'
         + '<div class="mcm-clip-thumb">'
         + (poster ? '<img src="' + escapeHtml(poster) + '" alt="" loading="lazy">' : '<span class="mcm-clip-thumb-placeholder">VIDEO</span>')
@@ -1212,7 +1298,7 @@
   function renderTemplates() {
     var grid = $('mcmTemplateGrid');
     if (!grid) return;
-    var randomTemplate = currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked);
+    var randomTemplate = isRandomLikeMode() && (($('mcmRandomTemplateSwitch') || {}).checked);
     var choiceArea = $('mcmTemplateChoiceArea');
     if (choiceArea) choiceArea.hidden = randomTemplate;
     syncTemplateSceneUI();
@@ -1976,7 +2062,7 @@
   function renderMusicOptions() {
     var grid = $('mcmMusicGrid');
     if (!grid) return;
-    var randomMusic = currentClipMode() === 'random' && (($('mcmRandomMusicSwitch') || {}).checked);
+    var randomMusic = isRandomLikeMode() && (($('mcmRandomMusicSwitch') || {}).checked);
     if ($('mcmMusicGrid')) $('mcmMusicGrid').hidden = randomMusic;
     grid.innerHTML = randomMusic ? '' : state.musicOptions.map(function(item, index) {
       var selected = state.selectedMusic && String(state.selectedMusic.key) === String(item.key);
@@ -2262,7 +2348,7 @@
 
   function selectedTemplateForRun(useTemplate) {
     if (!useTemplate) return null;
-    if (currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked)) {
+    if (isRandomLikeMode() && (($('mcmRandomTemplateSwitch') || {}).checked)) {
       return randomChoice(state.templates) || state.selectedTemplate;
     }
     return state.selectedTemplate;
@@ -2270,7 +2356,7 @@
 
   function selectedMusicForRun(useMusic) {
     if (!useMusic) return null;
-    if (currentClipMode() === 'random' && (($('mcmRandomMusicSwitch') || {}).checked)) {
+    if (isRandomLikeMode() && (($('mcmRandomMusicSwitch') || {}).checked)) {
       return randomChoice(state.musicOptions) || state.selectedMusic;
     }
     return state.selectedMusic;
@@ -2298,7 +2384,8 @@
     var templateBeforeRun = templateStateSnapshot();
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
-    progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
+    var clipPlan = buildClipPlan(runIndex);
+    progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + clipPlan.length + ' 个片段');
     var targetSeconds = 0;
     if (currentClipMode() === 'random') {
       targetSeconds = Number((($('mcmRandomTargetDuration') || {}).value || 0));
@@ -2306,12 +2393,12 @@
     }
     return post('/api/multi-clip-mixer/render', {
       title: templateTitleValue() || (totalRuns > 1 ? ('剪辑大师 ' + runIndex) : '剪辑大师'),
-      clips: buildClipPlan(runIndex),
+      clips: clipPlan,
       // 套本地字幕模板时保留原声，闪剪不需要
       keep_original_audio: !!(options.useTemplate && currentTemplateProvider() === 'local'),
       audio_asset_id: audioClip ? audioClip.assetId : '',
       // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
-      target_duration: targetSeconds > 0 ? targetSeconds : (audioClip ? Number(audioClip.duration || 0) : null),
+      target_duration: currentClipMode() === 'single' ? null : (targetSeconds > 0 ? targetSeconds : (audioClip ? Number(audioClip.duration || 0) : null)),
       audio_volume: 1,
       clip_mode: currentClipMode(),
       output_index: runIndex,
@@ -2520,6 +2607,9 @@
   function generate() {
     if (state.busy) return;
     if (!state.clips.length) return showMessage('请先添加至少一个视频。', true);
+    if (currentClipMode() === 'single' && state.clips.length !== 1) {
+      return showMessage('单片剪辑只支持 1 个视频，请移除多余素材后再生成（当前 ' + state.clips.length + ' 个）。', true);
+    }
     var useTemplate = !!(($('mcmTemplateSwitch') || {}).checked);
     var useMusic = !!(($('mcmMusicSwitch') || {}).checked);
     Promise.resolve().then(function() {
@@ -2545,9 +2635,9 @@
       if (useMusic && !state.musicOptions.length) return loadMusicOptions();
       return null;
     }).then(function() {
-      var canRandomTemplate = currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked) && state.templates.length;
+      var canRandomTemplate = isRandomLikeMode() && (($('mcmRandomTemplateSwitch') || {}).checked) && state.templates.length;
       if (useTemplate && !state.selectedTemplate && !canRandomTemplate) throw new Error('已开启定制模板，请先选择一个模板，或在随机模式中开启模板随机。');
-      if (useMusic && !state.selectedMusic && !(currentClipMode() === 'random' && (($('mcmRandomMusicSwitch') || {}).checked) && state.musicOptions.length)) {
+      if (useMusic && !state.selectedMusic && !(isRandomLikeMode() && (($('mcmRandomMusicSwitch') || {}).checked) && state.musicOptions.length)) {
         throw new Error('已开启音乐模板，请先选择一首音乐，或在随机模式中开启音乐随机。');
       }
       showMessage('', false);
@@ -2564,7 +2654,7 @@
           return { result: result, totalRuns: state.clips.length };
         });
       }
-      if (textModePerSegment() && useTemplate) {
+      if (textModePerSegment() && useTemplate && currentClipMode() !== 'single') {
         return runPerSegmentRender().then(function(result) {
           return { result: result, totalRuns: 1 };
         });
