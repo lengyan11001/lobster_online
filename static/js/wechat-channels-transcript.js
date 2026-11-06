@@ -753,16 +753,26 @@
   function exportTxt() {
     var rows = resultRows();
     if (!rows.length) { setTask('还没有可导出的文案。', true); return; }
-    downloadFile('作品提取_' + (state.peer ? state.peer.platform : '') + '.txt',
-      rows.map(function(row, i) { return '【' + (i + 1) + '】' + row.title + '\n' + row.transcript; }).join('\n\n'));
+    var content = rows.map(function(row, i) { return '【' + (i + 1) + '】' + row.title + '\n' + row.transcript; }).join('\n\n');
+    var name = '作品提取_' + (state.peer ? state.peer.platform : '');
+    localJson('/api/wechat-channels-transcript/export', { filename: name, format: 'txt', text: content }).then(function(res) {
+      setTask('已导出：' + (res && res.path ? res.path : ''));
+    }).catch(function() {
+      downloadFile(name + '.txt', content);
+    });
   }
   function exportCsv() {
     var rows = resultRows();
     if (!rows.length) { setTask('还没有可导出的文案。', true); return; }
-    function cell(value) { return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"'; }
-    downloadFile('作品提取_' + (state.peer ? state.peer.platform : '') + '.csv',
-      '\ufeff' + ['标题,文案'].concat(rows.map(function(row) { return cell(row.title) + ',' + cell(row.transcript); })).join('\r\n'),
-      'text/csv;charset=utf-8');
+    var name = '作品提取_' + (state.peer ? state.peer.platform : '');
+    localJson('/api/wechat-channels-transcript/export', { filename: name, format: 'csv', rows: rows }).then(function(res) {
+      setTask('已导出：' + (res && res.path ? res.path : ''));
+    }).catch(function() {
+      function cell(value) { return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"'; }
+      downloadFile(name + '.csv',
+        '\ufeff' + ['标题,文案'].concat(rows.map(function(row) { return cell(row.title) + ',' + cell(row.transcript); })).join('\r\n'),
+        'text/csv;charset=utf-8');
+    });
   }
 
   function bind() {

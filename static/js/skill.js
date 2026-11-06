@@ -1568,7 +1568,7 @@ window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
       html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-control-v3',
-      scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-control-v3',
+      scripts: '/static/js/wechat-channels-transcript.js?v=20261106-wct-export-1',
       init: 'initWechatChannelsTranscriptView',
       cache: 'reload'
     });
