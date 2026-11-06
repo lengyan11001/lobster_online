@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "ratio": "source",
+  "fps": 30,
+  "featured": false,
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": false,
+  "id": "spec_grid_v1",
+  "name": "参数清单",
+  "description": "表格式参数排列、蓝绿理性配色，适合参数拆解和选购建议。",
+  "category": "测评对比",
+  "tags": [
+    "参数",
+    "清单",
+    "选购"
+  ],
+  "order": 330,
+  "variant": "clean",
+  "style": {
+    "accent": "#0EA5E9",
+    "accent2": "#22C55E",
+    "accent3": "#FFFFFF",
+    "ink": "#0B1220",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.045,
+    "keywordSize": 0.095
+  },
+  "copy": {
+    "badge": "参数拆解",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "参数 · 选购",
+    "cta": "评论区问"
+  },
+  "cover": "/static/koubo/templates/spec_grid_v1.svg",
+  "cover_title": "参数别只看表面",
+  "cover_sub": "一张表 · 说清区别",
+  "sample_video_url": "/static/koubo/templates/samples/spec_grid_v1.mp4",
+  "layout": "review",
+  "chapter": {
+    "show": true,
+    "no": "SPEC",
+    "title": "参数"
+  },
+  "motion": {
+    "type": "pull",
+    "strength": 0.05
+  },
+  "transitions": {
+    "cut": "none"
+  }
+}

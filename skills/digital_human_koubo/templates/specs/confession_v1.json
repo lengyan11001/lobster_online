@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "ratio": "source",
+  "fps": 30,
+  "featured": false,
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": false,
+  "id": "confession_v1",
+  "name": "情绪独白",
+  "description": "柔和粉紫、慢节奏字幕，适合情绪表达和走心故事。",
+  "category": "情绪剧情",
+  "tags": [
+    "独白",
+    "走心",
+    "情绪"
+  ],
+  "order": 340,
+  "variant": "clean",
+  "style": {
+    "accent": "#F472B6",
+    "accent2": "#A855F7",
+    "accent3": "#FDE68A",
+    "ink": "#0B1220",
+    "paper": "#FFFFFF",
+    "titleSize": 0.052,
+    "captionSize": 0.048,
+    "keywordSize": 0.105
+  },
+  "copy": {
+    "badge": "情绪独白",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "情绪 · 独白",
+    "cta": "你也有过吗"
+  },
+  "cover": "/static/koubo/templates/confession_v1.svg",
+  "cover_title": "这句话我憋很久了",
+  "cover_sub": "慢一点 · 说给你听",
+  "sample_video_url": "/static/koubo/templates/samples/confession_v1.mp4",
+  "layout": "story",
+  "chapter": {
+    "show": true,
+    "no": "STORY",
+    "title": "独白"
+  },
+  "motion": {
+    "type": "pull",
+    "strength": 0.04
+  },
+  "transitions": {
+    "cut": "none"
+  }
+}

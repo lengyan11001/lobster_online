@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "ratio": "source",
+  "fps": 30,
+  "featured": false,
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": false,
+  "id": "series_hook_v1",
+  "name": "系列钩子",
+  "description": "集数标识、统一小标题，适合连续剧集和系列口播。",
+  "category": "矩阵批量",
+  "tags": [
+    "系列",
+    "连载",
+    "钩子"
+  ],
+  "order": 350,
+  "variant": "clean",
+  "style": {
+    "accent": "#22C55E",
+    "accent2": "#86EFAC",
+    "accent3": "#FFFFFF",
+    "ink": "#0B1220",
+    "paper": "#FFFFFF",
+    "titleSize": 0.044,
+    "captionSize": 0.043,
+    "keywordSize": 0.075
+  },
+  "copy": {
+    "badge": "系列口播",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "系列 · 连载",
+    "cta": "下集继续"
+  },
+  "cover": "/static/koubo/templates/series_hook_v1.svg",
+  "cover_title": "第 1 集，先讲重点",
+  "cover_sub": "统一风格 · 连续更新",
+  "sample_video_url": "/static/koubo/templates/samples/series_hook_v1.mp4",
+  "layout": "matrix",
+  "chapter": {
+    "show": true,
+    "no": "EP.01",
+    "title": "系列"
+  },
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
+}

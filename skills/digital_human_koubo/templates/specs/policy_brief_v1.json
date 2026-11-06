@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "ratio": "source",
+  "fps": 30,
+  "featured": false,
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": false,
+  "id": "policy_brief_v1",
+  "name": "政策速读",
+  "description": "重点条目标注、蓝白稳重配色，适合政策解读和官方消息。",
+  "category": "新闻资讯",
+  "tags": [
+    "政策",
+    "解读",
+    "民生"
+  ],
+  "order": 310,
+  "variant": "clean",
+  "style": {
+    "accent": "#2563EB",
+    "accent2": "#93C5FD",
+    "accent3": "#FFFFFF",
+    "ink": "#0B1220",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.045,
+    "keywordSize": 0.095
+  },
+  "copy": {
+    "badge": "政策速读",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "政策 · 解读",
+    "cta": "收藏这条"
+  },
+  "cover": "/static/koubo/templates/policy_brief_v1.svg",
+  "cover_title": "这条政策和你有关",
+  "cover_sub": "重点划好 · 一分钟看懂",
+  "sample_video_url": "/static/koubo/templates/samples/policy_brief_v1.mp4",
+  "layout": "news",
+  "chapter": {
+    "show": true,
+    "no": "POLICY",
+    "title": "政策"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.04
+  },
+  "transitions": {
+    "cut": "none"
+  }
+}

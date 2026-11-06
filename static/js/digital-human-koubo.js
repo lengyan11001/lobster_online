@@ -120,7 +120,7 @@
       + '#content-digital-human-koubo .kb-packbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:#64748b;}'
       + '#content-digital-human-koubo .kb-packbar select{padding:5px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#334155;background:#fff;}'
       + '#content-digital-human-koubo .kb-packbar label{display:inline-flex;align-items:center;gap:4px;font-size:11px;}'
-      + '#content-digital-human-koubo .kb-templates{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;}'
+      + '#content-digital-human-koubo .kb-templates{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;align-items:start;}'
       + '#content-digital-human-koubo .kb-tpl{text-align:left;background:#fff;border:1px solid #eef2f7;border-radius:14px;padding:9px;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s;}'
       + '#content-digital-human-koubo .kb-tpl:hover{transform:translateY(-1px);box-shadow:0 8px 20px -10px rgba(15,23,42,.25);}'
       + '#content-digital-human-koubo .kb-tpl.on{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12);}'
@@ -813,31 +813,32 @@
     var all = r.templates || [];
     var byId = {};
     all.forEach(function (t) { byId[t.id] = t; });
-    var list = [];
     var cat = r.templateCategory || 'all';
+    var q = (r.templateQuery || '').trim().toLowerCase();
+    var list;
     if (cat === 'recent') {
       list = (r.recentTemplateIds || []).map(function (id) { return byId[id]; }).filter(Boolean);
     } else if (cat === 'favorites') {
       list = (r.favoriteTemplateIds || []).map(function (id) { return byId[id]; }).filter(Boolean);
     } else {
       list = all.slice();
-      if (!r.showAllTemplates) {
-        var pageSize = 6;
-        var page = Math.max(0, r.featuredPage || 0);
-        var start = (page * pageSize) % Math.max(1, list.length);
-        var paged = list.slice(start, start + pageSize);
-        if (paged.length < pageSize) paged = paged.concat(list.slice(0, pageSize - paged.length));
-        list = paged;
-      }
       if (cat !== 'all') {
         list = list.filter(function (t) { return t.category === cat; });
       }
     }
-    var q = (r.templateQuery || '').trim().toLowerCase();
     if (q) {
       list = list.filter(function (t) {
         return [t.name, t.description, t.category, (t.tags || []).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
       });
+    }
+    var browsing = cat !== 'all' || q;
+    if (!browsing && !r.showAllTemplates) {
+      var pageSize = 6;
+      var page = Math.max(0, r.featuredPage || 0);
+      var start = (page * pageSize) % Math.max(1, list.length);
+      var paged = list.slice(start, start + pageSize);
+      if (paged.length < pageSize) paged = paged.concat(list.slice(0, pageSize - paged.length));
+      list = paged;
     }
     var emptyText = cat === 'recent' ? '最近还没有用过模板' : (cat === 'favorites' ? '还没有收藏模板' : '没有匹配的模板');
     grid.innerHTML = list.map(templateCardHtml).join('') || '<span style="font-size:12px;color:#94a3b8;padding:10px 0;">' + emptyText + '</span>';

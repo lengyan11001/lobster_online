@@ -133,3 +133,18 @@ def test_batch_render_rejects_empty_or_unknown_projects():
     unknown = client.post("/api/skills/digital-human-koubo/batch-render", json={"project_ids": ["nope"]})
     assert unknown.status_code == 400
     assert "项目不存在" in unknown.json()["detail"]
+
+
+def test_every_category_has_at_least_four_templates():
+    from collections import Counter
+
+    counts = Counter(x["category"] for x in e.public_templates())
+    assert counts
+    thin = {k: v for k, v in counts.items() if v < 4}
+    assert not thin, thin
+
+
+def test_every_template_has_cover_and_sample_url():
+    for tpl in e.public_templates():
+        assert tpl["cover"], tpl["id"]
+        assert tpl["sample_video_url"], tpl["id"]

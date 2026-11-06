@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "ratio": "source",
+  "fps": 30,
+  "featured": false,
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": false,
+  "id": "account_daily_v1",
+  "name": "日常更新",
+  "description": "极简小标题、低干扰排版，适合低成本日更和账号维护。",
+  "category": "矩阵批量",
+  "tags": [
+    "日更",
+    "日常",
+    "极简"
+  ],
+  "order": 360,
+  "variant": "clean",
+  "style": {
+    "accent": "#64748B",
+    "accent2": "#CBD5E1",
+    "accent3": "#FFFFFF",
+    "ink": "#0B1220",
+    "paper": "#FFFFFF",
+    "titleSize": 0.04,
+    "captionSize": 0.04,
+    "keywordSize": 0.06
+  },
+  "copy": {
+    "badge": "日常更新",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "日常 · 日更",
+    "cta": "明天见"
+  },
+  "cover": "/static/koubo/templates/account_daily_v1.svg",
+  "cover_title": "今天更新一条",
+  "cover_sub": "低成本 · 稳定日更",
+  "sample_video_url": "/static/koubo/templates/samples/account_daily_v1.mp4",
+  "layout": "matrix",
+  "chapter": {
+    "show": false,
+    "no": "NO.",
+    "title": "日常"
+  },
+  "motion": {
+    "type": "none",
+    "strength": 0.0
+  },
+  "transitions": {
+    "cut": "none"
+  }
+}

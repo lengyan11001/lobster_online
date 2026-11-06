@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "ratio": "source",
+  "fps": 30,
+  "featured": false,
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": false,
+  "id": "market_alert_v1",
+  "name": "市场警报",
+  "description": "高对比警示配色、关键数字放大，适合行情异动和风险提醒。",
+  "category": "新闻资讯",
+  "tags": [
+    "市场",
+    "行情",
+    "提醒"
+  ],
+  "order": 320,
+  "variant": "commercial",
+  "style": {
+    "accent": "#F59E0B",
+    "accent2": "#EF4444",
+    "accent3": "#111827",
+    "ink": "#0B1220",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.046,
+    "keywordSize": 0.1
+  },
+  "copy": {
+    "badge": "市场异动",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "市场 · 解读",
+    "cta": "关注不迷路"
+  },
+  "cover": "/static/koubo/templates/market_alert_v1.svg",
+  "cover_title": "市场突然变盘",
+  "cover_sub": "关键数据 · 快速解读",
+  "sample_video_url": "/static/koubo/templates/samples/market_alert_v1.mp4",
+  "layout": "news",
+  "chapter": {
+    "show": true,
+    "no": "ALERT",
+    "title": "异动"
+  },
+  "motion": {
+    "type": "push",
+    "strength": 0.05
+  },
+  "transitions": {
+    "cut": "flash"
+  }
+}
