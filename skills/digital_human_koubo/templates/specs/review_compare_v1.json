@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "review_compare_v1",
+  "name": "测评对比",
+  "description": "左右对比、参数强调，适合测评和选购内容。",
+  "category": "测评对比",
+  "tags": [
+    "测评",
+    "对比",
+    "选购"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "featured": true,
+  "order": 60,
+  "style": {
+    "accent": "#FF8A00",
+    "accent2": "#4DE1FF",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.046,
+    "keywordSize": 0.105
+  },
+  "copy": {
+    "badge": "实测对比",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "测评 · 对比",
+    "cta": "评论区聊"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/review_compare_v1.svg",
+  "cover_title": "到底谁更强",
+  "cover_sub": "实测对比 · 参数说话",
+  "default": false
+}

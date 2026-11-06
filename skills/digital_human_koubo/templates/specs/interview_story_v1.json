@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "interview_story_v1",
+  "name": "人物故事",
+  "description": "暖色访谈感、低干扰字幕，适合人物故事。",
+  "category": "访谈纪实",
+  "tags": [
+    "人物",
+    "故事",
+    "访谈"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "featured": false,
+  "order": 120,
+  "style": {
+    "accent": "#FDBA74",
+    "accent2": "#F472B6",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.044,
+    "captionSize": 0.042,
+    "keywordSize": 0.072
+  },
+  "copy": {
+    "badge": "人物故事",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "访谈 · 故事",
+    "cta": "听完再走"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/interview_story_v1.svg",
+  "cover_title": "他为什么选择这条路",
+  "cover_sub": "人物故事 · 暖色访谈",
+  "default": false
+}

@@ -5,9 +5,11 @@ from backend.app.services import koubo_template_engine as e
 
 def test_public_templates_puts_default_first():
     templates = e.public_templates()
-    assert len(templates) >= 3
+    assert len(templates) >= 12
     assert templates[0]["id"] == "premium_kinetic_v1"
     assert templates[0]["default"] is True
+    assert len([t for t in templates if t.get("featured")]) == 6
+    assert len({t["category"] for t in templates}) >= 6
     assert all(t["id"] and t["name"] and t["description"] and t.get("cover") for t in templates)
 
 

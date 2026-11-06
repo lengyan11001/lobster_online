@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, templateId: 'premium_kinetic_v1', templates: [], title: '' },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false },
     qa: null,
     timer: null
   };
@@ -130,6 +130,11 @@
       + '#content-digital-human-koubo .kb-tpl b{display:block;font-size:12px;color:#0f172a;margin-bottom:3px;}'
       + '#content-digital-human-koubo .kb-tpl p{font-size:11px;line-height:1.45;color:#64748b;margin:0 0 5px;min-height:31px;}'
       + '#content-digital-human-koubo .kb-tpl small{font-size:10px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-tpl-tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;}'
+      + '#content-digital-human-koubo .kb-tpl-search{flex:1;min-width:130px;border:1px solid #e2e8f0;border-radius:999px;padding:6px 11px;font-size:11px;color:#0f172a;background:#fff;}'
+      + '#content-digital-human-koubo .kb-tpl-chip{border:1px solid #e2e8f0;background:#fff;border-radius:999px;padding:4px 9px;font-size:10.5px;color:#475569;cursor:pointer;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-tpl-chip.on{background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;}'
+      + '#content-digital-human-koubo .kb-tpl-more{width:100%;border:1px dashed #bfdbfe;background:#f8fbff;color:#2563eb;border-radius:10px;padding:8px;font-size:11px;cursor:pointer;margin-top:10px;}'
       + '#content-digital-human-koubo .kb-title-input{display:flex;align-items:center;gap:8px;margin-bottom:10px;}'
       + '#content-digital-human-koubo .kb-title-input label{font-size:12px;color:#334155;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-title-input input{flex:1;min-width:0;border:1px solid #e2e8f0;border-radius:9px;padding:8px 10px;font-size:12px;color:#0f172a;background:#fff;}'
@@ -364,6 +369,50 @@
       .catch(function (e) { log('质检失败：' + e.message); if (btn) { btn.disabled = false; btn.textContent = '开始质检'; } });
   }
 
+  function templateCardHtml(t) {
+    var r = state.render;
+    var on = t.id === r.templateId;
+    var colors = t.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
+    var cover = t.cover ? (String(t.cover).indexOf('http') === 0 ? t.cover : API + t.cover) : '';
+    var visual = cover
+      ? '<img class="kb-tpl-cover" src="' + esc(cover) + '" alt="">'
+      : '<span class="kb-tpl-preview" style="background:linear-gradient(135deg,' + esc(colors[0] || '#FFD84D') + ',' + esc(colors[1] || '#FF4D8D') + ',' + esc(colors[2] || '#4DE1FF') + ')"></span>';
+    return '<button type="button" class="kb-tpl' + (on ? ' on' : '') + '" data-tpl="' + esc(t.id) + '">'
+      + visual
+      + '<b>' + esc(t.name || t.id) + '</b>'
+      + '<p>' + esc(t.description || '') + '</p>'
+      + '<small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small>'
+      + '</button>';
+  }
+
+  function paintTemplateGrid() {
+    var grid = $('kbTplGrid');
+    if (!grid) return;
+    var r = state.render;
+    var all = r.templates || [];
+    var list = r.showAllTemplates ? all.slice() : all.filter(function (t) { return t.featured; });
+    if (r.templateCategory && r.templateCategory !== 'all') {
+      list = list.filter(function (t) { return t.category === r.templateCategory; });
+    }
+    var q = (r.templateQuery || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter(function (t) {
+        return [t.name, t.description, t.category, (t.tags || []).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    grid.innerHTML = list.map(templateCardHtml).join('') || '<span style="font-size:12px;color:#94a3b8;padding:10px 0;">没有匹配的模板</span>';
+    grid.querySelectorAll('[data-tpl]').forEach(function (btn) {
+      btn.onclick = function () {
+        state.render.templateId = btn.getAttribute('data-tpl');
+        state.render.packaged = false;
+        state.render.job = null;
+        if (state.project) state.project.rendered = false;
+        renderPack(); renderPreview();
+        log('已选模板：' + (btn.querySelector('b') ? btn.querySelector('b').textContent : ''));
+      };
+    });
+  }
+
   function renderPack() {
     var box = $('kbPack');
     if (!box) return;
@@ -371,23 +420,15 @@
     var r = state.render;
     var job = r.job && r.job.status === 'running' ? r.job : null;
     var tpls = r.templates || [];
-    var cards = tpls.map(function (t) {
-      var on = t.id === r.templateId;
-      var colors = t.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
-      var cover = t.cover ? (String(t.cover).indexOf('http') === 0 ? t.cover : API + t.cover) : '';
-      var visual = cover
-        ? '<img class="kb-tpl-cover" src="' + esc(cover) + '" alt="">'
-        : '<span class="kb-tpl-preview" style="background:linear-gradient(135deg,' + esc(colors[0] || '#FFD84D') + ',' + esc(colors[1] || '#FF4D8D') + ',' + esc(colors[2] || '#4DE1FF') + ')"></span>';
-      return '<button type="button" class="kb-tpl' + (on ? ' on' : '') + '" data-tpl="' + esc(t.id) + '">'
-        + visual
-        + '<b>' + esc(t.name || t.id) + '</b>'
-        + '<p>' + esc(t.description || '') + '</p>'
-        + '<small>' + esc((t.tags || []).join(' · ')) + '</small>'
-        + '</button>';
-    }).join('');
+    var cats = [];
+    tpls.forEach(function (t) { if (t.category && cats.indexOf(t.category) < 0) cats.push(t.category); });
+    var chips = '<button type="button" class="kb-tpl-chip' + ((r.templateCategory || 'all') === 'all' ? ' on' : '') + '" data-cat="all">全部</button>'
+      + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
     box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (tpls.length || 0) + ' 个模板</small></div>'
       + '<div class="kb-title-input"><label>标题</label><input id="kbTemplateTitle" maxlength="24" placeholder="留空自动从口播稿提取" value="' + esc(r.title || '') + '"><small>可选</small></div>'
-      + '<div class="kb-templates">' + (cards || '<span style="font-size:12px;color:#94a3b8;">模板加载中…</span>') + '</div>'
+      + (r.showAllTemplates ? '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>' : '')
+      + '<div class="kb-templates" id="kbTplGrid"></div>'
+      + (tpls.length > tpls.filter(function (t) { return t.featured; }).length ? '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>' : '')
       + '<div class="kb-packbar" style="margin-top:12px;">'
       + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
       + '<span style="flex:1"></span>'
@@ -398,16 +439,17 @@
       + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
       + '</div>';
-    box.querySelectorAll('[data-tpl]').forEach(function (btn) {
-      btn.onclick = function () {
-        state.render.templateId = btn.getAttribute('data-tpl');
-        state.render.packaged = false;
-        state.render.job = null;
-        if (state.project) state.project.rendered = false;
-        renderPack(); renderPreview();
-        log('已选模板：' + (btn.querySelector('b') ? btn.querySelector('b').textContent : ''));
+    paintTemplateGrid();
+    box.querySelectorAll('[data-cat]').forEach(function (chip) {
+      chip.onclick = function () {
+        state.render.templateCategory = chip.getAttribute('data-cat') || 'all';
+        renderPack();
       };
     });
+    var search = $('kbTplSearch');
+    if (search) search.oninput = function () { state.render.templateQuery = search.value || ''; paintTemplateGrid(); };
+    var more = $('kbTplMore');
+    if (more) more.onclick = function () { state.render.showAllTemplates = !state.render.showAllTemplates; renderPack(); };
     var titleInput = $('kbTemplateTitle');
     if (titleInput) titleInput.oninput = function () { state.render.title = titleInput.value || ''; };
     var btn = $('kbRender');

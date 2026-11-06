@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "oral_hook_v2",
+  "name": "观点钩子",
+  "description": "荧光绿钩子、强观点标题，适合犀利口播。",
+  "category": "口播观点",
+  "tags": [
+    "观点",
+    "钩子",
+    "犀利"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "kinetic",
+  "featured": false,
+  "order": 90,
+  "style": {
+    "accent": "#B6FF3B",
+    "accent2": "#00D4FF",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.046,
+    "keywordSize": 0.105
+  },
+  "copy": {
+    "badge": "观点输出",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "观点 · 口播",
+    "cta": "说说你的看法"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/oral_hook_v2.svg",
+  "cover_title": "我不同意这个说法",
+  "cover_sub": "荧光钩子 · 强观点",
+  "default": false
+}

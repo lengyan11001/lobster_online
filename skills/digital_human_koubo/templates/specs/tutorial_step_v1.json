@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "tutorial_step_v1",
+  "name": "步骤教程",
+  "description": "步骤条、清单感，适合操作教程。",
+  "category": "知识教程",
+  "tags": [
+    "教程",
+    "步骤",
+    "清单"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "featured": false,
+  "order": 110,
+  "style": {
+    "accent": "#38BDF8",
+    "accent2": "#22C55E",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.043,
+    "captionSize": 0.042,
+    "keywordSize": 0.072
+  },
+  "copy": {
+    "badge": "步骤教学",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "教程 · 步骤",
+    "cta": "收藏跟着做"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/tutorial_step_v1.svg",
+  "cover_title": "照着做，一次学会",
+  "cover_sub": "步骤教程 · 清单感",
+  "default": false
+}

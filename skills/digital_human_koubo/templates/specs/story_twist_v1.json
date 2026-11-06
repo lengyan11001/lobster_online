@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "story_twist_v1",
+  "name": "情绪反转",
+  "description": "高对比情绪字、反转节奏，适合剧情和观点。",
+  "category": "情绪剧情",
+  "tags": [
+    "剧情",
+    "反转",
+    "情绪"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "featured": false,
+  "order": 70,
+  "style": {
+    "accent": "#A855F7",
+    "accent2": "#FF4D8D",
+    "accent3": "#FFD84D",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.055,
+    "captionSize": 0.05,
+    "keywordSize": 0.12
+  },
+  "copy": {
+    "badge": "剧情反转",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "情绪 · 剧情",
+    "cta": "看到最后"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/story_twist_v1.svg",
+  "cover_title": "事情没那么简单",
+  "cover_sub": "情绪反转 · 高能剧情",
+  "default": false
+}

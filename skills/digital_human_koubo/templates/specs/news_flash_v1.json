@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "news_flash_v1",
+  "name": "资讯快报",
+  "description": "快节奏标题、重点信息条，适合新闻和行业动态。",
+  "category": "新闻资讯",
+  "tags": [
+    "新闻",
+    "资讯",
+    "快报"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "kinetic",
+  "featured": true,
+  "order": 50,
+  "style": {
+    "accent": "#FF3B30",
+    "accent2": "#FFFFFF",
+    "accent3": "#3B82F6",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.046,
+    "keywordSize": 0.1
+  },
+  "copy": {
+    "badge": "AI 快报",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "资讯 · 快报",
+    "cta": "关注，持续更新"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/news_flash_v1.svg",
+  "cover_title": "刚刚，传来消息",
+  "cover_sub": "快节奏 · 重点信息",
+  "default": false
+}

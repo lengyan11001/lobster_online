@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "matrix_batch_v1",
+  "name": "矩阵批量",
+  "description": "低干扰、统一风格，适合批量矩阵账号。",
+  "category": "矩阵批量",
+  "tags": [
+    "矩阵",
+    "批量",
+    "统一"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "featured": false,
+  "order": 80,
+  "style": {
+    "accent": "#E2E8F0",
+    "accent2": "#94A3B8",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.042,
+    "captionSize": 0.042,
+    "keywordSize": 0.07
+  },
+  "copy": {
+    "badge": "矩阵口播",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "批量 · 矩阵",
+    "cta": "继续下一条"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/matrix_batch_v1.svg",
+  "cover_title": "每天一条，稳定输出",
+  "cover_sub": "批量矩阵 · 统一风格",
+  "default": false
+}

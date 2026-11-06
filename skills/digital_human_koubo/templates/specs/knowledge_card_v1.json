@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "knowledge_card_v1",
+  "name": "知识卡片",
+  "description": "步骤卡片、重点提炼，适合教程和干货内容。",
+  "category": "知识教程",
+  "tags": [
+    "知识",
+    "教程",
+    "卡片"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "featured": true,
+  "order": 40,
+  "style": {
+    "accent": "#7BE0C3",
+    "accent2": "#4A9DFF",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.045,
+    "captionSize": 0.043,
+    "keywordSize": 0.075
+  },
+  "copy": {
+    "badge": "AI 知识",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "知识 · 教程",
+    "cta": "收藏，照着做"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/knowledge_card_v1.svg",
+  "cover_title": "三步讲明白",
+  "cover_sub": "知识卡片 · 步骤提炼",
+  "default": false
+}

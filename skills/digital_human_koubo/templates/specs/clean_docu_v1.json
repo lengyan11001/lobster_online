@@ -3,6 +3,7 @@
   "id": "clean_docu_v1",
   "name": "质感访谈",
   "description": "克制留白、细描边字幕、低干扰信息条，适合访谈和知识内容。",
+  "category": "访谈纪实",
   "tags": [
     "访谈",
     "知识",
@@ -11,11 +12,13 @@
   "ratio": "source",
   "fps": 30,
   "variant": "clean",
+  "featured": true,
+  "order": 20,
   "style": {
     "accent": "#D9F4FF",
     "accent2": "#7AA2FF",
     "accent3": "#FFFFFF",
-    "ink": "#071018",
+    "ink": "#080B14",
     "paper": "#FFFFFF",
     "titleSize": 0.04,
     "captionSize": 0.042,
@@ -28,9 +31,12 @@
     "cta": "收藏，慢慢看"
   },
   "rules": {
-    "titleChars": 16,
-    "captionMaxChars": 26,
-    "safeArea": 0.07
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
   },
-  "cover": "/static/koubo/templates/clean_docu_v1.svg"
+  "cover": "/static/koubo/templates/clean_docu_v1.svg",
+  "cover_title": "把复杂的事讲清楚",
+  "cover_sub": "质感访谈 · 克制留白",
+  "default": false
 }

@@ -61,12 +61,15 @@ def get_template(template_id: str) -> Optional[Dict[str, Any]]:
 
 def public_templates() -> List[Dict[str, Any]]:
     out = []
-    for spec in sorted(load_templates().values(), key=lambda x: (not bool(x.get('default')), str(x.get('id') or ''))):
+    for spec in sorted(load_templates().values(), key=lambda x: (int(x.get('order') or 999), str(x.get('id') or ''))):
         style = spec.get('style') or {}
         out.append({
             'id': spec.get('id'),
             'name': spec.get('name'),
             'description': spec.get('description'),
+            'category': spec.get('category') or '其他',
+            'featured': bool(spec.get('featured')),
+            'order': int(spec.get('order') or 999),
             'tags': spec.get('tags') or [],
             'ratio': spec.get('ratio') or 'source',
             'variant': spec.get('variant') or 'kinetic',

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "commerce_price_v2",
+  "name": "价格冲击",
+  "description": "价格数字放大、红金高对比，适合促销转化。",
+  "category": "带货转化",
+  "tags": [
+    "价格",
+    "促销",
+    "转化"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "featured": false,
+  "order": 100,
+  "style": {
+    "accent": "#FF2D55",
+    "accent2": "#FFD60A",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.055,
+    "captionSize": 0.05,
+    "keywordSize": 0.13
+  },
+  "copy": {
+    "badge": "价格重点",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "带货 · 价格",
+    "cta": "点这里看"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "cover": "/static/koubo/templates/commerce_price_v2.svg",
+  "cover_title": "这个价，今天只此一次",
+  "cover_sub": "价格冲击 · 强转化",
+  "default": false
+}

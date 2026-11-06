@@ -3,6 +3,7 @@
   "id": "commercial_hook_v1",
   "name": "带货强钩子",
   "description": "高对比红黄配色、价格数字放大、结尾强 CTA，适合带货和转化。",
+  "category": "带货转化",
   "tags": [
     "带货",
     "转化",
@@ -11,11 +12,13 @@
   "ratio": "source",
   "fps": 30,
   "variant": "commercial",
+  "featured": true,
+  "order": 30,
   "style": {
     "accent": "#FF3D2E",
     "accent2": "#FFD84D",
     "accent3": "#FF8A00",
-    "ink": "#120507",
+    "ink": "#080B14",
     "paper": "#FFFFFF",
     "titleSize": 0.055,
     "captionSize": 0.05,
@@ -28,9 +31,12 @@
     "cta": "点这里，直接看"
   },
   "rules": {
-    "titleChars": 12,
-    "captionMaxChars": 20,
+    "titleChars": 14,
+    "captionMaxChars": 22,
     "safeArea": 0.06
   },
-  "cover": "/static/koubo/templates/commercial_hook_v1.svg"
+  "cover": "/static/koubo/templates/commercial_hook_v1.svg",
+  "cover_title": "这个价格，真香",
+  "cover_sub": "强钩子 · 强转化",
+  "default": false
 }

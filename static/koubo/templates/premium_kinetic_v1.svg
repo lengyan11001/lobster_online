@@ -1,23 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#FFD84D"/><stop offset="0.55" stop-color="#FF4D8D"/><stop offset="1" stop-color="#4DE1FF"/>
-    </linearGradient>
-    <linearGradient id="d" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#050812" stop-opacity="0.18"/><stop offset="1" stop-color="#050812" stop-opacity="0.78"/>
-    </linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFD84D"/><stop offset="0.55" stop-color="#FF4D8D"/><stop offset="1" stop-color="#4DE1FF"/></linearGradient>
+    <linearGradient id="d" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#050812" stop-opacity="0.18"/><stop offset="1" stop-color="#050812" stop-opacity="0.80"/></linearGradient>
   </defs>
-  <rect width="320" height="180" fill="url(#g)"/>
-  <rect width="320" height="180" fill="url(#d)"/>
-  <circle cx="275" cy="30" r="42" fill="#FFD84D" opacity="0.16"/>
-  <circle cx="300" cy="145" r="52" fill="#FFD84D" opacity="0.10"/>
-  <rect x="16" y="14" rx="10" width="86" height="22" fill="#050812" opacity="0.48" stroke="#fff" stroke-opacity="0.18"/>
-  <circle cx="27" cy="25" r="3" fill="#FFD84D"/>
-  <text x="35" y="29" fill="#fff" font-size="10" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">AI 数字人</text>
-  <rect x="16" y="50" width="4" height="48" rx="2" fill="#FFD84D"/>
-  <text x="29" y="70" fill="#fff" font-size="25" font-weight="700" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">今天聊点真的</text>
+  <rect width="320" height="180" fill="url(#g)"/><rect width="320" height="180" fill="url(#d)"/>
+  <circle cx="278" cy="28" r="42" fill="#FFD84D" opacity="0.16"/><circle cx="302" cy="148" r="52" fill="#FF4D8D" opacity="0.12"/>
+  <rect x="16" y="14" rx="10" width="98" height="22" fill="#050812" opacity="0.48" stroke="#fff" stroke-opacity="0.18"/>
+  <circle cx="27" cy="25" r="3" fill="#FFD84D"/><text x="35" y="29" fill="#fff" font-size="10" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">AI 数字人</text>
+  <rect x="16" y="52" width="4" height="44" rx="2" fill="#FFD84D"/>
+  <text x="29" y="72" fill="#fff" font-size="24" font-weight="700" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">今天聊点真的</text>
   <text x="29" y="96" fill="#fff" font-size="11" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif" opacity="0.78">一句话，讲透一件事</text>
-  <rect x="16" y="126" rx="10" width="184" height="34" fill="#050812" opacity="0.42" stroke="#fff" stroke-opacity="0.12"/>
-  <text x="28" y="147" fill="#fff" font-size="12" font-weight="700" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">一张照片 · 一段口播</text>
-  <text x="222" y="147" fill="#FFD84D" font-size="11" font-weight="700" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">AI 成片</text>
+  <rect x="16" y="128" rx="10" width="188" height="34" fill="#050812" opacity="0.42" stroke="#fff" stroke-opacity="0.12"/>
+  <text x="28" y="149" fill="#fff" font-size="12" font-weight="700" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">一张照片 · 一段口播</text>
+  <text x="224" y="149" fill="#FFD84D" font-size="11" font-weight="700" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">AI 成片</text>
 </svg>

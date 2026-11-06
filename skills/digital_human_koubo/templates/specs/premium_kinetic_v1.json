@@ -3,6 +3,7 @@
   "id": "premium_kinetic_v1",
   "name": "爆点口播",
   "description": "大字标题、关键词弹出、强节奏字幕，适合观点和爆点内容。",
+  "category": "口播观点",
   "tags": [
     "口播",
     "爆点",
@@ -11,6 +12,8 @@
   "ratio": "source",
   "fps": 30,
   "variant": "kinetic",
+  "featured": true,
+  "order": 10,
   "style": {
     "accent": "#FFD84D",
     "accent2": "#FF4D8D",
@@ -32,6 +35,8 @@
     "captionMaxChars": 22,
     "safeArea": 0.06
   },
-  "default": true,
-  "cover": "/static/koubo/templates/premium_kinetic_v1.svg"
+  "cover": "/static/koubo/templates/premium_kinetic_v1.svg",
+  "cover_title": "今天聊点真的",
+  "cover_sub": "一句话，讲透一件事",
+  "default": true
 }
