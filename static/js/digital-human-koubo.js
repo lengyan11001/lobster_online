@@ -432,17 +432,17 @@
       + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
     box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (tpls.length || 0) + ' 个模板</small></div>'
       + '<div class="kb-title-input"><label>标题</label><input id="kbTemplateTitle" maxlength="24" placeholder="留空自动从口播稿提取" value="' + esc(r.title || '') + '"><small>可选</small></div>'
-      + (r.showAllTemplates ? '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>' : '')
-      + '<div class="kb-templates" id="kbTplGrid"></div>'
-      + (tpls.length > tpls.filter(function (t) { return t.featured; }).length ? '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>' : '')
-      + '<div class="kb-packbar" style="margin-top:12px;">'
+      + '<div class="kb-packbar" style="margin-top:2px;">'
       + (hasFinal ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
       + '<span style="flex:1"></span>'
       + (hasPreview && !job ? '<button type="button" class="kb-btn" id="kbPreviewAgain">重新预览</button>' : '')
       + '<button type="button" class="kb-btn-primary" id="kbRender" data-mode="' + primaryMode + '" style="width:auto;min-width:150px;"' + (job ? ' disabled' : '') + '>' + primaryLabel + '</button>'
       + '</div>'
-      + '<div class="kb-hint" style="margin-top:6px;">先看 480p 快速预览，满意再出高清；同一段底片换模板不会重新生成，也不会再扣底片算力。</div>'
-      + (job ? '<div style="margin-top:8px;font-size:11px;color:#64748b;">' + esc(job.message || '') + '<div style="height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:4px;"><i style="display:block;height:100%;width:' + Math.max(3, job.progress || 0) + '%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);"></i></div></div>' : '')
+      + '<div class="kb-hint" style="margin:6px 0 10px;">先看 480p 快速预览，满意再出高清；同一段底片换模板不会重新生成，也不会再扣底片算力。</div>'
+      + (job ? '<div style="margin-bottom:10px;font-size:11px;color:#64748b;">' + esc(job.message || '') + '<div style="height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:4px;"><i style="display:block;height:100%;width:' + Math.max(3, job.progress || 0) + '%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);"></i></div></div>' : '')
+      + (r.showAllTemplates ? '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>' : '')
+      + '<div class="kb-templates" id="kbTplGrid"></div>'
+      + (tpls.length > tpls.filter(function (t) { return t.featured; }).length ? '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>' : '')
       + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
       + '</div>';
