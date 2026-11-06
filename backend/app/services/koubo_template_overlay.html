@@ -65,6 +65,31 @@ body.layout-commercial #title{top:7%;font-size:calc(var(--title)*1.02)}
 body.layout-commercial #keyword{top:27%;font-size:calc(var(--keyword)*1.05)}
 body.layout-commercial #chapter{top:20%;background:rgba(20,3,7,.78);border-color:rgba(255,61,46,.55)}
 body.layout-commercial #caption{background:rgba(12,3,5,.56);border-color:rgba(255,61,46,.3)}
+
+body.layout-minimal #title{top:6%;font-size:calc(var(--title)*.64);font-weight:500;letter-spacing:-.01em}
+body.layout-minimal #keyword{display:none}
+body.layout-minimal #caption{background:transparent;border:0;border-left:3px solid var(--accent);border-radius:0;text-align:left;padding-left:12px;font-size:calc(var(--caption)*.88)}
+body.layout-minimal #lowerThird,body.layout-minimal #chapter{display:none}
+body.layout-minimal #badge{font-weight:400}
+body.layout-quote #titleWrap{top:18%;left:3%;right:3%;text-align:center}
+body.layout-quote #titleWrap:before{content:"\201C";position:absolute;left:-1%;top:-28%;font-size:calc(var(--title)*1.7);line-height:1;color:var(--accent);opacity:.78;font-family:Georgia,serif}
+body.layout-quote #title{max-width:100%;font-size:calc(var(--title)*.92);text-align:center}
+body.layout-quote #keyword{top:48%;font-size:calc(var(--keyword)*.78)}
+body.layout-quote #caption{background:rgba(0,0,0,.22);border:0;font-weight:500}
+body.layout-quote #lowerThird,body.layout-quote #chapter{display:none}
+body.layout-banner #titleWrap{top:48%;left:0;right:0}
+body.layout-banner #title{max-width:100%;background:linear-gradient(110deg,var(--accent),var(--accent2));color:var(--ink);padding:10px 16px 12px;border-radius:8px;font-size:calc(var(--title)*.78);text-align:center;text-shadow:none}
+body.layout-banner #title .grad{background:none;color:var(--ink)}
+body.layout-banner #keyword{top:29%;font-size:calc(var(--keyword)*.92)}
+body.layout-banner #caption{background:rgba(3,6,14,.68);border-color:rgba(255,255,255,.14)}
+body.layout-banner #lowerThird{display:none}
+body.layout-magazine #chapter{top:10%;left:5%;background:transparent;border:0;padding:0;display:flex;align-items:flex-end;gap:8px}
+body.layout-magazine #chapter b{font-size:calc(var(--title)*1.55);line-height:.8;color:var(--accent);-webkit-text-stroke:0}
+body.layout-magazine #chapter span{font-size:calc(var(--title)*.42);color:#fff;margin-bottom:4px;letter-spacing:.02em}
+body.layout-magazine #title{top:29%;font-size:calc(var(--title)*.78);max-width:82%}
+body.layout-magazine #keyword{top:40%;font-size:calc(var(--keyword)*.82)}
+body.layout-magazine #caption{background:rgba(0,0,0,.34);border:0;border-top:3px solid var(--accent);border-radius:0}
+body.layout-magazine #lowerThird{display:none}
 </style></head><body class="variant-__VARIANT__ layout-__LAYOUT__">
 <div id="stage"><div id="vignette"></div><div id="particles"></div><div id="topbar"><div id="badge"><i></i><span>__BADGE__</span></div><div id="progress"><i id="progressFill"></i></div></div><div id="titleWrap"><div id="title"></div><div id="sweep"></div></div><div id="chapter"><b id="chapterNo">01</b><span id="chapterTitle"></span></div><div id="keywordWrap"><div id="keyword"></div></div><div id="lowerThird"><em></em><div><b>__LOWER_TITLE__</b><small>__LOWER_SUB__</small></div></div><div id="captionWrap"><div id="caption"></div></div><div id="cta">__CTA__</div></div>
 <script>

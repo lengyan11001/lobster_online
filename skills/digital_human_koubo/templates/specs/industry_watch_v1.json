@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "industry_watch_v1",
+  "name": "行业观察",
+  "description": "大编号、蓝黄撞色，适合行业分析。",
+  "category": "新闻资讯",
+  "tags": [
+    "行业",
+    "观察",
+    "分析"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "magazine",
+  "featured": false,
+  "order": 250,
+  "style": {
+    "accent": "#3B82F6",
+    "accent2": "#FFD84D",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.044,
+    "captionSize": 0.044,
+    "keywordSize": 0.075
+  },
+  "copy": {
+    "badge": "行业观察",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "新闻 · 观察",
+    "cta": "接着看"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "2026",
+    "title": "行业观察"
+  },
+  "cover": "/static/koubo/templates/industry_watch_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "这个行业变了",
+  "cover_sub": "行业观察 · 大编号",
+  "default": false
+}

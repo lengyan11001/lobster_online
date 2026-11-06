@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "founder_story_v1",
+  "name": "创业者故事",
+  "description": "暖色暗调、斜体标题，适合人物故事。",
+  "category": "访谈纪实",
+  "tags": [
+    "创业",
+    "人物",
+    "故事"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "story",
+  "featured": false,
+  "order": 220,
+  "style": {
+    "accent": "#FB923C",
+    "accent2": "#F472B6",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.045,
+    "captionSize": 0.043,
+    "keywordSize": 0.07
+  },
+  "copy": {
+    "badge": "创业者故事",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "访谈 · 人物",
+    "cta": "听完再走"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "STORY",
+    "title": "人物"
+  },
+  "cover": "/static/koubo/templates/founder_story_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "他为什么从大厂离开",
+  "cover_sub": "创业者 · 人物故事",
+  "default": false
+}

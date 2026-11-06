@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "contrarian_v1",
+  "name": "反常识",
+  "description": "居中引号、紫青撞色，适合反常识观点。",
+  "category": "口播观点",
+  "tags": [
+    "反常识",
+    "观点",
+    "引号"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "quote",
+  "featured": false,
+  "order": 150,
+  "style": {
+    "accent": "#A855F7",
+    "accent2": "#4DE1FF",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.045,
+    "keywordSize": 0.08
+  },
+  "copy": {
+    "badge": "反常识",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "观点 · 反转",
+    "cta": "你怎么看"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": false,
+    "no": "",
+    "title": ""
+  },
+  "cover": "/static/koubo/templates/contrarian_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "你可能一直想错了",
+  "cover_sub": "反常识 · 引号观点",
+  "default": false
+}

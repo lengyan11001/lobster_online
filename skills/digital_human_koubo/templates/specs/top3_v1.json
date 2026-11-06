@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "top3_v1",
+  "name": "前三名",
+  "description": "大编号、黑金高对比，适合榜单测评。",
+  "category": "测评对比",
+  "tags": [
+    "榜单",
+    "前三",
+    "测评"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "layout": "magazine",
+  "featured": false,
+  "order": 270,
+  "style": {
+    "accent": "#FFD700",
+    "accent2": "#111827",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.044,
+    "captionSize": 0.044,
+    "keywordSize": 0.08
+  },
+  "copy": {
+    "badge": "前三名",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "测评 · 榜单",
+    "cta": "看第一名"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "TOP3",
+    "title": "榜单"
+  },
+  "cover": "/static/koubo/templates/top3_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "只说前三名",
+  "cover_sub": "榜单 · 黑金质感",
+  "default": false
+}

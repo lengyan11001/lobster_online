@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "breaking_v1",
+  "name": "突发快讯",
+  "description": "白底标题条、红色 NEWS，适合突发事件。",
+  "category": "新闻资讯",
+  "tags": [
+    "突发",
+    "快讯",
+    "新闻"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "news",
+  "layout": "news",
+  "featured": false,
+  "order": 240,
+  "style": {
+    "accent": "#E11D48",
+    "accent2": "#FFFFFF",
+    "accent3": "#111827",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.045,
+    "captionSize": 0.046,
+    "keywordSize": 0.095
+  },
+  "copy": {
+    "badge": "突发快讯",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "新闻 · 快讯",
+    "cta": "持续关注"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "NEWS",
+    "title": "快讯"
+  },
+  "cover": "/static/koubo/templates/breaking_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "刚刚确认",
+  "cover_sub": "突发 · 快讯",
+  "default": false
+}

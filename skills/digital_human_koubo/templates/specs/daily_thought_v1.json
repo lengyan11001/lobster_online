@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "daily_thought_v1",
+  "name": "每日观点",
+  "description": "低干扰小标题、左侧字幕，适合日更观点。",
+  "category": "口播观点",
+  "tags": [
+    "日更",
+    "观点",
+    "克制"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "minimal",
+  "featured": false,
+  "order": 140,
+  "style": {
+    "accent": "#94A3B8",
+    "accent2": "#E2E8F0",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.034,
+    "captionSize": 0.04,
+    "keywordSize": 0.07
+  },
+  "copy": {
+    "badge": "每日观点",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "日更 · 观点",
+    "cta": "明天见"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": false,
+    "no": "",
+    "title": ""
+  },
+  "cover": "/static/koubo/templates/daily_thought_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "今天想明白一件事",
+  "cover_sub": "日更 · 低干扰",
+  "default": false
+}

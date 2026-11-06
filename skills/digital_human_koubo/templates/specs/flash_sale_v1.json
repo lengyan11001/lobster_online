@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "flash_sale_v1",
+  "name": "限时秒杀",
+  "description": "底部横幅、红橙高对比，适合限时促销。",
+  "category": "带货转化",
+  "tags": [
+    "秒杀",
+    "限时",
+    "促销"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "layout": "banner",
+  "featured": false,
+  "order": 160,
+  "style": {
+    "accent": "#FF3D2E",
+    "accent2": "#FF8A00",
+    "accent3": "#FFD84D",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.05,
+    "keywordSize": 0.11
+  },
+  "copy": {
+    "badge": "限时秒杀",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "带货 · 秒杀",
+    "cta": "现在点"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "2H",
+    "title": "限时"
+  },
+  "cover": "/static/koubo/templates/flash_sale_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "今天只开 2 小时",
+  "cover_sub": "限时 · 强转化",
+  "default": false
+}

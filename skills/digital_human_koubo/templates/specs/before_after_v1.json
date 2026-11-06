@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "before_after_v1",
+  "name": "前后对比",
+  "description": "VS 对比、绿蓝撞色，适合效果对比。",
+  "category": "带货转化",
+  "tags": [
+    "对比",
+    "效果",
+    "前后"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "layout": "review",
+  "featured": false,
+  "order": 180,
+  "style": {
+    "accent": "#22C55E",
+    "accent2": "#38BDF8",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.046,
+    "keywordSize": 0.095
+  },
+  "copy": {
+    "badge": "前后对比",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "带货 · 对比",
+    "cta": "看效果"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "VS",
+    "title": "用前 / 用后"
+  },
+  "cover": "/static/koubo/templates/before_after_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "用前 vs 用后",
+  "cover_sub": "前后对比 · 效果说话",
+  "default": false
+}

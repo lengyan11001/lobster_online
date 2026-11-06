@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "product_pick_v1",
+  "name": "好物推荐",
+  "description": "大编号、青橙配色，适合单品推荐。",
+  "category": "带货转化",
+  "tags": [
+    "好物",
+    "推荐",
+    "单品"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "magazine",
+  "featured": false,
+  "order": 170,
+  "style": {
+    "accent": "#2DD4BF",
+    "accent2": "#FB923C",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.045,
+    "captionSize": 0.046,
+    "keywordSize": 0.08
+  },
+  "copy": {
+    "badge": "好物推荐",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "带货 · 单品",
+    "cta": "闭眼入"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "01",
+    "title": "本期好物"
+  },
+  "cover": "/static/koubo/templates/product_pick_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "这个真的可以闭眼入",
+  "cover_sub": "好物 · 单品推荐",
+  "default": false
+}

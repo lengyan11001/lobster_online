@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "plot_twist_v1",
+  "name": "剧情反转",
+  "description": "红紫暗调、斜体标题，适合剧情反转。",
+  "category": "情绪剧情",
+  "tags": [
+    "剧情",
+    "反转",
+    "情绪"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "layout": "story",
+  "featured": false,
+  "order": 280,
+  "style": {
+    "accent": "#EF4444",
+    "accent2": "#A855F7",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.046,
+    "keywordSize": 0.09
+  },
+  "copy": {
+    "badge": "剧情反转",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "情绪 · 剧情",
+    "cta": "看到最后"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "?!",
+    "title": "反转"
+  },
+  "cover": "/static/koubo/templates/plot_twist_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "你以为结束了？",
+  "cover_sub": "剧情 · 强反转",
+  "default": false
+}

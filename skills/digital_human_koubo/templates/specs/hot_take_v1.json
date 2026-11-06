@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "hot_take_v1",
+  "name": "热点锐评",
+  "description": "强观点标题、红黑高对比，适合热点评论。",
+  "category": "口播观点",
+  "tags": [
+    "热点",
+    "锐评",
+    "观点"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "kinetic",
+  "layout": "kinetic",
+  "featured": false,
+  "order": 130,
+  "style": {
+    "accent": "#FF3B30",
+    "accent2": "#FFD84D",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.046,
+    "keywordSize": 0.105
+  },
+  "copy": {
+    "badge": "热点锐评",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "热点 · 观点",
+    "cta": "说说你的看法"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "HOT",
+    "title": "热点"
+  },
+  "cover": "/static/koubo/templates/hot_take_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "这事我得说两句",
+  "cover_sub": "强观点 · 红黑高对比",
+  "default": false
+}

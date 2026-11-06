@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "relatable_v1",
+  "name": "共鸣",
+  "description": "暖粉引号、居中标题，适合共鸣情绪。",
+  "category": "情绪剧情",
+  "tags": [
+    "共鸣",
+    "情绪",
+    "共鸣"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "quote",
+  "featured": false,
+  "order": 290,
+  "style": {
+    "accent": "#FB7185",
+    "accent2": "#FDE68A",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.045,
+    "captionSize": 0.044,
+    "keywordSize": 0.075
+  },
+  "copy": {
+    "badge": "共鸣",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "情绪 · 共鸣",
+    "cta": "说的是你吗"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": false,
+    "no": "",
+    "title": ""
+  },
+  "cover": "/static/koubo/templates/relatable_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "说的是不是你",
+  "cover_sub": "共鸣 · 暖粉引号",
+  "default": false
+}

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "myth_bust_v1",
+  "name": "辟谣",
+  "description": "居中引号、红白高对比，适合辟谣科普。",
+  "category": "知识教程",
+  "tags": [
+    "辟谣",
+    "科普",
+    "反常识"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "quote",
+  "featured": false,
+  "order": 200,
+  "style": {
+    "accent": "#EF4444",
+    "accent2": "#FFFFFF",
+    "accent3": "#FCA5A5",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.044,
+    "keywordSize": 0.075
+  },
+  "copy": {
+    "badge": "辟谣",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "知识 · 科普",
+    "cta": "别再信了"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": false,
+    "no": "",
+    "title": ""
+  },
+  "cover": "/static/koubo/templates/myth_bust_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "别再被这句话骗了",
+  "cover_sub": "辟谣 · 反常识",
+  "default": false
+}

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "expert_talk_v1",
+  "name": "专家访谈",
+  "description": "深蓝低干扰、左侧字幕，适合专家访谈。",
+  "category": "访谈纪实",
+  "tags": [
+    "专家",
+    "访谈",
+    "观点"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "clean",
+  "featured": false,
+  "order": 230,
+  "style": {
+    "accent": "#38BDF8",
+    "accent2": "#1E3A8A",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.04,
+    "captionSize": 0.042,
+    "keywordSize": 0.068
+  },
+  "copy": {
+    "badge": "专家访谈",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "访谈 · 专家",
+    "cta": "听专家说"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "EXPERT",
+    "title": "专家"
+  },
+  "cover": "/static/koubo/templates/expert_talk_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "听专家怎么说",
+  "cover_sub": "专家访谈 · 深蓝质感",
+  "default": false
+}

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "daily_matrix_v1",
+  "name": "日更矩阵",
+  "description": "极简低干扰、灰白配色，适合矩阵日更。",
+  "category": "矩阵批量",
+  "tags": [
+    "矩阵",
+    "日更",
+    "批量"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "minimal",
+  "featured": false,
+  "order": 300,
+  "style": {
+    "accent": "#CBD5E1",
+    "accent2": "#64748B",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.032,
+    "captionSize": 0.038,
+    "keywordSize": 0.065
+  },
+  "copy": {
+    "badge": "日更矩阵",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "矩阵 · 日更",
+    "cta": "每天一条"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": false,
+    "no": "",
+    "title": ""
+  },
+  "cover": "/static/koubo/templates/daily_matrix_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "每天一条，不断更",
+  "cover_sub": "矩阵 · 极简日更",
+  "default": false
+}

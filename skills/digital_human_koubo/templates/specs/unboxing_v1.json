@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "unboxing_v1",
+  "name": "开箱实测",
+  "description": "VS 对比、橙青撞色，适合开箱测评。",
+  "category": "测评对比",
+  "tags": [
+    "开箱",
+    "实测",
+    "测评"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "layout": "review",
+  "featured": false,
+  "order": 260,
+  "style": {
+    "accent": "#F97316",
+    "accent2": "#4DE1FF",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.048,
+    "captionSize": 0.046,
+    "keywordSize": 0.095
+  },
+  "copy": {
+    "badge": "开箱实测",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "测评 · 开箱",
+    "cta": "看细节"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "UNBOX",
+    "title": "开箱"
+  },
+  "cover": "/static/koubo/templates/unboxing_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "开箱第一眼",
+  "cover_sub": "开箱 · 实测对比",
+  "default": false
+}

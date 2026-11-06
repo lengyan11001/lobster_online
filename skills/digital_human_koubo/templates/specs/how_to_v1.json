@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "id": "how_to_v1",
+  "name": "一分钟学会",
+  "description": "STEP 步骤、蓝绿配色，适合短教程。",
+  "category": "知识教程",
+  "tags": [
+    "教程",
+    "步骤",
+    "一分钟"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "layout": "tutorial",
+  "featured": false,
+  "order": 190,
+  "style": {
+    "accent": "#38BDF8",
+    "accent2": "#22C55E",
+    "accent3": "#FFFFFF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.042,
+    "captionSize": 0.042,
+    "keywordSize": 0.072
+  },
+  "copy": {
+    "badge": "一分钟学会",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "知识 · 教程",
+    "cta": "收藏照做"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "chapter": {
+    "show": true,
+    "no": "STEP",
+    "title": "一分钟"
+  },
+  "cover": "/static/koubo/templates/how_to_v1.svg",
+  "sample_video_url": "",
+  "cover_title": "一分钟学会",
+  "cover_sub": "短教程 · 步骤感",
+  "default": false
+}
