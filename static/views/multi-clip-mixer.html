@@ -40,13 +40,20 @@
           </div>
 
           <div class="mcm-mode-panel">
-            <div class="mcm-mode-tabs" role="radiogroup" aria-label="剪辑模式">
-              <label><input type="radio" name="mcmClipMode" value="fixed" checked><span>固定混剪</span></label>
-              <label><input type="radio" name="mcmClipMode" value="random"><span>随机混剪</span></label>
-              <label><input type="radio" name="mcmClipMode" value="single"><span>单片剪辑</span></label>
-              <label><input type="radio" name="mcmClipMode" value="cut_only"><span>只裁切</span></label>
+            <div class="mcm-mode-select-row">
+              <label for="mcmClipModeSelect">剪辑模式</label>
+              <select id="mcmClipModeSelect" class="mcm-mode-select" aria-label="剪辑模式">
+                <option value="original" selected>原片套模板</option>
+                <option value="fixed">固定混剪</option>
+                <option value="random">随机混剪</option>
+                <option value="single">单片剪辑</option>
+                <option value="cut_only">只裁切</option>
+              </select>
             </div>
-            <div id="mcmFixedModePanel" class="mcm-mode-body">
+            <div id="mcmOriginalModePanel" class="mcm-mode-body">
+              <div style="flex-basis:100%;font-size:12px;opacity:.75;">取列表里第 1 个素材的整段原片，不裁剪、不拼接，直接套用所选模板（素材若已做过 AI 优化 / 画面优化，套的就是优化后的版本）。</div>
+            </div>
+            <div id="mcmFixedModePanel" class="mcm-mode-body" hidden>
               <label>统一开始（秒）<input id="mcmFixedStart" type="number" min="0" step="0.1" value="0"></label>
               <label>统一结束（秒）<input id="mcmFixedEnd" type="number" min="0.1" step="0.1" value="3"></label>
               <button id="mcmApplyFixedBtn" type="button" class="btn btn-ghost btn-sm">应用到所有视频</button>

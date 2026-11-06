@@ -47,6 +47,10 @@
 .mcm-mode-tabs label, .mcm-provider-row label, .mcm-inline-check { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid #dfe4ec; border-radius: 999px; background: #fff; color: #546174; cursor: pointer; font-size: 12px; }
 .mcm-mode-tabs input, .mcm-provider-row input, .mcm-inline-check input { width: auto; height: auto; accent-color: #e5484d; }
 .mcm-mode-tabs input:checked + span, .mcm-provider-row input:checked + span, .mcm-inline-check input:checked + span { color: #d9363e; font-weight: 600; }
+.mcm-mode-select-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.mcm-mode-select-row > label { color: #5f6978; font-size: 12px; white-space: nowrap; }
+.mcm-mode-select { min-width: 168px; height: 34px; padding: 0 10px; border: 1px solid #dfe3e9; border-radius: 8px; background: #fff; color: #172033; font: inherit; font-size: 13px; }
+.mcm-mode-select:focus { outline: none; border-color: #e5484d; box-shadow: 0 0 0 2px rgba(229,72,77,.12); }
 .mcm-mode-body { display: grid; grid-template-columns: repeat(2, minmax(0, 160px)) auto repeat(2, auto); gap: 10px; align-items: end; }
 .mcm-mode-body label:not(.mcm-inline-check) { color: #5f6978; font-size: 12px; }
 .mcm-mode-body input[type="number"] { width: 100%; height: 34px; margin-top: 5px; border: 1px solid #dfe3e9; border-radius: 6px; padding: 0 9px; color: #172033; font: inherit; }

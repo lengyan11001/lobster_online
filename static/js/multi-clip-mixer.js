@@ -156,10 +156,10 @@
   }
 
   function currentClipMode() {
-    var checked = document.querySelector('input[name="mcmClipMode"]:checked');
-    var mode = checked ? String(checked.value || '') : '';
-    if (mode === 'random' || mode === 'cut_only' || mode === 'single') return mode;
-    return 'fixed';
+    var select = $('mcmClipModeSelect');
+    var mode = select ? String(select.value || '') : '';
+    if (mode === 'random' || mode === 'cut_only' || mode === 'single' || mode === 'original') return mode;
+    return 'original';
   }
 
   function isRandomLikeMode() {
@@ -336,9 +336,21 @@
     });
   }
 
+  function buildOriginalPlan() {
+    var clip = state.clips[0];
+    if (!clip || !clip.assetId) throw new Error('请先添加 1 个视频，再使用原片套模板。');
+    var duration = Number(clip.duration || 0) || Math.max(Number(clip.endSec || 0), 0.1);
+    return [{
+      asset_id: clip.assetId,
+      start_sec: 0,
+      end_sec: Math.round(Math.max(0.1, duration) * 10) / 10
+    }];
+  }
+
   function buildClipPlan(outputIndex) {
     var mode = currentClipMode();
     if (mode === 'single') return buildSinglePlan();
+    if (mode === 'original') return buildOriginalPlan();
     var randomSeconds = Number((($('mcmRandomSegmentSeconds') || {}).value || 3));
     return state.clips.map(function(clip) {
       var segment = mode === 'random'
@@ -372,9 +384,10 @@
     if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = !(mode === 'fixed' || mode === 'cut_only');
     if ($('mcmRandomModePanel')) $('mcmRandomModePanel').hidden = mode !== 'random';
     if ($('mcmSingleModePanel')) $('mcmSingleModePanel').hidden = mode !== 'single';
+    if ($('mcmOriginalModePanel')) $('mcmOriginalModePanel').hidden = mode !== 'original';
     if ($('mcmTemplateRandomRow')) $('mcmTemplateRandomRow').hidden = !isRandomLikeMode();
     if ($('mcmMusicRandomRow')) $('mcmMusicRandomRow').hidden = !isRandomLikeMode();
-    if (mode === 'single' && $('mcmTemplateSwitch') && !$('mcmTemplateSwitch').checked) {
+    if ((mode === 'single' || mode === 'original') && $('mcmTemplateSwitch') && !$('mcmTemplateSwitch').checked) {
       $('mcmTemplateSwitch').checked = true;
       if ($('mcmTemplatePanel')) $('mcmTemplatePanel').hidden = false;
       if (!state.templateCatalog.length) loadTemplates(true).catch(function () {});
@@ -443,7 +456,7 @@
       created_at: Number(raw.created_at || Date.now()),
       completed_at: Number(raw.completed_at || 0),
       title: String(raw.title || '剪辑大师'),
-      clip_mode: raw.clip_mode === 'random' || raw.clip_mode === 'single' ? raw.clip_mode : 'fixed',
+      clip_mode: raw.clip_mode === 'random' || raw.clip_mode === 'single' || raw.clip_mode === 'original' ? raw.clip_mode : 'fixed',
       total_runs: Math.max(1, Number(raw.total_runs || results.length || 1)),
       clip_count: Math.max(0, Number(raw.clip_count || 0)),
       template_name: String(raw.template_name || ''),
@@ -583,6 +596,7 @@
     var parts = [String(batch.title || '剪辑大师')];
     if (batch.clip_mode === 'random') parts.push('随机');
     if (batch.clip_mode === 'single') parts.push('单片');
+    if (batch.clip_mode === 'original') parts.push('原片');
     if (batch.template_name) parts.push(batch.template_name);
     return parts.join(' · ');
   }
@@ -754,9 +768,11 @@
         ? '随机抽段时会重新计算'
         : (currentClipMode() === 'single'
           ? ('单片抽段：每段 ' + singleSegmentSeconds().toFixed(1) + ' 秒 × ' + singleSegmentCount() + ' 段，随机取位后拼接')
-          : (currentClipMode() === 'cut_only'
-            ? ('只裁切 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒，单独出片')
-            : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒')));
+          : (currentClipMode() === 'original'
+            ? '原片整段直接套模板（不裁剪、不拼接）'
+            : (currentClipMode() === 'cut_only'
+              ? ('只裁切 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒，单独出片')
+              : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒'))));
       return '<article class="mcm-clip-item' + (clip.audioMaster ? ' is-audio-master' : '') + '" data-clip-index="' + index + '">'
         + '<div class="mcm-clip-thumb">'
         + (poster ? '<img src="' + escapeHtml(poster) + '" alt="" loading="lazy">' : '<span class="mcm-clip-thumb-placeholder">VIDEO</span>')
@@ -2385,13 +2401,25 @@
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
     var clipPlan = buildClipPlan(runIndex);
-    progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + clipPlan.length + ' 个片段');
+    // 原片套模板 + 本地模板：源素材本身就是最终画源，跳过裁剪/拼接这一遍重编码
+    var directOriginal = currentClipMode() === 'original'
+      && currentTemplateProvider() === 'local'
+      && clipPlan.length === 1;
+    progress('merge', 'active', directOriginal
+      ? '原片直接套模板，跳过裁剪拼接'
+      : ('正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + clipPlan.length + ' 个片段'));
     var targetSeconds = 0;
     if (currentClipMode() === 'random') {
       targetSeconds = Number((($('mcmRandomTargetDuration') || {}).value || 0));
       if (!Number.isFinite(targetSeconds) || targetSeconds < 0) targetSeconds = 0;
     }
-    return post('/api/multi-clip-mixer/render', {
+    var baseTask = directOriginal
+      ? Promise.resolve({
+        asset_id: clipPlan[0].asset_id,
+        duration: Math.max(0.1, Number(clipPlan[0].end_sec || 0) - Number(clipPlan[0].start_sec || 0)),
+        source_url: ''
+      })
+      : post('/api/multi-clip-mixer/render', {
       title: templateTitleValue() || (totalRuns > 1 ? ('剪辑大师 ' + runIndex) : '剪辑大师'),
       clips: clipPlan,
       // 套本地字幕模板时保留原声，闪剪不需要
@@ -2409,7 +2437,8 @@
       bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
       output_ratio: currentOutputRatio(),
       fill_mode: currentFillMode()
-    }).then(function(baseResult) {
+    });
+    return baseTask.then(function(baseResult) {
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));
       progress('music', 'done', music ? ('已添加 ' + music.music_name) : (audioClip ? '已使用标记视频主音轨' : '本次未添加音乐'));
@@ -2607,6 +2636,9 @@
   function generate() {
     if (state.busy) return;
     if (!state.clips.length) return showMessage('请先添加至少一个视频。', true);
+    if (currentClipMode() === 'original' && !(($('mcmTemplateSwitch') || {}).checked)) {
+      return showMessage('原片套模板需要开启「套用定制模板」并选择一个模板。', true);
+    }
     if (currentClipMode() === 'single' && state.clips.length !== 1) {
       return showMessage('单片剪辑只支持 1 个视频，请移除多余素材后再生成（当前 ' + state.clips.length + ' 个）。', true);
     }
@@ -2858,9 +2890,7 @@
     });
     refreshAiTools();
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').addEventListener('click', confirmSegment);
-    Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmClipMode"]'), function(input) {
-      input.addEventListener('change', syncModePanels);
-    });
+    if ($('mcmClipModeSelect')) $('mcmClipModeSelect').addEventListener('change', syncModePanels);
     if ($('mcmRandomTemplateSwitch')) $('mcmRandomTemplateSwitch').addEventListener('change', renderTemplates);
     if ($('mcmApplyFixedBtn')) $('mcmApplyFixedBtn').addEventListener('click', applyFixedRangeToAll);
     if ($('mcmTemplateSwitch')) $('mcmTemplateSwitch').addEventListener('change', function(event) {
