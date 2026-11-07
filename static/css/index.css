@@ -14538,3 +14538,21 @@ body:has(.header.auth-guest) .auth-login-vision-text {
 #content-cutcli-template-studio .cutcli-template-real-preview video { display: block; width: 100%; max-height: 62vh; background: #000; object-fit: contain; }
 #content-cutcli-template-studio .cutcli-template-real-badge { position: absolute; top: 10px; left: 10px; padding: 3px 8px; border-radius: 999px; background: rgba(15,23,42,.72); color: #fff; font-size: 11px; letter-spacing: .02em; }
 #content-cutcli-template-studio .cutcli-template-real-actions { display: flex; justify-content: center; gap: 8px; width: 100%; padding: 10px; background: #fff; }
+
+/* 模板定制 · 真实预览按钮（放到素材上传旁边，做成主操作） */
+#content-cutcli-template-studio .cutcli-real-preview-btn {
+  background: #e5484d; border-color: #e5484d; color: #fff; font-weight: 600;
+  box-shadow: 0 2px 10px rgba(229,72,77,.28);
+}
+#content-cutcli-template-studio .cutcli-real-preview-btn:hover { background: #d9363e; border-color: #d9363e; }
+#content-cutcli-template-studio .cutcli-real-preview-btn:disabled { opacity: .55; box-shadow: none; cursor: default; }
+#content-cutcli-template-studio .cutcli-real-preview-btn.is-ready { animation: cutcliRealPreviewPulse 2.4s ease-in-out infinite; }
+@keyframes cutcliRealPreviewPulse {
+  0%, 100% { box-shadow: 0 2px 10px rgba(229,72,77,.28); }
+  50% { box-shadow: 0 2px 16px rgba(229,72,77,.55); }
+}
+#content-cutcli-template-studio .cutcli-real-preview-hint { margin-top: 4px; color: #8a93a3; font-size: 11px; }
+#content-cutcli-template-studio .cutcli-template-demo-badge {
+  position: absolute; top: 10px; left: 10px; z-index: 2; padding: 3px 9px; border-radius: 999px;
+  background: rgba(15,23,42,.72); color: #fff; font-size: 11px; letter-spacing: .02em;
+}

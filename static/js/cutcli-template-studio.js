@@ -1448,9 +1448,11 @@
                   '<div class="tvc-upload-actions">',
                     '<button type="button" id="cutcliTplModalPickBtn" class="btn btn-primary btn-sm">上传视频</button>',
                     '<button type="button" id="cutcliTplModalClearFileBtn" class="btn btn-ghost btn-sm">清空</button>',
+                    '<button type="button" id="cutcliTplModalRealPreviewBtn" class="btn btn-primary btn-sm cutcli-real-preview-btn">▶ 真实预览（5 秒）</button>',
                     '<input type="file" id="cutcliTplModalFileInput" accept="video/*" style="display:none;">',
                   '</div>',
                   '<div id="cutcliTplModalFileName" class="tvc-panel-hint">未选择本地视频。</div>',
+                  '<div class="tvc-panel-hint cutcli-real-preview-hint">真实预览用本机引擎渲前 5 秒，效果与最终成片一致</div>',
                 '</div>',
                 '<label class="cutcli-template-field" for="cutcliTplModalAssetIdInput">',
                   '<span>素材 ID</span>',
@@ -1674,20 +1676,21 @@
         ].join('');
       } else {
       var hasSourcePreview = !!media;
+      var demoMedia = hasSourcePreview ? '' : templateMedia(tpl);
       var portraitTemplate = String(tpl.aspect_ratio || '') === '9:16';
       var orientationClass = portraitTemplate ? ' is-portrait' : (state.sourceVideoOrientation === 'portrait' ? ' is-portrait' : ' is-landscape');
       var posterStyle = state.uploadedPosterUrl
         ? ' style="background-image:url(' + esc(state.uploadedPosterUrl) + ');"'
         : '';
       preview.innerHTML = [
-        '<div class="cutcli-template-real-bar">',
-          '<button type="button" class="btn btn-primary btn-sm" data-cutcli-real-preview-run="1"' + (state.realPreviewBusy ? ' disabled' : '') + '>' + (state.realPreviewBusy ? '正在渲染…' : '真实预览（5 秒）') + '</button>',
-          '<span>' + (hasSourcePreview ? '用本机引擎渲染一小段，和成片同一套效果' : '上传视频后可渲染真实预览') + '</span>',
-        '</div>',
         '<div class="cutcli-template-position-editor' + orientationClass + (hasSourcePreview ? '' : ' is-empty') + (state.sourceVideoFallback ? ' use-poster-fallback' : '') + '"' + posterStyle + '>',
           media
             ? videoShellHtml(media, { modal: true, controls: true, muted: true, loop: true, poster: state.uploadedPosterUrl || templatePoster(tpl) })
-            : '<div class="cutcli-template-media-empty cutcli-template-source-empty">请先上传视频</div>',
+            : (demoMedia
+              ? videoShellHtml(demoMedia, { modal: true, controls: true, muted: true, loop: true, poster: templatePoster(tpl) })
+              : '<div class="cutcli-template-media-empty cutcli-template-source-empty">请先上传视频</div>'),
+          !hasSourcePreview && demoMedia ? '<div class="cutcli-template-demo-badge">设计案例片 · 上传视频后可看真实效果</div>' : '',
+          hasSourcePreview ? '<button type="button" class="cutcli-template-position-reset" id="cutcliTplResetPositionsBtn">\u91cd\u7f6e\u4f4d\u7f6e</button>' : '',
           hasSourcePreview ? '<button type="button" class="cutcli-template-position-reset" id="cutcliTplResetPositionsBtn">\u91cd\u7f6e\u4f4d\u7f6e</button>' : '',
           hasSourcePreview ? '<div id="cutcliTplPositionLayer" class="cutcli-template-position-layer" aria-label="\u62d6\u52a8\u4fee\u6539\u6587\u6848\u4f4d\u7f6e"></div>' : '',
         '</div>',
@@ -1700,7 +1703,7 @@
         video.addEventListener('timeupdate', function() { syncDesignerPreviewTime(tpl, video); });
         video.addEventListener('seeked', function() { syncDesignerPreviewTime(tpl, video); });
         video.addEventListener('loadedmetadata', function() { syncDesignerPreviewTime(tpl, video); });
-        if (!state.uploadedPreviewUrl) {
+        if (!state.uploadedPreviewUrl && hasSourcePreview) {
           video.addEventListener('loadedmetadata', function() {
             if (updateSourceVideoOrientation(video.videoWidth, video.videoHeight)) renderTemplateModal();
           }, { once: true });
@@ -1709,9 +1712,12 @@
       if (hasSourcePreview) {
         renderPositionLayer(tpl);
         bindPositionReset(tpl);
+      } else if (video) {
+        try { video.play().catch(function() {}); } catch (err) {}
       }
       }
     }
+    syncRealPreviewButton();
     if (meta) {
       var tags = (tpl.tags || []).map(function(tag) {
         return '<span class="tag">' + esc(tag) + '</span>';
@@ -2084,6 +2090,18 @@
       });
   }
 
+  function syncRealPreviewButton() {
+    var btn = $('cutcliTplModalRealPreviewBtn');
+    if (!btn) return;
+    var assetInput = $('cutcliTplModalAssetIdInput');
+    var hasSource = !!state.uploadedFile || !!(assetInput && String(assetInput.value || '').trim());
+    btn.disabled = !!state.realPreviewBusy;
+    btn.classList.toggle('is-ready', hasSource && !state.realPreviewBusy);
+    btn.textContent = state.realPreviewBusy
+      ? '\u6b63\u5728\u6e32\u67d3\u2026'
+      : (hasSource ? '\u25b6 \u771f\u5b9e\u9884\u89c8\uff085 \u79d2\uff09' : '\u25b6 \u771f\u5b9e\u9884\u89c8\uff08\u5148\u4e0a\u4f20\u89c6\u9891\uff09');
+  }
+
   function startRealPreview() {
     if (state.realPreviewBusy) return;
     var tpl = modalTemplate();
@@ -2095,6 +2113,7 @@
     }
     var overlays = readOverlayTexts();
     state.realPreviewBusy = true;
+    syncRealPreviewButton();
     setModalMsg('\u6b63\u5728\u7528\u672c\u673a\u5f15\u64ce\u6e32\u67d3 5 \u79d2\u771f\u5b9e\u9884\u89c8\u2026', false);
     renderTemplateModal();
     var prepare = state.uploadedFile
@@ -2285,6 +2304,10 @@
       if (state.uploadedFile) setModalMsg('', false);
       renderTemplateModal();
     });
+    var realPreviewBtn = $('cutcliTplModalRealPreviewBtn');
+    if (realPreviewBtn) realPreviewBtn.addEventListener('click', function() { startRealPreview(); });
+    var assetIdInput = $('cutcliTplModalAssetIdInput');
+    if (assetIdInput) assetIdInput.addEventListener('input', syncRealPreviewButton);
     var clear = $('cutcliTplModalClearFileBtn');
     if (clear) clear.addEventListener('click', function() {
       setUploadedFile(null);
