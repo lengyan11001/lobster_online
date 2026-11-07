@@ -130,6 +130,20 @@ def douyin_workbench_browser_options_from_publish_meta(meta: Optional[dict]) -> 
     return opts
 
 
+WECHAT_CHANNELS_CDP_START_URL = "https://channels.weixin.qq.com/platform"
+
+
+def wechat_channels_browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
+    """视频号也用抖音同一套 CDP 方式拉系统 Chrome。
+
+    抖音的 workbench 浏览器由我们启动系统 Chrome（--remote-debugging-port），
+    Playwright 通过 connect_over_cdp 连接。视频号复用同一套逻辑，避免
+    launch_persistent_context 随任务结束关闭、且带 Playwright 指纹的问题。
+    """
+    opts = douyin_workbench_browser_options_from_publish_meta(meta)
+    return {**opts, "cdp_start_url": WECHAT_CHANNELS_CDP_START_URL}
+
+
 def browser_options_from_youtube_proxy_fields(
     proxy_server: Optional[str],
     proxy_username: Optional[str],
@@ -412,14 +426,14 @@ async def _connect_douyin_cdp_context(profile_dir: str, port: int) -> Any:
         _pw_instance = await async_playwright().__aenter__()
     browser = _douyin_cdp_browsers.get(port)
     if browser is None or not browser.is_connected():
-        logger.info("[BROWSER][DOUYIN-CDP] connect_over_cdp port=%s profile=%s", port, profile_dir[-80:])
+        logger.info("[BROWSER][CDP] connect_over_cdp port=%s profile=%s", port, profile_dir[-80:])
         browser = await _pw_instance.chromium.connect_over_cdp(
         f"http://127.0.0.1:{port}", timeout=15000
     )
         _douyin_cdp_browsers[port] = browser
     contexts = list(getattr(browser, "contexts", []) or [])
     if not contexts:
-        raise RuntimeError(f"抖音账号 Chrome 调试端口 {port} 没有可用 context")
+        raise RuntimeError(f"Chrome 调试端口 {port} 没有可用 context")
     ctx = contexts[0]
     try:
         setattr(ctx, "_lobster_cdp_external", True)
@@ -452,7 +466,7 @@ async def _ensure_douyin_cdp_context(
             start_url,
         ]
         creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) or 0) if sys.platform == "win32" else 0
-        logger.info("[BROWSER][DOUYIN-CDP] launch chrome profile=%s port=%s url=%s", profile_dir[-80:], port, start_url)
+        logger.info("[BROWSER][CDP] launch chrome profile=%s port=%s url=%s", profile_dir[-80:], port, start_url)
         subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -466,7 +480,7 @@ async def _ensure_douyin_cdp_context(
                 break
             await asyncio.sleep(0.35)
         if not _is_port_open(port):
-            raise RuntimeError(f"抖音账号 Chrome 启动失败，调试端口 {port} 未打开。")
+            raise RuntimeError(f"Chrome 启动失败，调试端口 {port} 未打开。")
     return await _connect_douyin_cdp_context(profile_dir, port)
 
 

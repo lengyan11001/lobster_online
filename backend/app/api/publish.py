@@ -15,7 +15,10 @@ import httpx
 from publisher.browser_pool import browser_options_from_publish_meta
 
 try:
-    from publisher.browser_pool import douyin_workbench_browser_options_from_publish_meta
+    from publisher.browser_pool import (
+        douyin_workbench_browser_options_from_publish_meta,
+        wechat_channels_browser_options_from_publish_meta,
+    )
 except ImportError:
     # Keep backend bootable if an older OTA only partially updated publisher/.
     def douyin_workbench_browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
@@ -24,6 +27,10 @@ except ImportError:
         if not opts.get("viewport"):
             opts = {**opts, "viewport": {"width": 1440, "height": 960}}
         return opts
+
+    def wechat_channels_browser_options_from_publish_meta(meta: Optional[dict]) -> Dict[str, Any]:
+        opts = douyin_workbench_browser_options_from_publish_meta(meta)
+        return {**opts, "cdp_start_url": "https://channels.weixin.qq.com/platform"}
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import OperationalError
@@ -347,6 +354,13 @@ def _account_browser_profile_and_options(
                 getattr(acct, "id", None),
                 profile_dir,
                 douyin_front,
+            )
+        if acct.platform == "wechat_channels":
+            # 2026-11-07 需求：视频号改用抖音同款 CDP 方式拉系统 Chrome。
+            opts = wechat_channels_browser_options_from_publish_meta(acct.meta)
+            logger.info(
+                "[PUBLISH][WECHAT] browser cdp=True profile=%s",
+                profile_dir,
             )
         if acct.platform == "tiktok":
             # TikTok 对浏览器指纹/媒体编码很敏感。优先使用系统 Chrome 品牌
