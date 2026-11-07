@@ -508,3 +508,27 @@ def test_batch_generate_cancel_marks_pending():
     assert r.status_code == 200
     with s._GEN_LOCK:
         assert [x["status"] for x in s._BATCH_GEN[job_id]["items"]] == ["done", "skipped"]
+
+
+def test_should_trim_duration():
+    from backend.app.api import skill_deps as s
+
+    assert s._should_trim(8.04, 6) is False
+    assert s._should_trim(22.0, 9) is True
+    assert s._should_trim(0, 9) is False
+    assert s._should_trim(9, 0) is False
+
+
+def test_trim_media_shortens_video(tmp_path, monkeypatch):
+    import subprocess
+
+    from backend.app.api import skill_deps as s
+
+    ffmpeg = s.FFMPEG_DIR / "ffmpeg.exe"
+    if not ffmpeg.is_file():
+        return
+    src = tmp_path / "long.mp4"
+    subprocess.run([str(ffmpeg), "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "testsrc=size=160x120:rate=12", "-t", "2", "-pix_fmt", "yuv420p", str(src)], check=True)
+    assert s._trim_media(src, 1.0) is True
+    assert abs(s._media_duration(src) - 1.0) < 0.25

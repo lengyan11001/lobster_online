@@ -908,6 +908,41 @@ def _persona() -> Dict[str, Any]:
         return {}
 
 
+def _media_duration(path: Path) -> float:
+    ffprobe = FFMPEG_DIR / "ffprobe.exe"
+    if not ffprobe.is_file():
+        return 0.0
+    r = _run([str(ffprobe), "-v", "error", "-show_entries", "format=duration",
+              "-of", "csv=p=0", str(path)], timeout=60)
+    try:
+        return float((r.stdout or "").strip())
+    except Exception:
+        return 0.0
+
+
+def _should_trim(actual: float, requested: float) -> bool:
+    if requested <= 0 or actual <= 0:
+        return False
+    return actual > requested * 1.35 + 0.5
+
+
+def _trim_media(path: Path, seconds: float) -> bool:
+    if seconds <= 0 or not path.is_file():
+        return False
+    ffmpeg = FFMPEG_DIR / "ffmpeg.exe"
+    tmp = path.with_name(path.stem + ".trim" + path.suffix)
+    r = _run([str(ffmpeg), "-y", "-loglevel", "error", "-i", str(path),
+              "-t", "%.3f" % seconds, "-c:v", "libx264", "-preset", "veryfast",
+              "-crf", "18", "-c:a", "aac", "-b:a", "192k",
+              "-movflags", "+faststart", str(tmp)], timeout=600)
+    if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 1024:
+        tmp.replace(path)
+        return True
+    if tmp.is_file():
+        tmp.unlink(missing_ok=True)
+    return False
+
+
 def _build_segments(text: str, shot: str) -> List[Dict[str, Any]]:
     chunks = _split_script(text)
     res = "480p" if shot == "pip" else "720p"
@@ -1531,7 +1566,15 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                 job["result_url"] = url
                 job["task_id"] = task_id or ""
                 raise
-            generated.append({"id": seg.get("id"), "path": str(dest), "url": url, "task_id": task_id or ""})
+            requested = float(payload.get("duration") or 0)
+            actual = _media_duration(dest)
+            trimmed = False
+            if _should_trim(actual, requested):
+                trimmed = _trim_media(dest, requested)
+                job["message"] = "第 %d 段实际 %.1fs，已裁到 %.1fs" % (idx, actual, requested)
+            generated.append({"id": seg.get("id"), "path": str(dest), "url": url, "task_id": task_id or "",
+                              "requested_seconds": round(requested, 2), "actual_seconds": round(actual, 2),
+                              "trimmed": trimmed})
             job["done"] = idx
 
         # 拼接
@@ -1546,6 +1589,12 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                       "-i", str(list_file), "-c", "copy", str(final)], timeout=300)
             if r.returncode != 0:
                 raise RuntimeError("拼接失败：%s" % (r.stderr or "")[-500:])
+
+        target_total = sum(float(g.get("requested_seconds") or 0) for g in generated)
+        actual_total = _media_duration(final)
+        if _should_trim(actual_total, target_total):
+            if _trim_media(final, target_total):
+                job["message"] = "成片实际 %.1fs，已裁到 %.1fs" % (actual_total, target_total)
 
         items = _load_projects()
         for row in items:

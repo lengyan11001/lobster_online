@@ -914,6 +914,8 @@
     var busy = false;
     var projectTitle = '';
     var lastStage = '';
+    var quote = null;
+    var quoteTimer = null;
 
     function close() { if (timer) clearInterval(timer); if (modal.parentNode) modal.parentNode.removeChild(modal); }
     function sampleSrc(t) {
@@ -923,10 +925,23 @@
     function estimate() {
       var text = (modal.querySelector('#kbCreateScript') || {}).value || '';
       var chars = text.replace(/\s/g, '').length;
-      var secs = Math.max(6, Math.ceil(chars / 5.4));
-      var credits = secs * 17;
       var el = modal.querySelector('#kbCreateMeta');
-      if (el) el.textContent = chars ? ('预计 ' + secs + ' 秒 · 约 ' + credits + ' credits（创建后以实际分段为准）') : '按字数自动分段，生成时扣算力';
+      if (!el) return;
+      if (!chars) { el.textContent = '按字数自动分段，生成时扣算力'; quote = null; return; }
+      var guessSecs = Math.max(6, Math.ceil(chars / 5.4));
+      el.textContent = '预计 ' + guessSecs + ' 秒 · 计算真实分段中…';
+      clearTimeout(quoteTimer);
+      quoteTimer = setTimeout(function () {
+        req('/api/skills/digital-human-koubo/quote', {
+          method: 'POST', headers: headers(),
+          body: JSON.stringify({ text: text, shot: 'full', resolution: '720p' })
+        }).then(function (d) {
+          quote = d;
+          el.textContent = '预计 ' + d.total_seconds + ' 秒 · ' + d.segments.length + ' 段 · 约 ' + d.total_credits + ' credits';
+        }).catch(function () {
+          el.textContent = '预计 ' + guessSecs + ' 秒 · 以创建后实际分段为准';
+        });
+      }, 450);
     }
 
     function paintForm() {
@@ -1019,6 +1034,8 @@
         state.render.packaged = false;
         state.render.previewReady = false;
         loadProjects();
+        var meta = modal.querySelector('#kbCreateMeta');
+        if (meta) meta.textContent = '实际 ' + p.total_seconds + ' 秒 · ' + (p.segments || []).length + ' 段 · ' + p.total_credits + ' credits';
         paintSteps(1, 8, '提交生成');
         lastStage = 'generate';
         req('/api/skills/digital-human-koubo/projects/' + p.id + '/generate', {
@@ -1069,11 +1086,17 @@
       req('/api/skills/digital-human-koubo/projects/' + project.id).then(function (p) {
         state.project = p; state.render.templateId = tpl.id;
         renderPreview(); renderProjects();
+        var warn = document.getElementById('kbCreateWarn');
+        if (warn) {
+          var bad = (p.generated_segments || []).filter(function (x) { return x.trimmed; });
+          if (bad.length) warn.textContent = '检测到上游时长异常：' + bad.map(function (x) { return (x.requested_seconds || '?') + 's→' + (x.actual_seconds || '?') + 's 已裁剪'; }).join('；');
+        }
       }).catch(function () { });
       var src = API + '/api/skills/digital-human-koubo/projects/' + project.id + '/preview?v=' + Date.now();
       var body = modal.querySelector('.kb-create-body');
       body.innerHTML = '<div class="kb-create-head"><h3>完成：已套用「' + esc(tpl.name || tpl.id) + '」</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
         + '<div class="kb-create-sub">底片已按你的照片和口播生成，并自动套用了这个模板。下面是 480p 预览；满意后去工作台生成高清。</div>'
+        + '<div class="kb-create-sub" id="kbCreateWarn" style="color:#b45309;"></div>'
         + '<div class="kb-create-result"><video controls autoplay playsinline src="' + esc(src) + '"></video></div>'
         + '<div class="kb-create-actions"><a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + project.id + '/preview') + '" download>下载预览</a><span style="flex:1"></span><button type="button" class="kb-btn" data-switch>换个模板</button><button type="button" class="kb-btn-primary" data-go>去工作台</button></div>';
       body.querySelector('[data-close]').onclick = close;
