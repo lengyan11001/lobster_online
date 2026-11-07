@@ -1500,6 +1500,58 @@ def _download_media(url: str, dest: Path, attempts: int = 5) -> int:
     raise RuntimeError("视频下载失败（已重试 %s 次）：%s" % (attempts, " | ".join(errors)[-800:]))
 
 
+def _hifly_platform_base() -> str:
+    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+
+
+def _hifly_platform_headers(token: str, installation_id: str = "") -> Dict[str, str]:
+    auth = token if token.lower().startswith("bearer ") else "Bearer " + token
+    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    return headers
+
+
+def _hifly_platform_create(token: str, payload: Dict[str, Any], installation_id: str = "") -> Dict[str, Any]:
+    base = _hifly_platform_base()
+    if not base:
+        raise RuntimeError("未配置 AUTH_SERVER_BASE，无法提交海螺数字人任务")
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0), trust_env=False) as client:
+        resp = client.post(base + "/api/hifly/my/video/create-by-tts",
+                           headers=_hifly_platform_headers(token, installation_id), json=payload)
+    data = resp.json() if resp.content else {}
+    if resp.status_code >= 400 or (isinstance(data, dict) and data.get("ok") is False):
+        detail = data.get("detail") if isinstance(data, dict) else resp.text
+        raise RuntimeError(str(detail or resp.text)[:400])
+    return data if isinstance(data, dict) else {}
+
+
+def _hifly_wait_video(token: str, task_id: str, installation_id: str = "", timeout_seconds: int = 1800) -> str:
+    base = _hifly_platform_base()
+    if not base or not task_id:
+        return ""
+    deadline = time.time() + max(60, int(timeout_seconds))
+    while time.time() < deadline:
+        time.sleep(10)
+        try:
+            with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0), trust_env=False) as client:
+                resp = client.post(base + "/api/hifly/my/video/task",
+                                   headers=_hifly_platform_headers(token, installation_id),
+                                   json={"task_id": task_id})
+            data = resp.json() if resp.content else {}
+        except Exception:
+            continue
+        item = data.get("item") if isinstance(data, dict) and isinstance(data.get("item"), dict) else data
+        item = item if isinstance(item, dict) else {}
+        status = str(item.get("status") or "").lower()
+        url = str(item.get("video_url") or item.get("source_video_url") or "").strip()
+        if status in ("success", "succeed", "succeeded", "completed", "done") and url:
+            return url
+        if status in ("failed", "error"):
+            return ""
+    return ""
+
+
 def _poll_creative_job(token: str, job_id: str, installation_id: str = "", timeout_seconds: int = 1800) -> str:
     """平台把海螺长任务包装成 creative-job；轮询它拿最终视频地址。失败返回空串。"""
     base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
@@ -1582,9 +1634,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                     "aigc_flag": 0,
                     "st_show": 0,
                 }
-                resp = _mcp_call(token, "invoke_capability",
-                                 {"capability_id": "hifly.video.create_by_tts", "payload": payload},
-                                 timeout=300.0, installation_id=installation_id)
+                resp = _hifly_platform_create(token, payload, installation_id)
             else:
                 payload = {
                     "model": opts["model"] or GEN_MODEL,
@@ -1603,14 +1653,12 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
             urls = _deep_urls(resp, (".mp4", ".webm"))
             if not urls and task_id:
                 job["message"] = "第 %d 段已提交，等待生成（task %s）" % (idx, task_id[:12])
-                if generator == "hifly" and "-" in task_id:
-                    # 海螺长任务被包装成平台 creative-job，走平台接口轮询
-                    job["message"] = "第 %d 段已提交，等待海螺生成（job %s）" % (idx, task_id[:12])
-                    url = _poll_creative_job(token, task_id, installation_id)
-                    if url:
-                        urls = [url]
-                    else:
-                        raise RuntimeError("第 %d 段海螺生成失败或超时（job %s）" % (idx, task_id[:12]))
+                if generator == "hifly":
+                    job["message"] = "第 %d 段已提交，等待海螺生成（task %s）" % (idx, task_id[:12])
+                    url = _hifly_wait_video(token, task_id, installation_id)
+                    if not url:
+                        raise RuntimeError("第 %d 段海螺生成失败或超时（task %s）" % (idx, task_id[:12]))
+                    urls = [url]
                 else:
                     deadline = time.time() + 1800
                     while time.time() < deadline:
