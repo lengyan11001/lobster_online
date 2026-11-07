@@ -2507,6 +2507,10 @@
     var deleteBtn = canDelete
       ? '<button type="button" class="btn btn-ghost btn-sm shanjian-avatar-delete-btn" data-avatar-asset-id="' + escapeHtml(item.id) + '">删除数字人</button>'
       : '';
+    // 用已保存的训练素材重新训练（换通道/失效时用，不需要用户重录）
+    var retrainBtn = canDelete
+      ? '<button type="button" class="btn btn-ghost btn-sm shanjian-avatar-retrain-btn" data-retrain-profile-id="' + escapeHtml(item.id) + '">重新训练</button>'
+      : '';
     return ''
       + '<article class="shanjian-avatar-card' + (selected ? ' is-selected' : '') + '" data-avatar-key="' + escapeHtml(key) + '" style="cursor:pointer;">'
       + '<div class="shanjian-avatar-card-cover">'
@@ -2524,6 +2528,7 @@
       + '<div class="shanjian-avatar-card-actions">'
       + '<button type="button" class="btn btn-ghost btn-sm shanjian-avatar-detail-btn shanjian-avatar-pick-btn" data-avatar-key="' + escapeHtml(key) + '">查看详情</button>'
       + '<button type="button" class="btn ' + (selected ? 'btn-ghost' : 'btn-primary') + ' btn-sm shanjian-avatar-pick-btn" data-avatar-id="' + escapeHtml(item.avatar) + '" data-avatar-usable="' + (canUse ? '1' : '0') + '" data-avatar-status="' + escapeHtml(statusLabel) + '"' + (canUse ? '' : ' disabled title="' + escapeHtml(statusHint || (statusLabel + '：暂不能用来生成视频')) + '"') + '>' + escapeHtml(canUse ? (selected ? '已选择' : '选择数字人') : '不可用') + '</button>'
+      + retrainBtn
       + deleteBtn
       + '</div>'
       + '</div>'
@@ -2774,6 +2779,43 @@
               btn.disabled = false;
               btn.textContent = oldText;
               showMessage(err && err.message ? err.message : '删除数字人失败', true);
+            });
+        });
+      };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.shanjian-avatar-retrain-btn'), function(btn) {
+      btn.onclick = function(ev) {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        var pid = btn.getAttribute('data-retrain-profile-id') || '';
+        if (!pid) return;
+        showConfirmDialog({
+          title: '重新训练数字人',
+          message: '将使用之前保存的训练素材重新提交训练，不需要重新录制。训练完成后才能生成视频。',
+          confirmText: '开始训练'
+        }).then(function(confirmed) {
+          if (!confirmed) return;
+          var oldText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '提交中...';
+          request('/api/shanjian-digital-human/profile/' + encodeURIComponent(pid) + '/retrain', {})
+            .then(function(data) {
+              var target = (state.avatarLibrary.mine || []).filter(function(item) {
+                return String(item && item.id) === String(pid);
+              })[0];
+              if (target) {
+                target.status = 'processing';
+                target.error_message = '';
+                if (data && data.profile) Object.assign(target, data.profile);
+              }
+              renderAvatarLibrary();
+              btn.disabled = false;
+              btn.textContent = oldText;
+              showMessage('已用原素材重新提交训练，训练完成后即可使用。', false);
+            })
+            .catch(function(err) {
+              btn.disabled = false;
+              btn.textContent = oldText;
+              showMessage(err && err.message ? err.message : '重新训练失败', true);
             });
         });
       };
