@@ -1432,7 +1432,7 @@ async def wecom_send_group_message(
 # ---------------------------------------------------------------------------
 MATERIAL_TEMPLATE_HEADERS = ["企业名称", "公司介绍", "产品名称", "产品介绍", "常用话术"]
 
-ONLINE_DEMO_COMPANY_INFO = """必火AI龙虾 Online 是面向中小企业、门店老板、市场销售团队的一套岗位级 AI 员工系统。它不是单一聊天机器人，而是把内容生产、获客、客服、资料记忆、定时任务、素材库、视频/图文生成、发布协同整合到一个本地化工作台里。核心目标是让老板用更少的人完成更多日常执行：写文案、做图、做视频、整理素材、自动回复客户、沉淀客户资料，并把过程结果留痕。"""
+ONLINE_DEMO_COMPANY_INFO = """AI 员工工作台是面向中小企业、门店老板、市场销售团队的一套岗位级 AI 员工系统。它不是单一聊天机器人，而是把内容生产、获客、客服、资料记忆、定时任务、素材库、视频/图文生成、发布协同整合到一个本地化工作台里。核心目标是让老板用更少的人完成更多日常执行：写文案、做图、做视频、整理素材、自动回复客户、沉淀客户资料，并把过程结果留痕。"""
 
 ONLINE_DEMO_PRODUCT_INTRO = """【核心能力】
 1. 智能对话：根据企业资料、个人记忆和已配置技能理解用户需求，协助生成文案、图片、视频、公众号文章等内容。
@@ -1478,7 +1478,7 @@ def _build_wecom_material_template_bytes() -> bytes:
     writer = csv.writer(buf)
     writer.writerow(MATERIAL_TEMPLATE_HEADERS)
     writer.writerow([
-        "必火AI龙虾 Online",
+        "AI员工工作台",
         ONLINE_DEMO_COMPANY_INFO,
         "岗位级AI员工工作台",
         ONLINE_DEMO_PRODUCT_INTRO,

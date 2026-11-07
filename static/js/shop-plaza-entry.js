@@ -31,7 +31,7 @@
     var token = clientToken();
     if (token) url += '&token=' + encodeURIComponent(token);
     var brand = brandContext();
-    // OEM 品牌：把品牌标记和显示名带给广场页，页面据此换名换标题，不露必火
+    // OEM 品牌：把品牌标记和显示名带给广场页，页面据此换名换标题，不露默认品牌
     if (brand.mark && brand.mark !== 'bihuo') {
       url += '&brand=' + encodeURIComponent(brand.mark);
       if (brand.name) url += '&brand_name=' + encodeURIComponent(brand.name);

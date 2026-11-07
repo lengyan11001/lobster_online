@@ -3585,7 +3585,7 @@ async def _generate_scheduled_content(
     run_id: str = "",
 ) -> Dict[str, Any]:
     if capability_id == "hifly.video.create_by_tts":
-        ability = "必火数字人"
+        ability = "数字人口播"
     elif capability_id == "goal.image.pipeline":
         ability = "文案+创意图片"
     elif capability_id == "create.video.pipeline":
@@ -3602,7 +3602,7 @@ async def _generate_scheduled_content(
     if capability_id == "hifly.video.create_by_tts":
         system = (
             "你是定时任务内容编排器。只输出 JSON 对象，不要 Markdown。\n"
-            "根据用户记忆和可用素材，为必火数字人口播生成内容。"
+            "根据用户记忆和可用素材，为数字人口播生成内容。"
             "字段：title(string), script(string), caption_hint(string)。"
             "script 是数字人口播文案，中文，一句话，必须完整通顺，最多 50 个字。"
             "不要先写长文案，不要分段，不要要求用户补充信息，不要编造素材 ID。"
