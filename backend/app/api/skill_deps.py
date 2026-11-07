@@ -1500,6 +1500,42 @@ def _download_media(url: str, dest: Path, attempts: int = 5) -> int:
     raise RuntimeError("视频下载失败（已重试 %s 次）：%s" % (attempts, " | ".join(errors)[-800:]))
 
 
+def _poll_creative_job(token: str, job_id: str, installation_id: str = "", timeout_seconds: int = 1800) -> str:
+    """平台把海螺长任务包装成 creative-job；轮询它拿最终视频地址。失败返回空串。"""
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if not base or not job_id:
+        return ""
+    headers = {"Authorization": token if token.lower().startswith("bearer ") else "Bearer " + token}
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+    deadline = time.time() + max(60, int(timeout_seconds))
+    while time.time() < deadline:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+                resp = client.get(base + "/api/creative-jobs/" + job_id, headers=headers)
+            data = resp.json() if resp.content else {}
+        except Exception:
+            time.sleep(8)
+            continue
+        job = data.get("job") if isinstance(data, dict) else {}
+        job = job if isinstance(job, dict) else {}
+        status = str(job.get("status") or "").lower()
+        result = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
+        for key in ("video_url", "url", "open_url", "preview_url", "output_url"):
+            value = str(result.get(key) or "").strip()
+            if value.startswith("http"):
+                return value
+        for item in (job.get("saved_assets") or []):
+            if isinstance(item, dict):
+                value = str(item.get("source_url") or item.get("url") or "").strip()
+                if value.startswith("http"):
+                    return value
+        if status in ("failed", "error", "cancelled", "canceled"):
+            return ""
+        time.sleep(10)
+    return ""
+
+
 def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, installation_id: str = "") -> None:
     job = _GEN[job_id]
     try:
@@ -1567,16 +1603,25 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
             urls = _deep_urls(resp, (".mp4", ".webm"))
             if not urls and task_id:
                 job["message"] = "第 %d 段已提交，等待生成（task %s）" % (idx, task_id[:12])
-                deadline = time.time() + 1800
-                while time.time() < deadline:
-                    time.sleep(10)
-                    poll = _mcp_call(token, "invoke_capability",
-                                     {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
-                                     timeout=180.0, installation_id=installation_id)
-                    urls = _deep_urls(poll, (".mp4", ".webm"))
-                    if urls:
-                        break
-                    status = str(_deep_find(poll, ("status", "state")) or "")
+                if generator == "hifly" and "-" in task_id:
+                    # 海螺长任务被包装成平台 creative-job，走平台接口轮询
+                    job["message"] = "第 %d 段已提交，等待海螺生成（job %s）" % (idx, task_id[:12])
+                    url = _poll_creative_job(token, task_id, installation_id)
+                    if url:
+                        urls = [url]
+                    else:
+                        raise RuntimeError("第 %d 段海螺生成失败或超时（job %s）" % (idx, task_id[:12]))
+                else:
+                    deadline = time.time() + 1800
+                    while time.time() < deadline:
+                        time.sleep(10)
+                        poll = _mcp_call(token, "invoke_capability",
+                                         {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
+                                         timeout=180.0, installation_id=installation_id)
+                        urls = _deep_urls(poll, (".mp4", ".webm"))
+                        if urls:
+                            break
+                        status = str(_deep_find(poll, ("status", "state")) or "")
                     if status.lower() in ("failed", "error", "cancelled", "canceled"):
                         raise RuntimeError("第 %d 段生成失败：%s" % (idx, str(poll)[:300]))
             if not urls:
