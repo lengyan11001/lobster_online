@@ -496,6 +496,7 @@
   }
 
   function openCopyModal(title, html) {
+    if (title !== '历史记录') clearCopyHistoryPoll();
     var modal = copyEl('douyinCopyModal');
     var titleEl = copyEl('douyinCopyModalTitle');
     var body = copyEl('douyinCopyModalBody');
