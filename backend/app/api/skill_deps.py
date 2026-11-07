@@ -458,9 +458,12 @@ class QuoteBody(BaseModel):
 
 
 def _split_script(text: str) -> List[str]:
+    """按句子打包分段：单段不超过约 15 秒（4 字/秒 ≈ 58 字），过短尾段并入上一段。"""
     raw = re.sub(r"\s+", " ", (text or "").strip())
     if not raw:
         return []
+    max_chars = 58
+    min_tail = 12
     parts = re.split(r"(?<=[。！？；!?;])", raw)
     out: List[str] = []
     buf = ""
@@ -468,18 +471,22 @@ def _split_script(text: str) -> List[str]:
         part = part.strip()
         if not part:
             continue
-        if len(buf) + len(part) <= 46:
+        if len(buf) + len(part) <= max_chars:
             buf += part
             continue
         if buf:
             out.append(buf)
             buf = ""
-        while len(part) > 46:
-            out.append(part[:46])
-            part = part[46:]
+        while len(part) > max_chars:
+            out.append(part[:max_chars])
+            part = part[max_chars:]
         buf = part
     if buf:
         out.append(buf)
+    # 过短尾段并入上一段，避免几十个字被切成两段
+    if len(out) >= 2 and len(out[-1]) < min_tail and len(out[-2]) + len(out[-1]) <= max_chars + 12:
+        out[-2] = out[-2] + out[-1]
+        out.pop()
     return out
 
 
