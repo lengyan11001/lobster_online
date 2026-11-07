@@ -54,6 +54,19 @@
     el.textContent = '[' + t + '] ' + msg + '\n' + el.textContent;
   }
 
+  function toast(msg) {
+    var el = document.getElementById('kbToast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'kbToast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(el._toastTimer);
+    el._toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2800);
+  }
+
   function injectCss() {
     if ($('kbStyle')) return;
     var css = ''
@@ -185,6 +198,8 @@
       + '#content-digital-human-koubo .kb-multi-row span{font-size:10.5px;color:#94a3b8;}'
       + '#content-digital-human-koubo .kb-multi-row select,#content-digital-human-koubo .kb-multi-row input{border:1px solid #e2e8f0;border-radius:7px;padding:5px 7px;font-size:11px;color:#334155;background:#fff;min-width:0;}'
       + '#content-digital-human-koubo .kb-multi-note{font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.6;}'
+      + '#kbToast{position:fixed;left:50%;top:22px;transform:translateX(-50%) translateY(-6px);z-index:10100;background:rgba(15,23,42,.94);color:#fff;padding:10px 16px;border-radius:12px;font-size:12px;line-height:1.5;box-shadow:0 16px 40px rgba(0,0,0,.28);opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;max-width:80vw;}'
+      + '#kbToast.show{opacity:1;transform:translateX(-50%) translateY(0);}'
       + '#kbMatrixModal{position:fixed;inset:0;z-index:10080;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
       + '#kbMatrixModal .kb-matrix{width:min(94vw,760px);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
       + '#kbMatrixModal .kb-matrix-head{display:flex;align-items:center;justify-content:space-between;}'
@@ -931,6 +946,7 @@
       if (copy.lowerTitle) notes.push('落版「' + copy.lowerTitle + (copy.lowerSub ? ' / ' + copy.lowerSub : '') + '」');
       if (copy.cta) notes.push('结尾「' + copy.cta + '」');
       var fav = (state.render.favoriteTemplateIds || []).indexOf(current.id) >= 0;
+      var hasBase = !!(state.project && state.project.status === 'generated');
       modal.innerHTML = '<div class="kb-detail">'
         + '<div class="kb-detail-media">' + media + videoHtml(current) + '</div>'
         + '<div class="kb-detail-body">'
@@ -940,12 +956,20 @@
         + (chips ? '<div class="kb-detail-sec"><b>适用场景</b><div class="kb-detail-chips">' + chips + '</div></div>' : '')
         + '<div class="kb-detail-sec"><b>画面设置</b><div class="kb-detail-kv">' + kv + '</div></div>'
         + (notes.length ? '<div class="kb-detail-sec"><b>这版会怎么排</b><div class="kb-detail-note">' + esc(notes.join(' · ')) + '</div></div>' : '')
-        + '<div class="kb-detail-actions"><button type="button" class="kb-btn" data-detail-fav>' + (fav ? '★ 已收藏' : '☆ 收藏') + '</button><span style="flex:1"></span><button type="button" class="kb-btn-primary" data-detail-apply>套用这个模板</button></div>'
+        + '<div class="kb-detail-note" style="margin-top:10px;">套用只换包装模板，不重新生成底片。' + (hasBase ? '点下面按钮直接出 480p 预览。' : '先生成底片，再回来预览。') + '</div>'
+        + '<div class="kb-detail-actions"><button type="button" class="kb-btn" data-detail-fav>' + (fav ? '★ 已收藏' : '☆ 收藏') + '</button><span style="flex:1"></span><button type="button" class="kb-btn-primary" data-detail-apply>' + (hasBase ? '套用并预览 480p' : '套用这个模板') + '</button></div>'
         + '</div></div>';
       modal.querySelector('[data-detail-close]').onclick = close;
       modal.querySelector('[data-detail-apply]').onclick = function () {
-        selectTemplate(current.id);
+        var name = current.name || id;
+        selectTemplate(current.id, true);
         close();
+        if (hasBase) {
+          toast('已套用「' + name + '」，正在生成 480p 预览…');
+          startRender('preview');
+        } else {
+          toast('已套用「' + name + '」；生成底片后自动使用');
+        }
         var card = document.querySelector('#kbTplGrid [data-tpl="' + current.id + '"]');
         if (card) { try { card.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }
       };
@@ -1100,7 +1124,7 @@
     paintForm();
   }
 
-  function selectTemplate(id) {
+  function selectTemplate(id, silent) {
     if (!id) return;
     state.render.templateId = id;
     touchTemplate(id);
@@ -1112,7 +1136,9 @@
     if (state.project) { state.project.rendered = false; state.project.preview_rendered = false; }
     renderPack(); renderPreview();
     var found = (state.render.templates || []).filter(function (t) { return t.id === id; })[0];
-    log('已选模板：' + ((found && found.name) || id));
+    var name = (found && found.name) || id;
+    log('已选模板：' + name);
+    if (!silent) toast('已套用「' + name + '」' + (state.project && state.project.status === 'generated' ? '，点「预览效果」看 480p 成片' : '，生成底片后自动使用'));
   }
 
   function loadRecommendations() {
@@ -1219,7 +1245,8 @@
       + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'recent' ? ' on' : '') + '" data-cat="recent">最近</button>'
       + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'favorites' ? ' on' : '') + '" data-cat="favorites">收藏</button>'
       + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
-    return '<div class="kb-card"><div class="kb-sec-title">模板库<small>' + tpls.length + ' 个模板 · 先看风格，生成后一键套用</small></div>'
+    var curTpl = tpls.filter(function (x) { return x.id === r.templateId; })[0];
+    return '<div class="kb-card"><div class="kb-sec-title">模板库<small>' + (curTpl ? '当前：' + esc(curTpl.name || curTpl.id) + ' · ' : '') + tpls.length + ' 个模板 · 先看风格，生成后一键套用</small></div>'
       + '<div class="kb-hint" style="margin:0 0 10px;">先在左侧上传形象照、写口播稿并生成底片。模板可以先看样片；底片出来后同一段素材可反复换模板，不重复扣算力。</div>'
       + '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>'
       + '<div class="kb-templates" id="kbTplGrid"></div>'
@@ -1275,7 +1302,8 @@
       + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'recent' ? ' on' : '') + '" data-cat="recent">最近</button>'
       + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'favorites' ? ' on' : '') + '" data-cat="favorites">收藏</button>'
       + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
-    box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (tpls.length || 0) + ' 个模板</small></div>'
+    var curTpl = tpls.filter(function (x) { return x.id === r.templateId; })[0];
+    box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (curTpl ? '当前：' + esc(curTpl.name || curTpl.id) + ' · ' : '') + (tpls.length || 0) + ' 个模板</small></div>'
       + '<div class="kb-title-input"><label>标题</label><input id="kbTemplateTitle" maxlength="24" placeholder="留空自动从口播稿提取" value="' + esc(r.title || '') + '"><small>可选</small></div>'
       + renderMultiBlock()
       + ((r.recommendations && r.recommendations.length) ? '<div class="kb-recommend"><b>推荐</b>' + r.recommendations.map(function (x) { return '<button type="button" class="kb-rec-chip" data-rec="' + esc(x.template_id) + '" title="' + esc(x.reason || '') + '">' + esc(x.name) + '</button>'; }).join('') + '</div>' : '')
