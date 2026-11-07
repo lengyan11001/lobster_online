@@ -1936,6 +1936,24 @@
     return rows;
   }
 
+  function openHiflyAvatarCreate() {
+    // 海螺形象训练入口在「海螺数字人」工作台里；这里跳过去并自动打开创建弹窗
+    try {
+      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+      else if (typeof _switchToHiddenView === 'function') _switchToHiddenView('hifly-digital-human');
+    } catch (err) {}
+    var tries = 0;
+    var timer = setInterval(function() {
+      var btn = document.getElementById('hiflyOpenAvatarCreateBtn');
+      if (btn) {
+        clearInterval(timer);
+        try { btn.click(); } catch (err) {}
+      } else if (++tries > 60) {
+        clearInterval(timer);
+      }
+    }, 150);
+  }
+
   function renderPersonalDigitalHumanResources() {
     var resources = normalizePersonalDigitalHumanResources(state.personalDigitalHumanResources);
     state.personalDigitalHumanResources = resources;
@@ -3650,6 +3668,9 @@
     });
     if ($('psDigitalHumanTemplateChooseBtn')) $('psDigitalHumanTemplateChooseBtn').addEventListener('click', function() {
       openPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanAvatarCreateBtn')) $('psDigitalHumanAvatarCreateBtn').addEventListener('click', function() {
+      openHiflyAvatarCreate();
     });
     if ($('psDigitalHumanAvatarChooseBtn')) $('psDigitalHumanAvatarChooseBtn').addEventListener('click', function() {
       openPersonalDigitalHumanResourcePicker('avatar');

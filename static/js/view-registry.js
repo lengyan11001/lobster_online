@@ -43,8 +43,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20261028-video-link-control-v2',
-    scripts: '/static/js/personal-settings.js?v=20261028-video-link-control-v2',
+    html: '/static/views/personal-settings.html?v=20261107-hifly-avatar-entry-v1',
+    scripts: '/static/js/personal-settings.js?v=20261107-hifly-avatar-entry-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
