@@ -647,6 +647,7 @@ def _sanitize_options(raw: Any) -> Dict[str, Any]:
     out["compose_scene"] = bool(raw.get("compose_scene"))
     generator_ids = {g["id"] for g in _GENERATOR_OPTIONS}
     out["generator"] = raw.get("generator") if raw.get("generator") in generator_ids else "hifly"
+    out["hifly_avatar_id"] = str(raw.get("hifly_avatar_id") or "").strip()[:128]
     return out
 
 
@@ -1535,7 +1536,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                 # 海螺数字人：音频驱动，口型由供应商保证；形象/声音取「当前」已训练资源
                 payload = {
                     "title": str(project.get("title") or "数字人口播")[:20],
-                    "avatar": "current",
+                    "avatar": opts.get("hifly_avatar_id") or "current",
                     "voice": "current",
                     "text": str(seg.get("text") or "").strip(),
                     "aigc_flag": 0,

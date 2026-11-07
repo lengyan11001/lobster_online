@@ -363,17 +363,65 @@
     }).join('');
   }
 
+  function hiflyAvatarBlockHtml() {
+    if (!state.form || state.form.generator !== 'hifly') return '';
+    var rows = (state.hiflyAvatars && state.hiflyAvatars.items) || [];
+    var selected = String(state.form.hifly_avatar_id || '');
+    var opts = '<option value="">当前默认（个人IP里最新的形象）</option>' + rows.map(function(it) {
+      var id = String(it.avatar || it.hifly_avatar_id || '').trim();
+      var title = it.title || id || '海螺形象';
+      return '<option value="' + esc(id) + '"' + (id === selected ? ' selected' : '') + '>' + esc(title) + '</option>';
+    }).join('');
+    return '<div class="kb-hifly-avatar">'
+      + '<label style="display:block;font-size:11px;color:#64748b;margin-bottom:4px;">海螺形象</label>'
+      + '<select id="kbHiflyAvatar" style="width:100%;">' + opts + '</select>'
+      + '<div style="display:flex;gap:6px;margin-top:6px;">'
+      + '<button type="button" class="kb-btn" id="kbHiflyRefresh">刷新形象</button>'
+      + '<button type="button" class="kb-btn" id="kbHiflyCreate">训练新形象</button>'
+      + '</div>'
+      + '<div style="font-size:10.5px;color:#94a3b8;margin-top:4px;">海螺走已训练形象，口型由海螺保证</div>'
+      + '</div>';
+  }
+
+  function loadHiflyAvatars() {
+    var base = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : API;
+    if (!base) return Promise.resolve();
+    return fetch(base + '/api/hifly/my/avatar/list?page=1&size=100', { headers: headers() })
+      .then(function(r) { return r.json().catch(function() { return {}; }); })
+      .then(function(d) {
+        state.hiflyAvatars = { items: (d && d.items) || [] };
+        renderAvatar();
+      })
+      .catch(function() {
+        state.hiflyAvatars = { items: [] };
+        renderAvatar();
+      });
+  }
+
+  function openHiflyAvatarCreate() {
+    try {
+      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+      else if (typeof _switchToHiddenView === 'function') _switchToHiddenView('hifly-digital-human');
+    } catch (err) {}
+    var tries = 0;
+    var timer = setInterval(function() {
+      var btn = document.getElementById('hiflyOpenAvatarCreateBtn');
+      if (btn) { clearInterval(timer); try { btn.click(); } catch (err) {} }
+      else if (++tries > 60) { clearInterval(timer); }
+    }, 150);
+  }
+
   function renderAvatar() {
     var box = $('kbAvatar');
     if (!box) return;
     if (!state.upload) {
-      box.innerHTML = '<div class="kb-drop" id="kbDrop"><b>点击或拖入人物照片</b><small>jpg / png / webp，≤ 15MB，短边 ≥ 512</small><input type="file" id="kbFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>';
+      box.innerHTML = hiflyAvatarBlockHtml() + '<div class="kb-drop" id="kbDrop"><b>点击或拖入人物照片</b><small>jpg / png / webp，≤ 15MB，短边 ≥ 512</small><input type="file" id="kbFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>';
       bindUpload();
       return;
     }
     var c = state.upload.checks || {};
     var hasChecks = !!(c && c.width);
-    box.innerHTML = '<img class="kb-photo" src="' + esc(API + state.upload.url) + '" alt="形象照">'
+    box.innerHTML = hiflyAvatarBlockHtml() + '<img class="kb-photo" src="' + esc(API + state.upload.url) + '" alt="形象照">'
       + (hasChecks
         ? '<ul class="kb-checks">'
           + '<li class="' + (Math.min(c.width || 0, c.height || 0) >= 512 ? 'ok' : 'warn') + '">分辨率 ' + (c.width || 0) + '×' + (c.height || 0) + '</li>'
@@ -2038,6 +2086,16 @@
   }
 
   function bind() {
+    document.addEventListener('click', function(evt) {
+      var t = evt.target;
+      if (!t || !t.id) return;
+      if (t.id === 'kbHiflyRefresh') { evt.preventDefault(); loadHiflyAvatars(); }
+      else if (t.id === 'kbHiflyCreate') { evt.preventDefault(); openHiflyAvatarCreate(); }
+    });
+    document.addEventListener('change', function(evt) {
+      var t = evt.target;
+      if (t && t.id === 'kbHiflyAvatar') { state.form.hifly_avatar_id = t.value || ''; markDirty(); }
+    });
     var ta = $('kbText');
     if (ta) ta.addEventListener('input', function () { updateCount(); markDirty(); });
     var tgl = $('kbParamToggle');
