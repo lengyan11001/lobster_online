@@ -328,6 +328,10 @@
       + '#kbDepsModal .kb-install{font-size:12px;padding:4px 10px;border-radius:7px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;}';
     var style = document.createElement('style');
     style.id = 'kbStyle';
+    css += '#content-digital-human-koubo .kb-gen-row{display:flex;gap:8px;margin:0 0 8px;}'
+      + '#content-digital-human-koubo .kb-gen-row label{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:999px;font-size:12px;color:#475569;cursor:pointer;background:#fff;}'
+      + '#content-digital-human-koubo .kb-gen-row input{accent-color:#2563eb;}'
+      + '#content-digital-human-koubo .kb-hifly-avatar select{height:34px;border:1px solid #e2e8f0;border-radius:8px;padding:0 8px;font-size:12px;}';
     style.textContent = css;
     document.head.appendChild(style);
   }
@@ -336,7 +340,12 @@
     return '<div class="kb-root">'
       + '<aside class="kb-side">'
       + '  <div class="kb-side-head"><h3>数字人3.0</h3><span class="kb-pill" id="kbStatus">未保存</span></div>'
-      + '  <div class="kb-card"><div class="kb-sec-title">形象<small>一张正脸照</small></div><div id="kbAvatar"></div></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">形象<small id="kbGenLabel">海螺数字人</small></div>'
+      + '    <div class="kb-gen-row" id="kbGenRow">'
+      + '      <label><input type="radio" name="kbGen" value="hifly" checked><span>海螺数字人</span></label>'
+      + '      <label><input type="radio" name="kbGen" value="grok"><span>Grok AI</span></label>'
+      + '    </div>'
+      + '    <div id="kbAvatar"></div></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">口播稿<small id="kbCount">0 字</small></div><textarea id="kbText" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒。"></textarea></div>'
       + '  <div class="kb-card"><button type="button" class="kb-collapse" id="kbParamToggle">高级设置<span id="kbParamSummary">一般不用改</span></button><div class="kb-params" id="kbParams"></div></div>'
       + '  <div class="kb-cta"><button type="button" class="kb-btn-primary" id="kbGenerate">生成第 1 段</button>'
@@ -351,6 +360,17 @@
       + '  <div id="kbPack"></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">项目记录<span><small id="kbProjCount"></small> <button type="button" class="kb-btn" id="kbProjRefresh" style="margin-left:8px;">刷新</button></span></div><div id="kbProjects"></div></div>'
       + '  <div class="kb-log" id="kbLog">准备就绪</div>'
+      + '<div id="kbHiflyTrainModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,.45);align-items:center;justify-content:center;">'
+      + '  <div style="width:min(420px,92vw);background:#fff;border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(15,23,42,.25);">'
+      + '    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>训练海螺形象</b><button type="button" id="kbHiflyTrainClose" style="border:0;background:transparent;font-size:18px;cursor:pointer;">×</button></div>'
+      + '    <label class="kb-field">名称<input id="kbHiflyTrainName" maxlength="20" placeholder="例如：老板形象"></label>'
+      + '    <label class="kb-field">类型<select id="kbHiflyTrainType"><option value="image">图片</option><option value="video">视频</option></select></label>'
+      + '    <label class="kb-field">文件<input id="kbHiflyTrainFile" type="file" accept="image/*,video/*"></label>'
+      + '    <label style="display:flex;gap:6px;font-size:11px;color:#64748b;align-items:center;margin:6px 0;"><input type="checkbox" id="kbHiflyTrainAgree"> 我确认拥有该肖像授权</label>'
+      + '    <div style="display:flex;gap:8px;justify-content:flex-end;"><button type="button" class="kb-btn" id="kbHiflyTrainCancel">取消</button><button type="button" class="kb-btn-primary" id="kbHiflyTrainSubmit">提交训练</button></div>'
+      + '    <div class="kb-hint" id="kbHiflyTrainMsg" style="margin-top:8px;"></div>'
+      + '  </div>'
+      + '</div>'
       + '</section></div>';
   }
 
@@ -398,22 +418,90 @@
       });
   }
 
-  function openHiflyAvatarCreate() {
-    try {
-      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
-      else if (typeof _switchToHiddenView === 'function') _switchToHiddenView('hifly-digital-human');
-    } catch (err) {}
+  function openHiflyTrainModal() {
+    var m = $('kbHiflyTrainModal');
+    if (!m) return;
+    m.style.display = 'flex';
+    var msg = $('kbHiflyTrainMsg');
+    if (msg) msg.textContent = '';
+  }
+
+  function closeHiflyTrainModal() {
+    var m = $('kbHiflyTrainModal');
+    if (m) m.style.display = 'none';
+  }
+
+  function hiflyCloudBase() {
+    return (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : API;
+  }
+
+  function submitHiflyTrain() {
+    var name = (($('kbHiflyTrainName') || {}).value || '').trim();
+    var type = (($('kbHiflyTrainType') || {}).value || 'image');
+    var fileInput = $('kbHiflyTrainFile');
+    var file = fileInput && fileInput.files ? fileInput.files[0] : null;
+    var agree = !!($('kbHiflyTrainAgree') || {}).checked;
+    var msg = $('kbHiflyTrainMsg');
+    function setMsg(t) { if (msg) msg.textContent = t; }
+    if (!name) return setMsg('请填写名称');
+    if (!file) return setMsg('请选择图片或视频');
+    if (!agree) return setMsg('请先勾选肖像授权确认');
+    var base = hiflyCloudBase();
+    var fd = new FormData();
+    fd.append('title', name);
+    fd.append('aigc_flag', '0');
+    if (typeof token !== 'undefined' && token) fd.append('token', token);
+    fd.append('file', file, file.name || (type === 'video' ? 'avatar.mp4' : 'avatar.jpg'));
+    setMsg('提交训练中…');
+    var url = base + (type === 'video' ? '/api/hifly/my/avatar/create-by-video-upload' : '/api/hifly/my/avatar/create-by-image-upload');
+    fetch(url, { method: 'POST', headers: authOnly(), body: fd })
+      .then(function(r) {
+        return r.json().catch(function() { return {}; }).then(function(d) {
+          if (!r.ok || d.ok === false) throw new Error(d.detail || ('HTTP ' + r.status));
+          return d;
+        });
+      })
+      .then(function(d) {
+        var taskId = (d && (d.task_id || (d.item && d.item.task_id))) || '';
+        if (!taskId) { setMsg('已提交，但没拿到任务号，请稍后刷新形象列表'); loadHiflyAvatars(); return; }
+        setMsg('训练中，完成后会自动刷新…');
+        pollHiflyAvatarTask(taskId);
+      })
+      .catch(function(e) { setMsg('提交失败：' + (e && e.message ? e.message : e)); });
+  }
+
+  function pollHiflyAvatarTask(taskId) {
+    var base = hiflyCloudBase();
     var tries = 0;
     var timer = setInterval(function() {
-      var btn = document.getElementById('hiflyOpenAvatarCreateBtn');
-      if (btn) { clearInterval(timer); try { btn.click(); } catch (err) {} }
-      else if (++tries > 60) { clearInterval(timer); }
-    }, 150);
+      tries += 1;
+      fetch(base + '/api/hifly/my/avatar/task?task_id=' + encodeURIComponent(taskId), { headers: authOnly() })
+        .then(function(r) { return r.json().catch(function() { return {}; }); })
+        .then(function(d) {
+          var st = String((d && (d.status || (d.item && d.item.status))) || '').toLowerCase();
+          if (st === 'success' || st === 'succeed' || st === 'completed' || st === 'done') {
+            clearInterval(timer);
+            var msg = $('kbHiflyTrainMsg'); if (msg) msg.textContent = '训练完成';
+            closeHiflyTrainModal();
+            loadHiflyAvatars();
+          } else if (st === 'failed' || st === 'error') {
+            clearInterval(timer);
+            var msg2 = $('kbHiflyTrainMsg'); if (msg2) msg2.textContent = '训练失败：' + String((d && (d.message || d.error)) || '');
+          }
+        })
+        .catch(function() {});
+      if (tries > 120) clearInterval(timer);
+    }, 5000);
   }
 
   function renderAvatar() {
     var box = $('kbAvatar');
     if (!box) return;
+    var gen = (state.form && state.form.generator) || 'hifly';
+    if (gen === 'hifly') {
+      box.innerHTML = hiflyAvatarBlockHtml();
+      return;
+    }
     if (!state.upload) {
       box.innerHTML = hiflyAvatarBlockHtml() + '<div class="kb-drop" id="kbDrop"><b>点击或拖入人物照片</b><small>jpg / png / webp，≤ 15MB，短边 ≥ 512</small><input type="file" id="kbFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>';
       bindUpload();
@@ -458,7 +546,6 @@
     packs.forEach(function (o) { (groups[o.group] = groups[o.group] || []).push(o); });
     box.innerHTML = ''
       + '<div class="kb-grid2">'
-      + '  <label class="kb-field">底片来源<select id="kbGenerator">' + optList('generators', f.generator) + '</select></label>'
       + '  <label class="kb-field">主播<select id="kbHost">' + optList('hosts', f.host) + '</select></label>'
       + '  <label class="kb-field">景别<select id="kbShot">' + optList('shots', f.shot) + '</select></label>'
       + '  <label class="kb-field">比例<select id="kbRatio"><option value="">跟随主播</option>' + ((state.options && state.options.ratios) || ['9:16', '16:9']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.ratio === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
@@ -479,7 +566,7 @@
 
   function readParams() {
     state.form = {
-      generator: ($('kbGenerator') || {}).value || 'hifly',
+      generator: (document.querySelector('input[name="kbGen"]:checked') || {}).value || 'hifly',
       host: ($('kbHost') || {}).value || 'tank',
       shot: ($('kbShot') || {}).value || 'full',
       ratio: ($('kbRatio') || {}).value || '',
@@ -2090,11 +2177,19 @@
       var t = evt.target;
       if (!t || !t.id) return;
       if (t.id === 'kbHiflyRefresh') { evt.preventDefault(); loadHiflyAvatars(); }
-      else if (t.id === 'kbHiflyCreate') { evt.preventDefault(); openHiflyAvatarCreate(); }
+      else if (t.id === 'kbHiflyCreate') { evt.preventDefault(); openHiflyTrainModal(); }
+      else if (t.id === 'kbHiflyTrainClose' || t.id === 'kbHiflyTrainCancel') { evt.preventDefault(); closeHiflyTrainModal(); }
+      else if (t.id === 'kbHiflyTrainSubmit') { evt.preventDefault(); submitHiflyTrain(); }
     });
     document.addEventListener('change', function(evt) {
       var t = evt.target;
-      if (t && t.id === 'kbHiflyAvatar') { state.form.hifly_avatar_id = t.value || ''; markDirty(); }
+      if (t && t.id === 'kbHiflyAvatar') { state.form.hifly_avatar_id = t.value || ''; markDirty(); return; }
+      if (t && t.name === 'kbGen') {
+        state.form.generator = t.value || 'hifly';
+        if ($('kbGenLabel')) $('kbGenLabel').textContent = state.form.generator === 'hifly' ? '海螺数字人' : 'Grok AI';
+        renderAvatar();
+        markDirty();
+      }
     });
     var ta = $('kbText');
     if (ta) ta.addEventListener('input', function () { updateCount(); markDirty(); });
@@ -2121,6 +2216,7 @@
       root.dataset.kouboBuilt = '1';
       injectCss();
       bind();
+      if ((state.form && state.form.generator || 'hifly') === 'hifly') loadHiflyAvatars();
       renderAll();
       updateCount();
     }
