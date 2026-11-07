@@ -2063,7 +2063,12 @@
             log('生成完成');
             loadProjects();
             req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) {
-              state.project = p; state.render.packaged = !!p.rendered; renderAll();
+              state.project = p; state.render.packaged = !!p.rendered; state.render.previewReady = !!p.preview_rendered; renderAll();
+              // 底片完成后自动套用当前模板出预览，避免只拿到没有样式的底片
+              if (!state.render.packaged && !state.render.previewReady && state.render.templateId) {
+                log('底片完成，自动套用模板：' + state.render.templateId);
+                startRender('preview');
+              }
             });
           } else {
             log('生成失败：' + (job.error || job.message || ''));
