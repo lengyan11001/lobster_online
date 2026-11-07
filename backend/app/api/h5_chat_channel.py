@@ -12126,6 +12126,8 @@ def _shanjian_video_create_payload(
                 "template_scene",
                 "style_id",
                 "materials",
+                "asset_groups",
+                "digital_human_asset_groups",
                 "material_sound_switch",
                 "introduce_name",
                 "introduce_description",
