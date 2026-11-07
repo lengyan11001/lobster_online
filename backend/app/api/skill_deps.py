@@ -1615,9 +1615,18 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                     deadline = time.time() + 1800
                     while time.time() < deadline:
                         time.sleep(10)
-                        poll = _mcp_call(token, "invoke_capability",
-                                         {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
-                                         timeout=180.0, installation_id=installation_id)
+                        try:
+                            poll = _mcp_call(token, "invoke_capability",
+                                             {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
+                                             timeout=180.0, installation_id=installation_id)
+                        except Exception as poll_err:
+                            detail = str(poll_err)
+                            if "404" in detail or "任务不存在" in detail:
+                                raise RuntimeError(
+                                    "海螺任务查询失败：平台侧查不到 task %s（task.get_result 返回 404），已停止等待。"
+                                    "请重启客户端后重试，或先把底片来源切到 Grok。" % task_id[:16]
+                                ) from poll_err
+                            raise
                         urls = _deep_urls(poll, (".mp4", ".webm"))
                         if urls:
                             break
