@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import random
 
 import os
 import re
@@ -342,13 +343,11 @@ async def select_mix_materials(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    """Broad material selection for oral mix cutting.
+    """分组内随机选素材（不按文案打分、不用 AI 判断）。
 
-    Digital-human selection is deliberately strict (keyword gate, max 8).
-    Material mix needs enough usable footage, so this endpoint ranks every
-    matching image/video but never drops a whole group just because a tag did
-    not match.  The user chooses the output duration; Shanjian performs the
-    actual multi-clip mix with the oral audio.
+    - 个人IP设置里已选素材分组时，只在分组内随机挑；
+    - 上限 20 条（闪剪素材上限）；
+    - 素材库标签再少也能出片，用户只管选成片时长。
     """
     from .assets import _asset_hidden_from_library, _creative_candidate_group, ensure_shanjian_compliant_copy
     from ..models import Asset
@@ -372,18 +371,9 @@ async def select_mix_materials(
         group = _creative_candidate_group(row.meta)
         if wanted and group not in wanted:
             continue
-        text = " ".join([str(row.filename or ""), str(row.tags or "")])
-        # Broad score: more matching characters is better, but zero-score
-        # footage remains eligible so a sparse asset library still produces a
-        # video.  Videos rank before images at equal score.
-        score = 0
-        for size in (6, 5, 4, 3, 2):
-            for start in range(0, max(0, len(script) - size + 1)):
-                piece = script[start:start + size]
-                if piece and piece in text:
-                    score += size * size
-        candidates.append({"row": row, "kind": kind, "score": score, "group": group})
-    candidates.sort(key=lambda item: (-int(item["score"]), 0 if item["kind"] == "video" else 1, -int(item["row"].id)))
+        candidates.append({"row": row, "kind": kind, "group": group})
+    # 分组内随机挑选，不按文案打分、不做 AI 判断
+    random.shuffle(candidates)
     selected = candidates[:limit]
     materials: List[Dict[str, Any]] = []
     for item in selected:

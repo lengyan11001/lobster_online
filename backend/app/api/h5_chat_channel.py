@@ -12639,7 +12639,7 @@ async def _run_shanjian_material_mix_workflow(
         base,
         headers,
         run_id,
-        "正在按口播内容挑选素材" + (f"（分组：{'、'.join(groups[:6])}）" if groups else "（全素材库）"),
+        "正在从素材分组随机挑选素材" + (f"（分组：{'、'.join(groups[:6])}）" if groups else "（全素材库）"),
     )
 
     def _picked(result: Dict[str, Any]) -> List[Dict[str, Any]]:
