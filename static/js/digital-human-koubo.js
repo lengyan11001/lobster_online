@@ -1075,7 +1075,7 @@
       quoteTimer = setTimeout(function () {
         req('/api/skills/digital-human-koubo/quote', {
           method: 'POST', headers: headers(),
-          body: JSON.stringify({ text: text, shot: 'full', resolution: '720p' })
+          body: JSON.stringify({ text: text, shot: 'full', resolution: '720p', generator: (state.form && state.form.generator) || 'hifly' })
         }).then(function (d) {
           quote = d;
           el.textContent = '预计 ' + d.total_seconds + ' 秒 · ' + d.segments.length + ' 段 · 约 ' + d.total_credits + ' credits';
@@ -1990,7 +1990,7 @@
     log('生成分段与报价…');
     return req('/api/skills/digital-human-koubo/quote', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ text: text, shot: state.form.shot, resolution: state.form.resolution || '' })
+      body: JSON.stringify({ text: text, shot: state.form.shot, resolution: state.form.resolution || '', generator: state.form.generator || 'hifly' })
     }).then(function (d) {
       state.quote = d;
       state.script = text;

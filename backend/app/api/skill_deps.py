@@ -455,6 +455,7 @@ class QuoteBody(BaseModel):
     shot: str = "full"
     host: str = "tank"
     resolution: str = ""
+    generator: str = "hifly"
 
 
 def _split_script(text: str) -> List[str]:
@@ -492,7 +493,11 @@ def _split_script(text: str) -> List[str]:
 
 @router.post("/api/skills/digital-human-koubo/quote", summary="口播稿分段与 credits 报价")
 def koubo_quote(body: QuoteBody):
-    chunks = _split_script(body.text)
+    if (body.generator or "").strip().lower() == "hifly":
+        whole = re.sub(r"\s+", " ", (body.text or "").strip())
+        chunks = [whole] if whole else []
+    else:
+        chunks = _split_script(body.text)
     if not chunks:
         raise HTTPException(status_code=400, detail="文案为空")
     shot = body.shot if body.shot in {"full", "pip", "vlog", "depth"} else "full"
@@ -501,7 +506,10 @@ def koubo_quote(body: QuoteBody):
     total = 0
     for i, chunk in enumerate(chunks, 1):
         chars = len(re.sub(r"[\s，。、：；！？,.:;!?“”]", "", chunk))
-        secs = max(6, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
+        if (body.generator or "").strip().lower() == "hifly":
+            secs = max(5, min(600, math.ceil(chars / CPS_ZH + 1.0)))
+        else:
+            secs = max(6, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
         credits = secs * CREDITS_PER_SEC[res]
         total += credits
         segs.append({
@@ -960,13 +968,20 @@ def _trim_media(path: Path, seconds: float) -> bool:
     return False
 
 
-def _build_segments(text: str, shot: str) -> List[Dict[str, Any]]:
-    chunks = _split_script(text)
+def _build_segments(text: str, shot: str, generator: str = "grok") -> List[Dict[str, Any]]:
+    if (generator or "").strip().lower() == "hifly":
+        whole = re.sub(r"\s+", " ", (text or "").strip())
+        chunks = [whole] if whole else []
+    else:
+        chunks = _split_script(text)
     res = "480p" if shot == "pip" else "720p"
     out: List[Dict[str, Any]] = []
     for i, chunk in enumerate(chunks, 1):
         chars = len(re.sub(r"[\s，。、：；！？,.:;!?“”]", "", chunk))
-        secs = max(6, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
+        if (generator or "").strip().lower() == "hifly":
+            secs = max(5, min(600, math.ceil(chars / CPS_ZH + 1.0)))
+        else:
+            secs = max(6, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
         out.append({
             "id": "s%d" % i,
             "text": chunk,
@@ -994,7 +1009,7 @@ def koubo_project_create(body: ProjectBody):
             opts["host"] = body.host
     shot = opts["shot"]
     host = opts["host"]
-    segs = _build_segments(body.script, shot)
+    segs = _build_segments(body.script, shot, opts.get("generator") or "grok")
     if not segs:
         raise HTTPException(status_code=400, detail="文案为空")
     res = opts["resolution"] or ("480p" if shot == "pip" else "720p")
