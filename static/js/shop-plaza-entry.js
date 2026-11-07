@@ -16,10 +16,26 @@
     try { return String(localStorage.getItem('token') || ''); } catch (e) { return ''; }
   }
 
+  function brandContext() {
+    var mark = '';
+    try {
+      mark = typeof getLobsterBrandMark === 'function' ? String(getLobsterBrandMark() || '') : '';
+    } catch (e) { mark = ''; }
+    var b = window.__LOBSTER_BRANDING || {};
+    var name = String(b.display_name || b.document_title || '').replace(/\s*AI.*$/i, '').trim();
+    return { mark: mark, name: name };
+  }
+
   function buildUrl() {
     var url = SHOP_PLAZA_URL;
     var token = clientToken();
     if (token) url += '&token=' + encodeURIComponent(token);
+    var brand = brandContext();
+    // OEM 品牌：把品牌标记和显示名带给广场页，页面据此换名换标题，不露必火
+    if (brand.mark && brand.mark !== 'bihuo') {
+      url += '&brand=' + encodeURIComponent(brand.mark);
+      if (brand.name) url += '&brand_name=' + encodeURIComponent(brand.name);
+    }
     return url;
   }
 

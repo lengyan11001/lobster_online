@@ -547,6 +547,8 @@ function applyBrandingFromApi() {
         // 登录页也必须是“干净的”：OEM 品牌拉不到时不能露出打包默认的“必火智能”。
         var emptyLoginBrand = document.getElementById('authLoginBrandName');
         if (emptyLoginBrand) emptyLoginBrand.textContent = '';
+        var emptyHomeBrand = document.getElementById('chatHomeBrandName');
+        if (emptyHomeBrand) emptyHomeBrand.textContent = '';
         var emptyVision = document.getElementById('authLoginVision');
         if (emptyVision) emptyVision.style.display = 'none';
         var emptyPartner = document.getElementById('brandPartnerLogo');
@@ -571,6 +573,11 @@ function applyBrandingFromApi() {
         try { localStorage.setItem('lobster_server_api_base', routedServerBase); } catch (eServerBase) {}
       }
       if (b.document_title) document.title = b.document_title;
+      var homeBrandName = document.getElementById('chatHomeBrandName');
+      if (homeBrandName) {
+        var homeBrandText = String(b.display_name || b.document_title || '').replace(/\s*AI.*$/i, '').trim();
+        homeBrandName.textContent = homeBrandText || (b.mark === 'bihuo' ? '必火智能' : '智能');
+      }
       // 云端 branding 返回的是服务器相对路径（/client/oem/<mark>/icon_32.png），
       // 页面跑在 127.0.0.1 上会被解析成本机地址 -> 404 -> 右上角 logo 空白。
       // 非 /static、/api 的站内路径统一补成公网服务器地址。

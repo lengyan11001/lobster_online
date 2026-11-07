@@ -151,16 +151,23 @@ def _gateway_headers(request: Request, token: str, user_id: int) -> Dict[str, st
     return headers
 
 
+def _skill_label(request: Request) -> str:
+    """OEM 客户端不露必火品牌：非 bihuo 品牌统一显示中性技能名。"""
+    mark = str(request.headers.get("X-Lobster-Brand") or "").strip().lower()
+    return "必火2.5" if mark in ("", "bihuo") else "智能视频 2.5"
+
+
 async def _assert_server_permission(request: Request, user: _ServerUser) -> None:
+    label = _skill_label(request)
     token = _raw_token(request)
     if not token:
-        raise HTTPException(status_code=401, detail="请先登录后再使用必火2.5")
+        raise HTTPException(status_code=401, detail=f"请先登录后再使用{label}")
     cache_key = f"{int(user.id)}:{hashlib.sha256(token.encode('utf-8')).hexdigest()}"
     now = time.monotonic()
     cached = _PERMISSION_CACHE.get(cache_key)
     if cached and cached[0] > now:
         if not cached[1]:
-            raise HTTPException(status_code=403, detail="当前账号未开通必火2.5，请联系管理员")
+            raise HTTPException(status_code=403, detail=f"当前账号未开通{label}，请联系管理员")
         return
 
     try:
@@ -171,23 +178,23 @@ async def _assert_server_permission(request: Request, user: _ServerUser) -> None
             )
     except httpx.HTTPError as exc:
         logger.warning("[bihuo25] permission check failed: %s", exc)
-        raise HTTPException(status_code=503, detail="暂时无法验证必火2.5使用权限，请稍后重试") from exc
+        raise HTTPException(status_code=503, detail=f"暂时无法验证{label}使用权限，请稍后重试") from exc
     if response.status_code in (401, 403):
         raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
     if response.status_code != 200:
         logger.warning("[bihuo25] permission check HTTP %s: %s", response.status_code, response.text[:500])
-        raise HTTPException(status_code=503, detail="暂时无法验证必火2.5使用权限，请稍后重试")
+        raise HTTPException(status_code=503, detail=f"暂时无法验证{label}使用权限，请稍后重试")
     try:
         allowed = bool((response.json() or {}).get("allowed"))
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="必火2.5权限返回格式异常，请稍后重试") from exc
+        raise HTTPException(status_code=503, detail=f"{label}权限返回格式异常，请稍后重试") from exc
     _PERMISSION_CACHE[cache_key] = (now + _PERMISSION_CACHE_TTL_SECONDS, allowed)
     if len(_PERMISSION_CACHE) > 2000:
         expired = [key for key, item in _PERMISSION_CACHE.items() if item[0] <= now]
         for key in expired:
             _PERMISSION_CACHE.pop(key, None)
     if not allowed:
-        raise HTTPException(status_code=403, detail="当前账号未开通必火2.5，请联系管理员")
+        raise HTTPException(status_code=403, detail=f"当前账号未开通{label}，请联系管理员")
 
 
 async def _call_gateway(
