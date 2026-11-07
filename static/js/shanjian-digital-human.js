@@ -2968,11 +2968,33 @@
     });
   }
 
+  function normalizeHiflyAvatarItem(item) {
+    item = item || {};
+    var avatarId = String(item.avatar || item.hifly_avatar_id || '').trim();
+    var status = String(item.status || '').trim().toLowerCase();
+    return Object.assign({}, item, {
+      id: 'hifly_' + String(item.id || avatarId || ''),
+      provider: 'hifly',
+      avatar: avatarId || ('hifly_' + String(item.id || '')),
+      hifly_avatar_id: avatarId,
+      title: item.title || '海螺数字人',
+      is_mine: true,
+      section_label: '我的数字人 · 海螺',
+      train_ready: status === 'success',
+      status_text: item.status_text || (status === 'success' ? '训练成功' : (status === 'failed' ? '训练失败' : '训练中'))
+    });
+  }
+
   function loadAvatarLibrary(silent) {
     if (!silent) showMessage('正在加载数字人列表...', false);
     state.avatarLibrary.public_loading = false;
-    return requestGet('/api/shanjian-digital-human/profiles').then(function(data) {
-      var rows = (data && data.items ? data.items : []).map(normalizeProfileItem);
+    return Promise.all([
+      requestGet('/api/shanjian-digital-human/profiles').catch(function() { return { items: [] }; }),
+      requestCloudGet('/api/hifly/my/avatar/list?page=1&size=100').catch(function() { return { items: [] }; })
+    ]).then(function(results) {
+      var shanjianItems = (results[0] && results[0].items) ? results[0].items : [];
+      var hiflyItems = (results[1] && results[1].items) ? results[1].items : [];
+      var rows = shanjianItems.map(normalizeProfileItem).concat(hiflyItems.map(normalizeHiflyAvatarItem));
       state.avatarLibrary = {
         mine: rows,
         public: [],
@@ -3942,6 +3964,9 @@
       ? '正在生成真人视频模板剪辑视频...'
       : (mode === 'audio' ? '正在生成声音驱动视频...' : '正在生成数字人口播视频...');
 
+    if (state.selectedAvatar && state.selectedAvatar.provider === 'hifly') {
+      return showMessage('海螺数字人请在「数字人口播」里生成（底片来源选海螺）；这里只做素材库展示。', true);
+    }
     if (!selectedProfileId) return showMessage('请先从右侧选择一个数字人（只有训练成功的数字人能生成视频）。', true);
     if (state.selectedAvatar && state.selectedAvatar.is_mine === true && !profileIsReady(state.selectedAvatar)) {
       var statusInfo = profileStatusInfo(state.selectedAvatar);
@@ -4215,6 +4240,24 @@
       });
   }
 
+  function openHiflyAvatarCreateFromLibrary() {
+    // 海螺形象训练在海螺数字人工作台里；跳过去并自动打开创建弹窗
+    try {
+      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+      else if (typeof _switchToHiddenView === 'function') _switchToHiddenView('hifly-digital-human');
+    } catch (err) {}
+    var tries = 0;
+    var timer = setInterval(function() {
+      var btn = document.getElementById('hiflyOpenAvatarCreateBtn');
+      if (btn) {
+        clearInterval(timer);
+        try { btn.click(); } catch (err) {}
+      } else if (++tries > 60) {
+        clearInterval(timer);
+      }
+    }, 150);
+  }
+
   function bindEvents() {
     ['shanjianAvatarImageAuthText', 'shanjianAvatarVideoAuthText'].forEach(function(id) {
       if ($(id)) $(id).addEventListener('input', function() {
@@ -4340,7 +4383,19 @@
 
     if ($('shanjianOpenAvatarCreateBtn')) $('shanjianOpenAvatarCreateBtn').addEventListener('click', function() {
       resetCreateForms();
-      openModal('shanjianAvatarModeModal');
+      openModal('shanjianAvatarProviderModal');
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-avatar-provider]'), function(btn) {
+      btn.addEventListener('click', function() {
+        var provider = btn.getAttribute('data-avatar-provider');
+        closeModal('shanjianAvatarProviderModal');
+        if (provider === 'hifly') {
+          openHiflyAvatarCreateFromLibrary();
+        } else {
+          resetCreateForms();
+          openModal('shanjianAvatarModeModal');
+        }
+      });
     });
     if ($('shanjianOpenVoiceCreateBtn')) $('shanjianOpenVoiceCreateBtn').addEventListener('click', function() {
       resetCreateForms();
@@ -5021,6 +5076,33 @@
               </div>
             </div>
           </section>
+        </div>
+      </div>
+
+      <div id="shanjianAvatarProviderModal" class="shanjian-modal" style="display:none;">
+        <div class="shanjian-modal-backdrop" data-modal-close="shanjianAvatarProviderModal"></div>
+        <div class="shanjian-modal-card shanjian-mode-card" role="dialog" aria-modal="true" aria-labelledby="shanjianAvatarProviderTitle">
+          <div class="shanjian-modal-head">
+            <h4 id="shanjianAvatarProviderTitle" class="shanjian-modal-title">选择数字人通道</h4>
+            <button type="button" class="shanjian-modal-close" data-modal-close="shanjianAvatarProviderModal" aria-label="关闭">×</button>
+          </div>
+          <div class="shanjian-mode-list">
+            <button type="button" class="shanjian-mode-option" data-avatar-provider="hifly">
+              <span class="shanjian-mode-icon">海</span>
+              <span class="shanjian-mode-copy">
+                <strong>海螺数字人</strong>
+                <span>音频驱动、口型准，用海螺积分训练；训练后可在数字人口播里直接选它出底片。</span>
+              </span>
+              <span class="shanjian-recommend-chip">推荐</span>
+            </button>
+            <button type="button" class="shanjian-mode-option" data-avatar-provider="shanjian">
+              <span class="shanjian-mode-icon">剪</span>
+              <span class="shanjian-mode-copy">
+                <strong>闪剪数字人</strong>
+                <span>闪剪通道训练，适合走闪剪模板/素材混剪。</span>
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
