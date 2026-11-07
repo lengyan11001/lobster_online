@@ -605,8 +605,15 @@ _PACKAGING_OPTIONS = [
 ]
 
 
+_GENERATOR_OPTIONS: List[Dict[str, str]] = [
+    {"id": "hifly", "name": "海螺数字人（默认，口型准）"},
+    {"id": "grok", "name": "Grok 图生视频（快，口型不保证）"},
+]
+
+
 def _options_payload() -> Dict[str, Any]:
     return {
+        "generators": _GENERATOR_OPTIONS,
         "hosts": _HOST_OPTIONS,
         "shots": _SHOT_OPTIONS,
         "languages": _LANGUAGE_OPTIONS,
@@ -638,6 +645,8 @@ def _sanitize_options(raw: Any) -> Dict[str, Any]:
     out["model"] = raw.get("model") if raw.get("model") in model_ids else _MODEL_OPTIONS[0]["id"]
     out["packaging"] = [x for x in (raw.get("packaging") or []) if x in packs][:20]
     out["compose_scene"] = bool(raw.get("compose_scene"))
+    generator_ids = {g["id"] for g in _GENERATOR_OPTIONS}
+    out["generator"] = raw.get("generator") if raw.get("generator") in generator_ids else "hifly"
     return out
 
 
@@ -1521,19 +1530,34 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
         for idx, seg in enumerate(segs, 1):
             job["current"] = idx
             job["message"] = "提交第 %d/%d 段" % (idx, len(segs))
-            payload = {
-                "model": opts["model"] or GEN_MODEL,
-                "prompt": _prompt_for(project, seg),
-                "image_url": image_url,
-                "duration": max(6, min(MAX_SEG_SECONDS, int(seg.get("seconds") or 8))),
-                "ratio": opts["ratio"] or hd.get("ratio") or "9:16",
-                "resolution": opts["resolution"] or seg.get("resolution") or "720p",
-            }
-            if asset_id:
-                payload["asset_id"] = asset_id
-            resp = _mcp_call(token, "invoke_capability",
-                             {"capability_id": "video.generate", "payload": payload}, timeout=300.0,
-                             installation_id=installation_id)
+            generator = opts.get("generator") or "hifly"
+            if generator == "hifly":
+                # 海螺数字人：音频驱动，口型由供应商保证；形象/声音取「当前」已训练资源
+                payload = {
+                    "title": str(project.get("title") or "数字人口播")[:20],
+                    "avatar": "current",
+                    "voice": "current",
+                    "text": str(seg.get("text") or "").strip(),
+                    "aigc_flag": 0,
+                    "st_show": 0,
+                }
+                resp = _mcp_call(token, "invoke_capability",
+                                 {"capability_id": "hifly.video.create_by_tts", "payload": payload},
+                                 timeout=300.0, installation_id=installation_id)
+            else:
+                payload = {
+                    "model": opts["model"] or GEN_MODEL,
+                    "prompt": _prompt_for(project, seg),
+                    "image_url": image_url,
+                    "duration": max(6, min(MAX_SEG_SECONDS, int(seg.get("seconds") or 8))),
+                    "ratio": opts["ratio"] or hd.get("ratio") or "9:16",
+                    "resolution": opts["resolution"] or seg.get("resolution") or "720p",
+                }
+                if asset_id:
+                    payload["asset_id"] = asset_id
+                resp = _mcp_call(token, "invoke_capability",
+                                 {"capability_id": "video.generate", "payload": payload}, timeout=300.0,
+                                 installation_id=installation_id)
             task_id = _deep_find(resp, ("task_id", "taskId", "request_id", "id"))
             urls = _deep_urls(resp, (".mp4", ".webm"))
             if not urls and task_id:
@@ -1566,10 +1590,14 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                 job["result_url"] = url
                 job["task_id"] = task_id or ""
                 raise
-            requested = float(payload.get("duration") or 0)
             actual = _media_duration(dest)
+            if generator == "hifly":
+                # 海螺按文案长度出片，时长以成片为准，不做裁剪
+                requested = actual
+            else:
+                requested = float(payload.get("duration") or 0)
             trimmed = False
-            if _should_trim(actual, requested):
+            if generator != "hifly" and _should_trim(actual, requested):
                 trimmed = _trim_media(dest, requested)
                 job["message"] = "第 %d 段实际 %.1fs，已裁到 %.1fs" % (idx, actual, requested)
             generated.append({"id": seg.get("id"), "path": str(dest), "url": url, "task_id": task_id or "",
