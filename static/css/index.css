@@ -14530,3 +14530,11 @@ body:has(.header.auth-guest) .auth-login-vision-text {
   .agent-profile-extract-template { flex: 1 1 220px; }
   .agent-profile-extract-card footer .btn.btn-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
   .agent-profile-extract-card footer .btn.btn-ghost { background: #fff; border: 1px solid #d7dce4; color: #374151; }
+
+/* 模板定制 · 真实渲染预览 */
+#content-cutcli-template-studio .cutcli-template-real-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+#content-cutcli-template-studio .cutcli-template-real-bar span { color: #6b7280; font-size: 12px; }
+#content-cutcli-template-studio .cutcli-template-real-preview { position: relative; display: flex; flex-direction: column; align-items: center; width: 100%; overflow: hidden; border-radius: 10px; background: #0f172a; }
+#content-cutcli-template-studio .cutcli-template-real-preview video { display: block; width: 100%; max-height: 62vh; background: #000; object-fit: contain; }
+#content-cutcli-template-studio .cutcli-template-real-badge { position: absolute; top: 10px; left: 10px; padding: 3px 8px; border-radius: 999px; background: rgba(15,23,42,.72); color: #fff; font-size: 11px; letter-spacing: .02em; }
+#content-cutcli-template-studio .cutcli-template-real-actions { display: flex; justify-content: center; gap: 8px; width: 100%; padding: 10px; background: #fff; }

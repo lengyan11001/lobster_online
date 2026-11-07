@@ -15,7 +15,10 @@
     jobs: [],
     pollTimer: null,
     videoEventsBound: false,
-    busy: false
+    busy: false,
+    realPreviewUrl: '',
+    realPreviewTemplateId: '',
+    realPreviewBusy: false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -1603,6 +1606,9 @@
     var tpl = templateById(templateId) || state.templates[0];
     if (!tpl) return;
     state.modalTemplateId = tpl.id;
+    state.realPreviewUrl = '';
+    state.realPreviewTemplateId = '';
+    state.realPreviewBusy = false;
     setUploadedFile(null);
     state.overlayTexts = overlayDefaults(tpl);
     state.positionOverrides = defaultPositionOverrides(tpl);
@@ -1653,7 +1659,20 @@
     var overlayTitle = $('cutcliTplModalOverlayTitle');
     if (title) title.textContent = tpl.name || tpl.id || '模板';
     if (sub) sub.textContent = tpl.quality_label || '生成同款';
+    var realPreviewActive = !!(state.realPreviewUrl && state.realPreviewTemplateId === String(tpl.id || ''));
     if (preview) {
+      if (realPreviewActive) {
+        preview.innerHTML = [
+          '<div class="cutcli-template-real-preview">',
+            '<video src="' + esc(state.realPreviewUrl) + '" controls autoplay loop playsinline preload="metadata"></video>',
+            '<div class="cutcli-template-real-badge">真实渲染预览 · 前 5 秒</div>',
+            '<div class="cutcli-template-real-actions">',
+              '<button type="button" class="btn btn-ghost btn-sm" data-cutcli-real-preview-refresh="1">重新渲染</button>',
+              '<button type="button" class="btn btn-ghost btn-sm" data-cutcli-real-preview-exit="1">返回编辑预览</button>',
+            '</div>',
+          '</div>',
+        ].join('');
+      } else {
       var hasSourcePreview = !!media;
       var portraitTemplate = String(tpl.aspect_ratio || '') === '9:16';
       var orientationClass = portraitTemplate ? ' is-portrait' : (state.sourceVideoOrientation === 'portrait' ? ' is-portrait' : ' is-landscape');
@@ -1661,6 +1680,10 @@
         ? ' style="background-image:url(' + esc(state.uploadedPosterUrl) + ');"'
         : '';
       preview.innerHTML = [
+        '<div class="cutcli-template-real-bar">',
+          '<button type="button" class="btn btn-primary btn-sm" data-cutcli-real-preview-run="1"' + (state.realPreviewBusy ? ' disabled' : '') + '>' + (state.realPreviewBusy ? '正在渲染…' : '真实预览（5 秒）') + '</button>',
+          '<span>' + (hasSourcePreview ? '用本机引擎渲染一小段，和成片同一套效果' : '上传视频后可渲染真实预览') + '</span>',
+        '</div>',
         '<div class="cutcli-template-position-editor' + orientationClass + (hasSourcePreview ? '' : ' is-empty') + (state.sourceVideoFallback ? ' use-poster-fallback' : '') + '"' + posterStyle + '>',
           media
             ? videoShellHtml(media, { modal: true, controls: true, muted: true, loop: true, poster: state.uploadedPosterUrl || templatePoster(tpl) })
@@ -1686,6 +1709,7 @@
       if (hasSourcePreview) {
         renderPositionLayer(tpl);
         bindPositionReset(tpl);
+      }
       }
     }
     if (meta) {
@@ -2060,6 +2084,54 @@
       });
   }
 
+  function startRealPreview() {
+    if (state.realPreviewBusy) return;
+    var tpl = modalTemplate();
+    if (!tpl) return;
+    var assetInput = ($('cutcliTplModalAssetIdInput') && $('cutcliTplModalAssetIdInput').value || '').trim();
+    if (!state.uploadedFile && !assetInput) {
+      setModalMsg('\u8bf7\u5148\u4e0a\u4f20\u4e00\u4e2a\u89c6\u9891\uff0c\u6216\u586b\u5199\u89c6\u9891\u7d20\u6750 ID\u3002', true);
+      return;
+    }
+    var overlays = readOverlayTexts();
+    state.realPreviewBusy = true;
+    setModalMsg('\u6b63\u5728\u7528\u672c\u673a\u5f15\u64ce\u6e32\u67d3 5 \u79d2\u771f\u5b9e\u9884\u89c8\u2026', false);
+    renderTemplateModal();
+    var prepare = state.uploadedFile
+      ? uploadVideoLocally(state.uploadedFile)
+      : Promise.resolve({ asset_id: assetInput, video_url: '' });
+    prepare
+      .then(function(source) {
+        var fd = new FormData();
+        if (source.asset_id) fd.append('asset_id', source.asset_id);
+        if (source.video_url && !source.asset_id) fd.append('video_url', source.video_url);
+        overlayFields(tpl).forEach(function(field) {
+          var key = String((field && field.key) || '').trim();
+          if (key) fd.append(key, overlays[key] || '');
+        });
+        fd.append('position_overrides', JSON.stringify(state.positionOverrides || {}));
+        fd.append('max_seconds', '5');
+        return fetch(localApiBase() + '/api/cutcli/local/templates/' + encodeURIComponent(tpl.id || DEFAULT_TEMPLATE_ID) + '/preview', {
+          method: 'POST',
+          headers: formHeaders(),
+          body: fd
+        }).then(parseJsonResponse);
+      })
+      .then(function(data) {
+        if (!data || !data.preview_url) throw new Error('\u9884\u89c8\u6ca1\u6709\u8fd4\u56de\u89c6\u9891\u5730\u5740');
+        state.realPreviewUrl = localApiBase() + data.preview_url + '?t=' + Date.now();
+        state.realPreviewTemplateId = String(tpl.id || '');
+        setModalMsg('\u771f\u5b9e\u9884\u89c8\u5df2\u751f\u6210\uff08\u524d ' + Math.round(Number(data.duration || 5)) + ' \u79d2\uff09\u3002', false);
+      })
+      .catch(function(err) {
+        setModalMsg('\u771f\u5b9e\u9884\u89c8\u5931\u8d25\uff1a' + (err.message || err), true);
+      })
+      .finally(function() {
+        state.realPreviewBusy = false;
+        renderTemplateModal();
+      });
+  }
+
   startRender = function() {
     if (state.busy) return;
     var tpl = modalTemplate();
@@ -2147,6 +2219,21 @@
   }
 
   function bind() {
+    document.addEventListener('click', function(evt) {
+      var target = evt.target;
+      if (!target || !target.closest) return;
+      if (target.closest('[data-cutcli-real-preview-run]') || target.closest('[data-cutcli-real-preview-refresh]')) {
+        evt.preventDefault();
+        startRealPreview();
+        return;
+      }
+      if (target.closest('[data-cutcli-real-preview-exit]')) {
+        evt.preventDefault();
+        state.realPreviewUrl = '';
+        state.realPreviewTemplateId = '';
+        renderTemplateModal();
+      }
+    });
     var back = $('cutcliTplBackBtn');
     if (back) back.addEventListener('click', function() {
       if (typeof showContent === 'function') showContent('skill');

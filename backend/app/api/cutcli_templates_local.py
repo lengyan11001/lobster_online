@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -3786,6 +3786,145 @@ async def extract_local_template_preview_frame(
             temp_path.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+_PREVIEW_DIR = _JOBS_DIR / "previews"
+_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@router.post("/api/cutcli/local/templates/{template_id}/preview", summary="Render a short real preview (same engine as final)")
+async def render_local_template_preview(
+    template_id: str,
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    asset_id: str = Form(""),
+    video_url: str = Form(""),
+    position_overrides: str = Form(""),
+    max_seconds: float = Form(5.0),
+    top_text: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    subtitle: Optional[str] = Form(None),
+    headline: Optional[str] = Form(None),
+    subheadline: Optional[str] = Form(None),
+    badge: Optional[str] = Form(None),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """用和成片完全相同的渲染链路，只渲前 N 秒，给模板定制做真实预览。"""
+    try:
+        template = _resolve_server_template(template_id, _auth_header(request))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    aid = (asset_id or "").strip()
+    source_url = (video_url or "").strip()
+    if file is not None:
+        aid, _uploaded_url = await _save_upload_as_asset(file=file, db=db, user_id=current_user.id)
+        source_url = ""
+    if not aid and not source_url:
+        raise HTTPException(status_code=400, detail="file, asset_id, or video_url is required")
+
+    raw_overlays: Dict[str, Any] = {}
+    for key, value in (
+        ("top_text", top_text),
+        ("title", title),
+        ("subtitle", subtitle),
+        ("headline", headline),
+        ("subheadline", subheadline),
+        ("badge", badge),
+    ):
+        if value is not None:
+            raw_overlays[key] = value
+    overlay_texts = _clean_overlay_texts(raw_overlays, _overlay_fields_from_template(template))
+    clean_position_overrides = _parse_position_overrides(position_overrides)
+
+    job_dir = _JOBS_DIR / ("preview_" + uuid.uuid4().hex[:12])
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        source, _sid, _sname, _public = _resolve_source(
+            db=db,
+            user_id=int(current_user.id),
+            request=request,
+            job_dir=job_dir,
+            asset_id=aid,
+            video_url=source_url,
+        )
+        ffmpeg = find_ffmpeg()
+        info = _probe_video(ffmpeg, source)
+        video_duration = max(0.1, float(info.get("duration") or 0.1))
+        video_width = int(info.get("width") or 1080)
+        video_height = int(info.get("height") or 1920)
+        meta = template.get("meta") if isinstance(template.get("meta"), dict) else {}
+        target_width = int(meta.get("target_width") or video_width)
+        target_height = int(meta.get("target_height") or video_height)
+        fit = str(meta.get("fit") or "cover")
+        font_dir, font_family = _ensure_template_font(template, meta)
+        style = _apply_position_overrides(
+            _apply_orientation_style(
+                _template_caption_style(template),
+                width=target_width,
+                height=target_height,
+            ),
+            clean_position_overrides,
+        )
+        if not style:
+            raise RuntimeError("template has no caption strategy")
+        duration = max(1.0, min(float(max_seconds or 5.0), video_duration))
+        ass_path = job_dir / "preview.ass"
+        out_path = job_dir / "preview.mp4"
+        _write_ass(
+            ass_path,
+            [],
+            style,
+            target_width,
+            target_height,
+            overlay_texts=overlay_texts,
+            duration_sec=duration,
+            font_name=font_family or None,
+        )
+        _render_ffmpeg(
+            ffmpeg=ffmpeg,
+            source=str(source),
+            out_path=out_path,
+            ass_path=ass_path,
+            duration_sec=duration,
+            source_duration_sec=video_duration,
+            target_width=target_width,
+            target_height=target_height,
+            fit=fit,
+            fonts_dir=font_dir,
+        )
+        try:
+            stale = sorted(_PREVIEW_DIR.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)[30:]
+            for item in stale:
+                item.unlink(missing_ok=True)
+        except Exception:
+            pass
+        name = uuid.uuid4().hex + ".mp4"
+        _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(out_path, _PREVIEW_DIR / name)
+        return {
+            "ok": True,
+            "preview_url": f"/api/cutcli/local/templates/preview-files/{name}",
+            "duration": round(duration, 3),
+            "width": target_width,
+            "height": target_height,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("[cutcli-template] real preview failed template=%s error=%s", template_id, exc)
+        raise HTTPException(status_code=400, detail=f"preview render failed: {_safe_error(exc)}") from exc
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@router.get("/api/cutcli/local/templates/preview-files/{name}", summary="Serve rendered template preview file")
+def get_local_template_preview_file(name: str):
+    safe = re.sub(r"[^0-9a-zA-Z_.-]", "", name or "")
+    path = _PREVIEW_DIR / safe
+    if not safe or not path.is_file():
+        raise HTTPException(status_code=404, detail="preview not found")
+    return FileResponse(str(path), media_type="video/mp4")
 
 
 @router.get("/api/cutcli/local/templates", summary="Local CutCLI template list")
