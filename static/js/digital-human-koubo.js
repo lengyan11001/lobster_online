@@ -1672,7 +1672,17 @@
     grid.querySelectorAll('[data-use]').forEach(function (btn) {
       btn.onclick = function (e) {
         e.stopPropagation();
-        openCreateModal(btn.getAttribute('data-use'));
+        var tid = btn.getAttribute('data-use');
+        // 已有底片时，点模板直接套用到当前项目，而不是再开一个创作弹窗
+        if (state.project && state.project.status === 'generated') {
+          if (typeof selectTemplate === 'function') selectTemplate(tid);
+          else state.render.templateId = tid;
+          state.render.previewReady = false;
+          startRender('preview');
+          log('已用当前底片套用模板：' + tid);
+          return;
+        }
+        openCreateModal(tid);
       };
     });
   }
