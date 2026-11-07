@@ -76,3 +76,16 @@ def test_desk_is_search_only_without_ranking_tabs():
     assert "data-douyin-desk-category" not in js
     assert "正在读取服务器快照" not in js
     assert "/api/douyin/platform-information-desk/search" in js
+
+
+def test_copy_tasks_go_to_history_and_can_close_while_running():
+    """2026-11-07 需求：跟创提交后直接进历史记录，弹窗可关，任务后台继续。"""
+    view = (ROOT / "static" / "views" / "douyin-information-desk.html").read_text(encoding="utf-8")
+    assert 'id="douyinDeskHistoryBtn"' in view
+    assert "历史记录" in view
+
+    js = (ROOT / "static" / "js" / "douyin-information-desk.js").read_text(encoding="utf-8")
+    assert "closeCopyModalById('douyinCopyCreateModal')" in js
+    assert "openCopyHistory();" in js
+    assert "copyHistoryPollTimer" in js
+    assert "clearCopyHistoryPoll" in js

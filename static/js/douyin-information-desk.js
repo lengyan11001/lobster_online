@@ -487,9 +487,9 @@
       if (!taskId) throw new Error('没有拿到任务号');
       copyState.taskId = taskId;
       var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
-      setCopyStatus('已提交（扣 ' + charged + ' 算力）·生成中…（弹窗里出片，也可以先关掉，之后在「历史记录」里找回）');
-      pollImitation(taskId, 1, copyEl('douyinCopyModalStatus') || copyEl('douyinCopyStatus'),
-                    copyEl('douyinCopyModalResult') || copyEl('douyinCopyResult'));
+      setCopyStatus('已提交（扣 ' + charged + ' 算力）·后台生成中，可关闭窗口，稍后在「历史记录」查看');
+      closeCopyModalById('douyinCopyCreateModal');
+      openCopyHistory();
     }).catch(function(err) {
       setCopyStatus('失败：' + errorText(err));
     });
@@ -506,6 +506,7 @@
   }
 
   function closeCopyModal() {
+    clearCopyHistoryPoll();
     var modal = copyEl('douyinCopyModal');
     if (modal) modal.hidden = true;
     var body = copyEl('douyinCopyModalBody');
@@ -579,8 +580,20 @@
     openCopyModalById('douyinCopyDetailModal');
   }
 
-  function openCopyHistory() {
-    openCopyModal('生成历史', '<div class="douyin-desk-empty">正在读取生成历史…</div>');
+  var copyHistoryPollTimer = null;
+
+  function clearCopyHistoryPoll() {
+    if (copyHistoryPollTimer) {
+      clearTimeout(copyHistoryPollTimer);
+      copyHistoryPollTimer = null;
+    }
+  }
+
+  function openCopyHistory(silent) {
+    clearCopyHistoryPoll();
+    if (!silent) {
+      openCopyModal('历史记录', '<div class="douyin-desk-empty">正在读取生成历史…</div>');
+    }
     fetch(baseUrl() + '/api/douyin/platform-information-desk/imitation/history?limit=20', {
       headers: typeof authHeaders === 'function' ? authHeaders() : {}
     }).then(function(response) {
@@ -597,6 +610,15 @@
               openCopyRecordDetail(node.getAttribute('data-douyin-history-task'));
             });
           });
+        }
+        var hasRunning = items.some(function (item) {
+          var status = String((item && item.status) || '').toUpperCase();
+          return item && item.task_id && status !== 'SUCCESS' && status !== 'FAILED';
+        });
+        if (hasRunning) {
+          copyHistoryPollTimer = setTimeout(function () {
+            openCopyHistory(true);
+          }, 6000);
         }
       });
     }).catch(function(error) {
@@ -728,14 +750,14 @@
       var close = copyEl(closeId);
       if (close && !close.dataset.bound) {
         close.dataset.bound = '1';
-        close.addEventListener('click', function () { closeCopyModalById(closeId === 'douyinCopyCreateClose' ? 'douyinCopyCreateModal' : 'douyinCopyDetailModal'); });
+        close.addEventListener('click', function () { if (closeId === 'douyinCopyCreateClose') closeCopyModalById('douyinCopyCreateModal'); else closeCopyModal(); });
       }
     });
     ['douyinCopyCreateModal', 'douyinCopyDetailModal'].forEach(function (modalId) {
       var node = copyEl(modalId);
       if (node && !node.dataset.bound) {
         node.dataset.bound = '1';
-        node.addEventListener('click', function (event) { if (event.target === node) node.hidden = true; });
+        node.addEventListener('click', function (event) { if (event.target === node) { if (modalId === 'douyinCopyCreateModal') node.hidden = true; else closeCopyModal(); } });
       }
     });
     var closeBtn = copyEl('douyinCopyModalClose');
@@ -813,7 +835,7 @@
     var historyBtn = document.getElementById('douyinDeskHistoryBtn');
     if (historyBtn && !historyBtn.dataset.bound) {
       historyBtn.dataset.bound = '1';
-      historyBtn.addEventListener('click', loadHistory);
+      historyBtn.addEventListener('click', openCopyHistory);
     }
     var searchBtn = document.getElementById('douyinDeskSearchBtn');
     if (searchBtn && !searchBtn.dataset.bound) {

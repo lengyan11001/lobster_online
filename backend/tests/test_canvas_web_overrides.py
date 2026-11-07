@@ -50,3 +50,14 @@ def test_canvas_proxy_retries_transient_failures():
     assert "await asyncio.sleep(0.6 * (attempt + 1))" in src
     # 生成类 POST 不该重试（避免重复下单）
     assert 'request.method.upper() in {"GET", "HEAD"}' in src
+
+
+def test_canvas_restores_pending_generate_tasks():
+    """2026-11-07：画布生成任务重新进入后要能看到进行中状态。"""
+    html = INDEX.read_text(encoding="utf-8")
+    assert "lobster-canvas-task-restore.js" in html
+    js = (ROOT / "static" / "canvas-web" / "lobster-canvas-task-restore.js").read_text(encoding="utf-8")
+    assert "lobster_canvas_pending_tasks" in js
+    assert "tasks" in js and "create" in js
+    assert "/tasks/query" in js
+    assert "画布任务生成中" in js
