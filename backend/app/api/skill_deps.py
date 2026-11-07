@@ -1507,12 +1507,16 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
         project = next((r for r in items if r.get("id") == project_id), None)
         if not project:
             raise RuntimeError("项目不存在")
-        asset_id, image_url = _ensure_asset(token, project)
         opts = _sanitize_options(project.get("options"))
+        if opts.get("generator") == "hifly":
+            # 海螺模式不需要形象照，直接用已训练形象出底片
+            asset_id, image_url = "", ""
+        else:
+            asset_id, image_url = _ensure_asset(token, project)
         hd = _host_defaults(opts["host"])
         scene_prompt = opts["scene_prompt"] if opts["scene"] == "custom" else next(
             (x["prompt"] for x in _SCENE_OPTIONS if x["id"] == opts["scene"]), "")
-        if opts.get("compose_scene") and scene_prompt:
+        if opts.get("compose_scene") and scene_prompt and image_url:
             try:
                 job["message"] = "合成场景图"
                 image_url = _compose_scene(token, image_url, scene_prompt, installation_id,

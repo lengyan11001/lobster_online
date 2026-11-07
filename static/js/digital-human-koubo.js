@@ -360,7 +360,7 @@
       + '  <div id="kbPack"></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">项目记录<span><small id="kbProjCount"></small> <button type="button" class="kb-btn" id="kbProjRefresh" style="margin-left:8px;">刷新</button></span></div><div id="kbProjects"></div></div>'
       + '  <div class="kb-log" id="kbLog">准备就绪</div>'
-      + '<div id="kbHiflyTrainModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,.45);align-items:center;justify-content:center;">'
+      + '<div id="kbHiflyTrainModal" style="display:none;position:fixed;inset:0;z-index:10100;background:rgba(15,23,42,.45);align-items:center;justify-content:center;">'
       + '  <div style="width:min(420px,92vw);background:#fff;border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(15,23,42,.25);">'
       + '    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>训练海螺形象</b><button type="button" id="kbHiflyTrainClose" style="border:0;background:transparent;font-size:18px;cursor:pointer;">×</button></div>'
       + '    <label class="kb-field">名称<input id="kbHiflyTrainName" maxlength="20" placeholder="例如：老板形象"></label>'
@@ -1045,8 +1045,11 @@
     modal.id = 'kbCreateModal';
     document.body.appendChild(modal);
     var tpl = local;
+    loadHiflyAvatars().catch(function () {});
     var photoId = '';
     var photoUrl = '';
+    var generator = 'hifly';
+    var hiflyAvatarId = '';
     var project = null;
     var timer = null;
     var busy = false;
@@ -1091,7 +1094,18 @@
         + '<div class="kb-create-body">'
         + '<div class="kb-create-head"><h3>用「' + esc(tpl.name || tpl.id) + '」创作</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
         + '<div class="kb-create-sub">模板决定标题、字幕、关键词、角标和 CTA 的样式；底片由你上传的真人照片生成，不需要再选别的模板。</div>'
-        + '<div class="kb-create-sec"><b>1. 上传形象照</b><div class="kb-create-photo" id="kbCreatePhoto"><img id="kbCreatePhotoImg" alt=""><span id="kbCreatePhotoText">点击上传正脸照片（jpg/png/webp，建议正脸、光线均匀）</span></div><input type="file" id="kbCreateFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>'
+        + '<div class="kb-create-sec"><b>1. 底片来源</b>'
+        + '<div class="kb-gen-row" id="kbCreateGenRow">'
+        + '  <label><input type="radio" name="kbCreateGen" value="hifly" checked><span>海螺数字人</span></label>'
+        + '  <label><input type="radio" name="kbCreateGen" value="grok"><span>Grok AI</span></label>'
+        + '</div>'
+        + '<div id="kbCreateHifly" style="margin-top:8px;">'
+        + '  <select id="kbCreateAvatar" style="width:100%;height:34px;border:1px solid #e2e8f0;border-radius:8px;padding:0 8px;font-size:12px;"></select>'
+        + '  <div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="kb-btn" id="kbCreateAvatarRefresh">刷新形象</button><button type="button" class="kb-btn" id="kbCreateAvatarTrain">训练新形象</button></div>'
+        + '  <div class="kb-create-sub" style="margin-top:6px;">海螺走已训练形象，口型由海螺保证；留空用当前默认形象。</div>'
+        + '</div>'
+        + '<div id="kbCreatePhotoWrap" style="display:none;margin-top:8px;"><div class="kb-create-photo" id="kbCreatePhoto"><img id="kbCreatePhotoImg" alt=""><span id="kbCreatePhotoText">点击上传正脸照片（jpg/png/webp，建议正脸、光线均匀）</span></div><input type="file" id="kbCreateFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>'
+        + '</div>'
         + '<div class="kb-create-sec"><b>2. 口播文案</b><textarea id="kbCreateScript" placeholder="粘贴你的口播稿，按字数自动分段"></textarea></div>'
         + '<div class="kb-create-sec"><b>3. 标题（可选）</b><input type="text" id="kbCreateTitle" maxlength="24" placeholder="留空自动从口播稿提取"></div>'
         + '<div class="kb-create-meta" id="kbCreateMeta">按字数自动分段，生成时扣算力</div>'
@@ -1100,6 +1114,32 @@
         + '</div></div>';
       modal.querySelector('[data-close]').onclick = close;
       modal.querySelector('#kbCreatePhoto').onclick = function () { modal.querySelector('#kbCreateFile').click(); };
+      function paintAvatarOptions() {
+        var sel = modal.querySelector('#kbCreateAvatar');
+        if (!sel) return;
+        var rows = (state.hiflyAvatars && state.hiflyAvatars.items) || [];
+        sel.innerHTML = '<option value="">当前默认（个人IP里最新的形象）</option>' + rows.map(function (it) {
+          var id = String(it.avatar || it.hifly_avatar_id || '').trim();
+          var title = it.title || id || '海螺形象';
+          return '<option value="' + esc(id) + '"' + (id === hiflyAvatarId ? ' selected' : '') + '>' + esc(title) + '</option>';
+        }).join('');
+      }
+      paintAvatarOptions();
+      Array.prototype.forEach.call(modal.querySelectorAll('input[name="kbCreateGen"]'), function (radio) {
+        radio.onchange = function () {
+          generator = radio.value || 'hifly';
+          var hiflyBox = modal.querySelector('#kbCreateHifly');
+          var photoBox = modal.querySelector('#kbCreatePhotoWrap');
+          if (hiflyBox) hiflyBox.style.display = generator === 'hifly' ? '' : 'none';
+          if (photoBox) photoBox.style.display = generator === 'hifly' ? 'none' : '';
+        };
+      });
+      var avSel = modal.querySelector('#kbCreateAvatar');
+      if (avSel) avSel.onchange = function () { hiflyAvatarId = avSel.value || ''; };
+      var avRefresh = modal.querySelector('#kbCreateAvatarRefresh');
+      if (avRefresh) avRefresh.onclick = function () { loadHiflyAvatars().then(function () { paintAvatarOptions(); }); };
+      var avTrain = modal.querySelector('#kbCreateAvatarTrain');
+      if (avTrain) avTrain.onclick = function () { openHiflyTrainModal(); };
       modal.querySelector('#kbCreateFile').onchange = function (e) { if (e.target.files && e.target.files[0]) uploadPhoto(e.target.files[0]); };
       modal.querySelector('#kbCreateScript').oninput = estimate;
       modal.querySelector('#kbCreateStart').onclick = startCreate;
@@ -1144,7 +1184,7 @@
     function startCreate() {
       if (busy) return;
       var script = (modal.querySelector('#kbCreateScript') || {}).value || '';
-      if (!photoId) { toast('先上传一张形象照'); return; }
+      if (generator !== 'hifly' && !photoId) { toast('先上传一张形象照'); return; }
       if (!script.trim()) { toast('先粘贴口播稿'); return; }
       busy = true;
       var btn = modal.querySelector('#kbCreateStart');
@@ -1164,7 +1204,7 @@
       req('/api/skills/digital-human-koubo/projects', {
         method: 'POST', headers: headers(),
         body: JSON.stringify({ name: '', script: script, photo_id: photoId, host: 'photo', shot: 'full',
-          options: { host: 'photo', shot: 'full', language: 'Mandarin Chinese', resolution: '720p' } })
+          options: { host: 'photo', shot: 'full', language: 'Mandarin Chinese', resolution: '720p', generator: generator, hifly_avatar_id: hiflyAvatarId } })
       }).then(function (p) {
         project = p;
         state.project = p;
