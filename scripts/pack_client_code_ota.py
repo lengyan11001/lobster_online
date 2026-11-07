@@ -142,7 +142,9 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "OEM配置启动器.exe",
     "static/css",
     "static/js",
-    "static/fonts",
+    # static/fonts 不进 OTA：5 个 OTF 压缩后仍有 ~20.9MB，由
+    # backend.app.services.runtime_assets 在客户端启动时按需从 TOS 补拉
+    # （sha256 校验，已存在则跳过）。改动这里会让包体重新涨回 54MB。
     "static/views",
     # 灵感画布代码/功能资源（canvas-studio 视图内嵌的画布本体）。
     # 只放代码与功能资源；用户运行期产出目录（static/generated、static/hifly_avatars、
@@ -150,6 +152,7 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/canvas-web",
     "static/canvas-ui",
     "static/douyin-origin",
+    "static/liepin-origin",
     "static/tiktok-origin",
     "static/vendor",
     "static/data",

@@ -947,6 +947,12 @@ def _sync_global_openclaw_workspace():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _sync_global_openclaw_workspace()
+    try:
+        from .services.runtime_assets import start_background_fetch
+        start_background_fetch()
+        logger.info("[startup] runtime assets background fetch scheduled")
+    except Exception as e:
+        logger.warning("[startup] runtime assets fetch not scheduled: %s", e)
     if wecom_router is not None:
         try:
             from .api.wecom import wecom_poll_loop

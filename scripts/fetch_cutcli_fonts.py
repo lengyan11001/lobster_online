@@ -1,49 +1,40 @@
 #!/usr/bin/env python3
-"""Fetch CutCLI template fonts from TOS into static/fonts.
+"""把 CutCLI 模板字体从 TOS 补到 static/fonts。
 
-Resources are build artifacts, not Git content. Run this before packaging/OTA
-on a clean checkout so the preview @font-face and local ffmpeg renderer work.
+字体已从 OTA 主包移出（压缩后约 20.9MB），改由
+backend.app.services.runtime_assets 在客户端启动时后台补拉。
+这个脚本用于打包机 / 干净 checkout 手动预热，逻辑只有一份，避免两份清单漂移。
 """
 from __future__ import annotations
 
-import hashlib
-import urllib.request
+import importlib.util
 from pathlib import Path
 
-BASE = "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/cutcli_templates/fonts"
-FONTS = {
-    "AlibabaPuHuiTi-3-105-Heavy.otf": "f2e848f94ac746f5a51ef1d71caea5cc268c920a9a63740423ee61abeac89bd6",
-    "AlibabaPuHuiTi-3-95-ExtraBold.otf": "a8fb15c8685836d5041a4c47f2917fd57117182aff01350ea0335b216cc7993e",
-    "AlibabaPuHuiTi-3-75-SemiBold.otf": "fd789c70fa4f1a265fe11a64d29bb48926aef7e14da338cb5ca5e6c359ae7e72",
-    "AlibabaPuHuiTi-3-115-Black.otf": "3832ce0df4aa0d5493c759e6b16e128efc884950ceeb8e047a6443479816d921",
-    "AlibabaPuHuiTi-3-65-Medium.otf": "00cd19ccd391bba61515361eea87163ba079c4bf691fa63c59e280fda690ada4",
-}
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "static" / "fonts"
 
 
-def valid(path: Path, sha: str) -> bool:
-    if not path.is_file() or path.stat().st_size < 10000:
-        return False
-    return hashlib.sha256(path.read_bytes()).hexdigest().lower() == sha
+def _load_runtime_assets():
+    path = ROOT / "backend" / "app" / "services" / "runtime_assets.py"
+    spec = importlib.util.spec_from_file_location("lobster_runtime_assets", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def main() -> int:
-    OUT.mkdir(parents=True, exist_ok=True)
-    for name, sha in FONTS.items():
-        target = OUT / name
-        if valid(target, sha):
-            print("ok", name)
-            continue
-        url = f"{BASE}/{name}"
-        tmp = target.with_suffix(target.suffix + ".part")
-        with urllib.request.urlopen(url, timeout=120) as resp, open(tmp, "wb") as fh:
-            fh.write(resp.read())
-        if not valid(tmp, sha):
-            tmp.unlink(missing_ok=True)
-            raise SystemExit(f"sha256 mismatch: {name}")
-        tmp.replace(target)
-        print("downloaded", name, target.stat().st_size)
+    mod = _load_runtime_assets()
+    pending = mod.missing_assets(ROOT)
+    if not pending:
+        print("ok: all runtime fonts present")
+        return 0
+    print(f"missing {len(pending)} font(s), fetching from TOS ...")
+    mod.ensure_assets(ROOT, log=print)
+    remaining = mod.missing_assets(ROOT)
+    if remaining:
+        print(f"[ERR] still missing: {[a['rel'] for a in remaining]}")
+        return 1
+    print("ok: runtime fonts ready")
     return 0
 
 

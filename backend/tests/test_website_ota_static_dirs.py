@@ -19,6 +19,14 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import pack_client_code_ota as packer  # noqa: E402
 
 # 用户运行期产出 / 本机私有 / 源工程目录：不得随 OTA、更不得列入 manifest.paths
+LEGACY_UNSHIPPED_STATIC_DIRS = {
+    "koubo",             # 旧版口播 SVG 模板，UI 已改走 /api/skills/digital-human-koubo
+}
+
+DYNAMIC_ASSET_STATIC_DIRS = {
+    "fonts",             # 5 个 OTF 共 24MB：启动时由 runtime_assets 从 TOS 补拉
+}
+
 RUNTIME_ONLY_STATIC_DIRS = {
     "generated",         # /static/generated：运行时产出（agent 头像等）
     "hifly_avatars",     # 用户自己视频的人脸/抠像图（.mp4.face.png / .rmbgcache.png）——本机私有数据
@@ -39,7 +47,14 @@ def _declared_static_dirs() -> set[str]:
 
 def test_every_static_dir_is_declared_or_runtime_only():
     actual = {p.name for p in (REPO_ROOT / "static").iterdir() if p.is_dir()}
-    missing = sorted(n for n in actual if n not in _declared_static_dirs() and n not in RUNTIME_ONLY_STATIC_DIRS)
+    missing = sorted(
+        n
+        for n in actual
+        if n not in _declared_static_dirs()
+        and n not in RUNTIME_ONLY_STATIC_DIRS
+        and n not in DYNAMIC_ASSET_STATIC_DIRS
+        and n not in LEGACY_UNSHIPPED_STATIC_DIRS
+    )
     assert not missing, f"static/ 下这些目录既没随 OTA、也没登记为运行目录，客户端升级后会 404：{missing}"
 
 
@@ -56,3 +71,7 @@ def test_canvas_web_ships_with_website_ota():
 
 def test_source_maps_are_not_shipped():
     assert packer._skip_file("static/canvas-web/assets/main.bad865f4.js.map") is True
+
+def test_fonts_are_not_shipped_in_ota():
+    """字体改为运行期按需下载，不允许再回到主包（会多 20.9MB）。"""
+    assert "static/fonts" not in packer.WEBSITE_OTA_PATHS
