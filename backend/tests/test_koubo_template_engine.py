@@ -532,3 +532,15 @@ def test_trim_media_shortens_video(tmp_path, monkeypatch):
                     "testsrc=size=160x120:rate=12", "-t", "2", "-pix_fmt", "yuv420p", str(src)], check=True)
     assert s._trim_media(src, 1.0) is True
     assert abs(s._media_duration(src) - 1.0) < 0.25
+
+
+def test_short_speech_keeps_whisper_timing(monkeypatch, tmp_path):
+    from backend.app.services import koubo_renderer as kr
+
+    text = "全身，边走路边介绍apec"
+    chars = [[c, round(i * 4.12 / len(text), 3)] for i, c in enumerate(text)]
+    monkeypatch.setattr(kr, "_whisper_chars", lambda *args, **kwargs: chars)
+    project = {"segments": [{"text": text, "seconds": 6}], "options": {}}
+    timeline = kr.build_timeline(project, 8.0, tmp_path, tmp_path / "v.mp4", "zh")
+    assert timeline["timing"] == "whisper"
+    assert timeline["segs"][-1]["end"] < 5.0

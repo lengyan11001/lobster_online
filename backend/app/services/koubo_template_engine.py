@@ -195,6 +195,24 @@ def public_templates() -> List[Dict[str, Any]]:
     return [_public(spec) for spec in ordered]
 
 
+def _sample_seconds(spec: Dict[str, Any]) -> float:
+    explicit = spec.get('sample_seconds')
+    if explicit:
+        try:
+            return round(float(explicit), 2)
+        except Exception:
+            pass
+    url = str(spec.get('sample_video_url') or '')
+    if url.startswith('/'):
+        path = Path(__file__).resolve().parents[3] / url.lstrip('/')
+        if path.is_file():
+            try:
+                return round(float(kr.probe(path).get('duration') or 0), 2)
+            except Exception:
+                pass
+    return 8.0
+
+
 def template_detail(template_id: str) -> Optional[Dict[str, Any]]:
     spec = load_templates().get(str(template_id or '').strip())
     if not spec:
@@ -227,7 +245,7 @@ def template_detail(template_id: str) -> Optional[Dict[str, Any]]:
         'rules': spec.get('rules') or {},
         'caption_size': float((spec.get('style') or {}).get('captionSize') or 0.05),
         'sample_script': spec.get('sample_script') or '全身，边走边介绍apec',
-        'sample_seconds': float(spec.get('sample_seconds') or 8.0),
+        'sample_seconds': _sample_seconds(spec),
     })
     return data
 
@@ -467,6 +485,13 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
         except Exception:
             pass
         _ensure_keywords(timeline)
+        speech_end = max([float(x.get('end') or 0) for x in (timeline.get('segs') or [])] or [0])
+        if 0 < speech_end < duration - 0.8:
+            duration = max(1.0, speech_end + 0.6)
+            timeline['duration'] = duration
+            cta_start = max(0.0, duration - min(3.0, max(1.6, duration * 0.28)))
+            timeline['cta'] = {'start': round(cta_start, 3)}
+            total_frames = max(1, int(math.ceil(duration * fps)))
         copy = spec.get('copy') or {}
         title = _title_for(project, spec, title_override)
         base_title_px = max(14, round(H * float(style.get('titleSize') or .07)))
@@ -645,7 +670,8 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
             audio_map = '[a]'
         cmd += ['-filter_complex', fg, '-map', '[v]', '-map', audio_map,
                '-r', str(fps), '-c:v', 'libx264', '-crf', crf, '-preset', preset, '-pix_fmt', 'yuv420p',
-               '-c:a', 'aac', '-b:a', '160k' if preview_mode else '192k', '-shortest', '-movflags', '+faststart', str(out)]
+               '-c:a', 'aac', '-b:a', '160k' if preview_mode else '192k',
+               '-t', '%.3f' % duration, '-shortest', '-movflags', '+faststart', str(out)]
         r = kr._run(cmd, timeout=1800)
         if r.returncode != 0:
             raise RuntimeError('模板合成失败：' + (r.stderr or '')[-700:])

@@ -420,8 +420,11 @@ def build_timeline(project: Dict[str, Any], duration: float, tmp: Optional[Path]
         except Exception:
             heard = None
     segs = _align_timeline(project, heard, duration) if heard else _even_timeline(project, duration)
-    # whisper 在纯音乐/静音上会给出离谱时间（字幕整段消失），覆盖不足就回退均分
-    if heard and (not segs or segs[-1]["end"] < duration * 0.6 or segs[0]["start"] > duration * 0.2):
+    # 只在 whisper 基本没听到人声时回退均分：
+    # 口播在 8 秒底片里 4 秒说完是正常的，不能因此把字幕强行拉满全片。
+    speech_end = float(segs[-1]["end"]) if segs else 0.0
+    speech_start = float(segs[0]["start"]) if segs else 0.0
+    if heard and (not segs or speech_end < min(1.5, duration * 0.2) or speech_start > max(0.8, duration * 0.2)):
         segs = _even_timeline(project, duration)
         heard = None
 

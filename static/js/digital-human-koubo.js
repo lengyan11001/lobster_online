@@ -1143,7 +1143,7 @@
     var capacity = Math.max(6, Math.min(maxChars, (720 * 0.94 - 36) / (1280 * capFraction)));
     var titleMax = Number(rules.titleChars || 14);
     var sample = String(t.sample_script || '');
-    var sampleLine = '样片文案' + (sample ? '「' + sample + '」' : '') + ' · ' + (t.sample_seconds || 8) + ' 秒';
+    var sampleLine = '样片文案' + (sample ? '「' + sample + '」' : '') + ' · ' + (t.sample_seconds || 4.2) + ' 秒';
     if (!script) {
       return '<div class="kb-detail-sec"><b>适配你的口播稿</b><div class="kb-detail-note">' + esc(sampleLine) + '。生成底片后，这里会按当前模板的字幕上限给出适配结果。</div></div>';
     }
