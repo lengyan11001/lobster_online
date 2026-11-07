@@ -191,6 +191,8 @@
       + '#content-digital-human-koubo .kb-tpl-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;}'
       + '#content-digital-human-koubo .kb-tpl-detail{border:0;background:transparent;color:#2563eb;font-size:10.5px;cursor:pointer;padding:2px 0;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-tpl-detail:hover{text-decoration:underline;}'
+      + '#content-digital-human-koubo .kb-tpl-use{border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:2px 7px;font-size:10.5px;cursor:pointer;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-tpl-use:hover{background:#dbeafe;}'
       + '#content-digital-human-koubo .kb-multi{border-top:1px solid #f1f5f9;margin-top:10px;padding-top:10px;}'
       + '#content-digital-human-koubo .kb-multi-head{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;}'
       + '#content-digital-human-koubo .kb-multi-head label{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#475569;}'
@@ -200,6 +202,34 @@
       + '#content-digital-human-koubo .kb-multi-note{font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.6;}'
       + '#kbToast{position:fixed;left:50%;top:22px;transform:translateX(-50%) translateY(-6px);z-index:10100;background:rgba(15,23,42,.94);color:#fff;padding:10px 16px;border-radius:12px;font-size:12px;line-height:1.5;box-shadow:0 16px 40px rgba(0,0,0,.28);opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;max-width:80vw;}'
       + '#kbToast.show{opacity:1;transform:translateX(-50%) translateY(0);}'
+      + '#kbCreateModal{position:fixed;inset:0;z-index:10090;background:rgba(5,9,18,.8);display:flex;align-items:center;justify-content:center;padding:20px;}'
+      + '#kbCreateModal .kb-create{width:min(94vw,820px);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.45);display:grid;grid-template-columns:minmax(220px,38%) 1fr;}'
+      + '#kbCreateModal .kb-create-media{background:#0b1220;padding:14px;border-radius:18px 0 0 18px;display:flex;flex-direction:column;gap:8px;}'
+      + '#kbCreateModal .kb-create-media video{width:100%;max-height:46vh;object-fit:contain;border-radius:12px;background:#000;}'
+      + '#kbCreateModal .kb-create-tpl{color:#e2e8f0;font-size:12px;text-align:center;}'
+      + '#kbCreateModal .kb-create-tpl b{color:#fff;}'
+      + '#kbCreateModal .kb-create-body{padding:18px 20px;min-width:0;}'
+      + '#kbCreateModal .kb-create-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}'
+      + '#kbCreateModal h3{margin:0;font-size:19px;color:#0f172a;}'
+      + '#kbCreateModal .kb-create-sub{font-size:11.5px;color:#64748b;line-height:1.7;margin-top:8px;}'
+      + '#kbCreateModal .kb-create-sec{margin-top:14px;}'
+      + '#kbCreateModal .kb-create-sec>b{display:block;font-size:12px;color:#0f172a;margin-bottom:6px;}'
+      + '#kbCreateModal .kb-create-photo{display:flex;align-items:center;gap:10px;border:1px dashed #cbd5e1;border-radius:12px;padding:10px;cursor:pointer;}'
+      + '#kbCreateModal .kb-create-photo img{width:56px;height:56px;object-fit:cover;border-radius:10px;background:#eef2f7;}'
+      + '#kbCreateModal .kb-create-photo span{font-size:11.5px;color:#64748b;line-height:1.6;}'
+      + '#kbCreateModal textarea{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;font-size:12px;color:#0f172a;resize:vertical;min-height:110px;}'
+      + '#kbCreateModal input[type=text]{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:10px;padding:8px 11px;font-size:12px;color:#0f172a;}'
+      + '#kbCreateModal .kb-create-meta{font-size:11px;color:#64748b;margin-top:10px;}'
+      + '#kbCreateModal .kb-create-actions{display:flex;align-items:center;gap:8px;margin-top:14px;}'
+      + '#kbCreateModal .kb-create-actions .kb-btn-primary{width:auto;min-width:160px;margin:0;}'
+      + '#kbCreateModal .kb-create-bar{height:6px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:10px;}'
+      + '#kbCreateModal .kb-create-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3b82f6,#8b5cf6);transition:width .3s;}'
+      + '#kbCreateModal .kb-create-step{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#64748b;padding:5px 0;}'
+      + '#kbCreateModal .kb-create-step .dot{width:18px;height:18px;border-radius:50%;background:#eef2f7;color:#64748b;font-size:10px;display:flex;align-items:center;justify-content:center;flex:none;}'
+      + '#kbCreateModal .kb-create-step.done .dot{background:#dcfce7;color:#15803d;}'
+      + '#kbCreateModal .kb-create-step.run .dot{background:#dbeafe;color:#1d4ed8;}'
+      + '#kbCreateModal .kb-create-result video{width:100%;max-height:52vh;border-radius:12px;background:#000;}'
+      + '@media(max-width:760px){#kbCreateModal .kb-create{grid-template-columns:1fr;}#kbCreateModal .kb-create-media{border-radius:18px 18px 0 0;}}'
       + '#kbMatrixModal{position:fixed;inset:0;z-index:10080;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
       + '#kbMatrixModal .kb-matrix{width:min(94vw,760px);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;padding:16px 18px;box-shadow:0 30px 80px rgba(0,0,0,.45);}'
       + '#kbMatrixModal .kb-matrix-head{display:flex;align-items:center;justify-content:space-between;}'
@@ -869,6 +899,219 @@
     paintForm();
   }
 
+  function openCreateModal(templateId) {
+    var local = (state.render.templates || []).filter(function (t) { return t.id === templateId; })[0] || { id: templateId, name: templateId };
+    var old = document.getElementById('kbCreateModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var modal = document.createElement('div');
+    modal.id = 'kbCreateModal';
+    document.body.appendChild(modal);
+    var tpl = local;
+    var photoId = '';
+    var photoUrl = '';
+    var project = null;
+    var timer = null;
+    var busy = false;
+    var projectTitle = '';
+    var lastStage = '';
+
+    function close() { if (timer) clearInterval(timer); if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    function sampleSrc(t) {
+      var u = t.sample_video_url || '';
+      return u ? (String(u).indexOf('http') === 0 ? u : API + u) : '';
+    }
+    function estimate() {
+      var text = (modal.querySelector('#kbCreateScript') || {}).value || '';
+      var chars = text.replace(/\s/g, '').length;
+      var secs = Math.max(6, Math.ceil(chars / 5.4));
+      var credits = secs * 17;
+      var el = modal.querySelector('#kbCreateMeta');
+      if (el) el.textContent = chars ? ('预计 ' + secs + ' 秒 · 约 ' + credits + ' credits（创建后以实际分段为准）') : '按字数自动分段，生成时扣算力';
+    }
+
+    function paintForm() {
+      var media = sampleSrc(tpl)
+        ? '<video autoplay muted loop playsinline src="' + esc(sampleSrc(tpl)) + '"></video>'
+        : '<div style="height:220px;border-radius:12px;background:linear-gradient(135deg,#334155,#0f172a)"></div>';
+      modal.innerHTML = '<div class="kb-create">'
+        + '<div class="kb-create-media">' + media + '<div class="kb-create-tpl">将使用模板<br><b>' + esc(tpl.name || tpl.id) + '</b></div></div>'
+        + '<div class="kb-create-body">'
+        + '<div class="kb-create-head"><h3>用「' + esc(tpl.name || tpl.id) + '」创作</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-create-sub">模板决定标题、字幕、关键词、角标和 CTA 的样式；底片由你上传的真人照片生成，不需要再选别的模板。</div>'
+        + '<div class="kb-create-sec"><b>1. 上传形象照</b><div class="kb-create-photo" id="kbCreatePhoto"><img id="kbCreatePhotoImg" alt=""><span id="kbCreatePhotoText">点击上传正脸照片（jpg/png/webp，建议正脸、光线均匀）</span></div><input type="file" id="kbCreateFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>'
+        + '<div class="kb-create-sec"><b>2. 口播文案</b><textarea id="kbCreateScript" placeholder="粘贴你的口播稿，按字数自动分段"></textarea></div>'
+        + '<div class="kb-create-sec"><b>3. 标题（可选）</b><input type="text" id="kbCreateTitle" maxlength="24" placeholder="留空自动从口播稿提取"></div>'
+        + '<div class="kb-create-meta" id="kbCreateMeta">按字数自动分段，生成时扣算力</div>'
+        + '<div class="kb-create-actions"><span style="font-size:10.5px;color:#94a3b8;">创建任务后会先生成底片，再自动套用「' + esc(tpl.name || tpl.id) + '」出 480p 预览</span><span style="flex:1"></span><button type="button" class="kb-btn-primary" id="kbCreateStart">创建任务</button></div>'
+        + '<div id="kbCreateSteps"></div><div class="kb-create-bar" id="kbCreateBar" style="display:none;"><i></i></div>'
+        + '</div></div>';
+      modal.querySelector('[data-close]').onclick = close;
+      modal.querySelector('#kbCreatePhoto').onclick = function () { modal.querySelector('#kbCreateFile').click(); };
+      modal.querySelector('#kbCreateFile').onchange = function (e) { if (e.target.files && e.target.files[0]) uploadPhoto(e.target.files[0]); };
+      modal.querySelector('#kbCreateScript').oninput = estimate;
+      modal.querySelector('#kbCreateStart').onclick = startCreate;
+      estimate();
+    }
+
+    function uploadPhoto(file) {
+      var fd = new FormData(); fd.append('file', file);
+      var txt = modal.querySelector('#kbCreatePhotoText');
+      if (txt) txt.textContent = '上传中…';
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', API + '/api/skills/digital-human-koubo/uploads');
+      var h = {};
+      try { h = authOnly(); } catch (e) { h = {}; }
+      Object.keys(h).forEach(function (k) { try { xhr.setRequestHeader(k, h[k]); } catch (e) {} });
+      xhr.onload = function () {
+        try {
+          var d = JSON.parse(xhr.responseText || '{}');
+          if (xhr.status >= 400) throw new Error(typeof d.detail === 'string' ? d.detail : ('HTTP ' + xhr.status));
+          photoId = d.id; photoUrl = d.url;
+          var img = modal.querySelector('#kbCreatePhotoImg');
+          if (img) { img.src = API + d.url; img.style.display = 'block'; }
+          if (txt) txt.textContent = '已上传 ' + (file.name || d.id) + '，点击可更换';
+        } catch (e) { if (txt) txt.textContent = '上传失败：' + e.message; }
+      };
+      xhr.onerror = function () { if (txt) txt.textContent = '上传失败：网络错误'; };
+      xhr.send(fd);
+    }
+
+    function paintSteps(active, pct, message) {
+      var names = ['创建项目', '生成底片', '套用模板', '完成'];
+      var html = names.map(function (n, i) {
+        var cls = i < active ? 'done' : (i === active ? 'run' : '');
+        return '<div class="kb-create-step ' + cls + '"><span class="dot">' + (i < active ? '✓' : (i + 1)) + '</span>' + n + (i === active && message ? ' · ' + esc(message) : '') + '</div>';
+      }).join('');
+      var box = modal.querySelector('#kbCreateSteps');
+      if (box) box.innerHTML = html;
+      var bar = modal.querySelector('#kbCreateBar');
+      if (bar) { bar.style.display = 'block'; bar.querySelector('i').style.width = Math.max(2, pct || 0) + '%'; }
+    }
+
+    function startCreate() {
+      if (busy) return;
+      var script = (modal.querySelector('#kbCreateScript') || {}).value || '';
+      if (!photoId) { toast('先上传一张形象照'); return; }
+      if (!script.trim()) { toast('先粘贴口播稿'); return; }
+      busy = true;
+      var btn = modal.querySelector('#kbCreateStart');
+      if (btn) { btn.disabled = true; btn.textContent = '处理中…'; }
+      projectTitle = (modal.querySelector('#kbCreateTitle') || {}).value || '';
+      if (project && project.id) {
+        if (lastStage === 'render') { paintSteps(2, 70, '重新套用模板'); startPreview(); return; }
+        paintSteps(1, 8, '重新提交生成');
+        lastStage = 'generate';
+        req('/api/skills/digital-human-koubo/projects/' + project.id + '/generate', {
+          method: 'POST', headers: headers(), body: JSON.stringify({ all: true })
+        }).then(function (g) { pollGenerate(g.job_id); })
+          .catch(function (e) { fail('生成提交失败：' + e.message); });
+        return;
+      }
+      paintSteps(0, 3, '创建项目');
+      req('/api/skills/digital-human-koubo/projects', {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ name: '', script: script, photo_id: photoId, host: 'photo', shot: 'full',
+          options: { host: 'photo', shot: 'full', language: 'Mandarin Chinese', resolution: '720p' } })
+      }).then(function (p) {
+        project = p;
+        state.project = p;
+        state.render.templateId = tpl.id;
+        state.render.packaged = false;
+        state.render.previewReady = false;
+        loadProjects();
+        paintSteps(1, 8, '提交生成');
+        lastStage = 'generate';
+        req('/api/skills/digital-human-koubo/projects/' + p.id + '/generate', {
+          method: 'POST', headers: headers(), body: JSON.stringify({ all: true })
+        }).then(function (g) { pollGenerate(g.job_id); })
+          .catch(function (e) { fail('生成提交失败：' + e.message); });
+      }).catch(function (e) { fail('创建项目失败：' + e.message); });
+    }
+
+    function pollGenerate(jobId) {
+      timer = setInterval(function () {
+        req('/api/skills/digital-human-koubo/generate/jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          paintSteps(1, 10 + (job.progress || 0) * 0.55, job.message || '生成中');
+          if (job.status === 'running') return;
+          if (timer) { clearInterval(timer); timer = null; }
+          if (job.status === 'done') startPreview();
+          else fail('底片生成失败：' + (job.error || job.message || '未知错误'));
+        }).catch(function () { });
+      }, 2000);
+    }
+
+    function startPreview() {
+      lastStage = 'render';
+      paintSteps(2, 70, '套用 ' + (tpl.name || tpl.id));
+      req('/api/skills/digital-human-koubo/projects/' + project.id + '/render', {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ template_id: tpl.id, title: projectTitle || '', quality: 'preview' })
+      }).then(function (r) { pollRender(r.job_id); })
+        .catch(function (e) { fail('套用模板失败：' + e.message); });
+    }
+
+    function pollRender(jobId) {
+      timer = setInterval(function () {
+        req('/api/skills/digital-human-koubo/render/jobs/' + encodeURIComponent(jobId)).then(function (job) {
+          paintSteps(2, 70 + (job.progress || 0) * 0.3, job.message || '套用模板');
+          if (job.status === 'running') return;
+          if (timer) { clearInterval(timer); timer = null; }
+          if (job.status === 'done') finish();
+          else fail('套用模板失败：' + (job.error || job.message || '未知错误'));
+        }).catch(function () { });
+      }, 1500);
+    }
+
+    function finish() {
+      busy = false;
+      paintSteps(4, 100, '完成');
+      loadProjects();
+      req('/api/skills/digital-human-koubo/projects/' + project.id).then(function (p) {
+        state.project = p; state.render.templateId = tpl.id;
+        renderPreview(); renderProjects();
+      }).catch(function () { });
+      var src = API + '/api/skills/digital-human-koubo/projects/' + project.id + '/preview?v=' + Date.now();
+      var body = modal.querySelector('.kb-create-body');
+      body.innerHTML = '<div class="kb-create-head"><h3>完成：已套用「' + esc(tpl.name || tpl.id) + '」</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
+        + '<div class="kb-create-sub">底片已按你的照片和口播生成，并自动套用了这个模板。下面是 480p 预览；满意后去工作台生成高清。</div>'
+        + '<div class="kb-create-result"><video controls autoplay playsinline src="' + esc(src) + '"></video></div>'
+        + '<div class="kb-create-actions"><a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + project.id + '/preview') + '" download>下载预览</a><span style="flex:1"></span><button type="button" class="kb-btn" data-switch>换个模板</button><button type="button" class="kb-btn-primary" data-go>去工作台</button></div>';
+      body.querySelector('[data-close]').onclick = close;
+      body.querySelector('[data-switch]').onclick = function () {
+        close();
+        renderPack();
+        var grid = document.getElementById('kbTplGrid');
+        if (grid) { try { grid.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {} }
+        toast('选另一个模板后点「预览效果」，同一段底片不会重新扣算力');
+      };
+      body.querySelector('[data-go]').onclick = function () {
+        close();
+        openProject(project.id);
+        toast('已进入工作台，当前模板：' + (tpl.name || tpl.id));
+      };
+    }
+
+    function fail(msg) {
+      busy = false;
+      if (timer) { clearInterval(timer); timer = null; }
+      paintSteps(1, 5, '失败');
+      var body = modal.querySelector('.kb-create-body');
+      if (body) {
+        var note = document.createElement('div');
+        note.className = 'kb-create-sub';
+        note.style.color = '#b91c1c';
+        note.textContent = msg;
+        body.appendChild(note);
+      }
+      var btn = modal.querySelector('#kbCreateStart');
+      if (btn) { btn.disabled = false; btn.textContent = lastStage === 'render' ? '重试套用模板' : '重试生成'; }
+      toast(msg);
+    }
+
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    paintForm();
+  }
+
   function fitBlock(t) {
     var script = String((state.project && state.project.script) || '').trim();
     var rules = t.rules || {};
@@ -956,22 +1199,13 @@
         + (chips ? '<div class="kb-detail-sec"><b>适用场景</b><div class="kb-detail-chips">' + chips + '</div></div>' : '')
         + '<div class="kb-detail-sec"><b>画面设置</b><div class="kb-detail-kv">' + kv + '</div></div>'
         + (notes.length ? '<div class="kb-detail-sec"><b>这版会怎么排</b><div class="kb-detail-note">' + esc(notes.join(' · ')) + '</div></div>' : '')
-        + '<div class="kb-detail-note" style="margin-top:10px;">套用只换包装模板，不重新生成底片。' + (hasBase ? '点下面按钮直接出 480p 预览。' : '先生成底片，再回来预览。') + '</div>'
-        + '<div class="kb-detail-actions"><button type="button" class="kb-btn" data-detail-fav>' + (fav ? '★ 已收藏' : '☆ 收藏') + '</button><span style="flex:1"></span><button type="button" class="kb-btn-primary" data-detail-apply>' + (hasBase ? '套用并预览 480p' : '套用这个模板') + '</button></div>'
+        + '<div class="kb-detail-note" style="margin-top:10px;">点下面按钮，上传形象照和口播稿，创建任务后自动用这个模板出 480p 预览。</div>'
+        + '<div class="kb-detail-actions"><button type="button" class="kb-btn" data-detail-fav>' + (fav ? '★ 已收藏' : '☆ 收藏') + '</button><span style="flex:1"></span><button type="button" class="kb-btn-primary" data-detail-apply>用这个模板创作</button></div>'
         + '</div></div>';
       modal.querySelector('[data-detail-close]').onclick = close;
       modal.querySelector('[data-detail-apply]').onclick = function () {
-        var name = current.name || id;
-        selectTemplate(current.id, true);
         close();
-        if (hasBase) {
-          toast('已套用「' + name + '」，正在生成 480p 预览…');
-          startRender('preview');
-        } else {
-          toast('已套用「' + name + '」；生成底片后自动使用');
-        }
-        var card = document.querySelector('#kbTplGrid [data-tpl="' + current.id + '"]');
-        if (card) { try { card.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }
+        openCreateModal(current.id);
       };
       modal.querySelector('[data-detail-fav]').onclick = function () {
         toggleFavoriteTemplate(current.id);
@@ -1172,7 +1406,7 @@
       + '<div class="kb-tpl-coverwrap">' + visual + favBtn + play + '</div>'
       + '<b>' + esc(t.name || t.id) + '</b>'
       + '<p>' + esc(t.description || '') + '</p>'
-      + '<div class="kb-tpl-foot"><small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small><button type="button" class="kb-tpl-detail" data-detail="' + esc(t.id) + '">详情</button></div>'
+      + '<div class="kb-tpl-foot"><small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small><button type="button" class="kb-tpl-use" data-use="' + esc(t.id) + '">用这个模板</button><button type="button" class="kb-tpl-detail" data-detail="' + esc(t.id) + '">详情</button></div>'
       + '</div>';
   }
 
@@ -1232,6 +1466,12 @@
       btn.onclick = function (e) {
         e.stopPropagation();
         openTemplateDetail(btn.getAttribute('data-detail'));
+      };
+    });
+    grid.querySelectorAll('[data-use]').forEach(function (btn) {
+      btn.onclick = function (e) {
+        e.stopPropagation();
+        openCreateModal(btn.getAttribute('data-use'));
       };
     });
   }
