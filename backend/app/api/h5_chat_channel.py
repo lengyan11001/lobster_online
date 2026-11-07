@@ -11667,6 +11667,58 @@ def _digital_human_rotation_context(
     return local_day, rotation_key or "shanjian-digital-human"
 
 
+async def _refresh_workflow_virtualman_candidates(
+    candidates: List[Dict[str, Any]],
+    *,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """按 profile_id 用服务端当前数字人替换定时任务里的旧 virtualman_id。"""
+    if not candidates or cloud is None or not base:
+        return candidates
+    if not any(_safe_int(item.get("profile_id")) > 0 for item in candidates):
+        return candidates
+    try:
+        response = await cloud.get(
+            f"{base}/api/shanjian-digital-human/profiles",
+            headers=headers,
+            timeout=30.0,
+        )
+        data = response.json() if response.content else {}
+        if response.status_code >= 400 or not isinstance(data, dict):
+            return candidates
+        current = _normalize_virtualman_candidates(data.get("items"))
+    except Exception as exc:
+        logger.warning("[H5-DIGITAL-HUMAN] refresh scheduled virtualman failed: %s", exc)
+        return candidates
+    by_profile = {
+        str(_safe_int(item.get("profile_id"))): item
+        for item in current
+        if _safe_int(item.get("profile_id")) > 0
+    }
+    refreshed: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        profile_id = _safe_int(candidate.get("profile_id"))
+        if profile_id:
+            latest = by_profile.get(str(profile_id))
+            if not latest:
+                continue
+            merged = dict(candidate)
+            for key in ("virtualman_id", "title", "cover_url"):
+                if latest.get(key):
+                    merged[key] = latest[key]
+        else:
+            merged = dict(candidate)
+        virtualman_id = _workflow_text(merged.get("virtualman_id"), 128)
+        if not virtualman_id or virtualman_id in seen:
+            continue
+        seen.add(virtualman_id)
+        refreshed.append(merged)
+    return refreshed
+
+
 async def _resolve_workflow_virtualman(
     source: Dict[str, Any],
     *,
@@ -11683,12 +11735,39 @@ async def _resolve_workflow_virtualman(
         or shanjian_uses_ip_daily_script(source)
         or bool(context.get("workflow_node_id"))
     )
+    snapshot_candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
     if not rotation_enabled:
+        if fixed_id and snapshot_candidates and cloud is not None and base:
+            refreshed = await _refresh_workflow_virtualman_candidates(
+                snapshot_candidates, cloud=cloud, base=base, headers=headers
+            )
+            old_profile_id = next(
+                (
+                    _safe_int(item.get("profile_id"))
+                    for item in snapshot_candidates
+                    if _workflow_text(item.get("virtualman_id"), 128) == fixed_id
+                ),
+                0,
+            )
+            for item in refreshed:
+                if _workflow_text(item.get("virtualman_id"), 128) == fixed_id:
+                    return item
+            for item in refreshed:
+                if old_profile_id and _safe_int(item.get("profile_id")) == old_profile_id:
+                    return item
+            return {}
         return {"virtualman_id": fixed_id} if fixed_id else {}
 
     # 以模板为准：模板里带了候选形象时只用模板给定的形象，不再用服务端全量形象
     # 列表覆盖（那会把"指定了某个形象"的节点轮换成账号里的另一个形象）。
-    candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
+    candidates = snapshot_candidates
+    had_template_candidates = bool(candidates)
+    if candidates and cloud is not None and base:
+        candidates = await _refresh_workflow_virtualman_candidates(
+            candidates, cloud=cloud, base=base, headers=headers
+        )
+    if had_template_candidates and not candidates:
+        return {}
     template_candidates = list(candidates)
     profile_refresh_succeeded = False
     if not candidates and cloud is not None and base:
