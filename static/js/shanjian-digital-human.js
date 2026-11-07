@@ -4215,7 +4215,33 @@
       });
   }
 
+  function loadMaterialGate() {
+    var select = $('shanjianTemplateGateSelect');
+    if (!select) return Promise.resolve();
+    var base = cloudBaseUrl() || baseUrl();
+    if (!base) return Promise.resolve();
+    return requestGetTo(base, '/api/digital-human/material-gate').then(function(data) {
+      var mode = String((data && data.mode) || 'broad').toLowerCase();
+      select.value = mode === 'strict' ? 'strict' : 'broad';
+    }).catch(function() {});
+  }
+
+  function saveMaterialGate(mode) {
+    var base = cloudBaseUrl() || baseUrl();
+    return requestTo(base, '/api/digital-human/material-gate', { mode: mode }).then(function(data) {
+      var next = String((data && data.mode) || mode);
+      showMessage('素材筛选策略已切换为：' + (next === 'strict' ? '严格（关键词必须命中）' : '宽松（尽量出片）'), false);
+    }).catch(function(err) {
+      showMessage(err && err.message ? err.message : '切换素材筛选策略失败', true);
+      loadMaterialGate().catch(function() {});
+    });
+  }
+
   function bindEvents() {
+    var gateSelect = $('shanjianTemplateGateSelect');
+    if (gateSelect) gateSelect.addEventListener('change', function() {
+      saveMaterialGate(gateSelect.value);
+    });
     ['shanjianAvatarImageAuthText', 'shanjianAvatarVideoAuthText'].forEach(function(id) {
       if ($(id)) $(id).addEventListener('input', function() {
         this.setAttribute('data-brand-auth-default', '0');
@@ -4772,6 +4798,13 @@
                     </select>
                   </div>
                   <div class="tvc-field">
+                    <label for="shanjianTemplateGateSelect">素材筛选策略</label>
+                    <select id="shanjianTemplateGateSelect">
+                      <option value="broad" selected>宽松（尽量出片）</option>
+                      <option value="strict">严格（关键词必须命中）</option>
+                    </select>
+                  </div>
+                  <div class="tvc-field">
                     <label class="shanjian-inline-check" for="shanjianTemplateMaterialSoundSwitch" style="margin-top:1.6rem;">
                       <input type="checkbox" id="shanjianTemplateMaterialSoundSwitch">
                       <span>保留素材原声</span>
@@ -5260,6 +5293,7 @@
     }
 
     setActiveView(state.taskId ? 'result' : 'avatar');
+    loadMaterialGate().catch(function() {});
     bootstrapData().catch(function(err) {
       showMessage(err && err.message ? err.message : '初始化 Shanjian 页面失败', true);
     });
