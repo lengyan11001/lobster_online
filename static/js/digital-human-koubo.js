@@ -336,7 +336,7 @@
       + '#content-digital-human-koubo .kb-home{position:absolute;inset:0;z-index:60;background:#f6f8fb;overflow:auto;padding:6px 4px 24px;}'
       + '#content-digital-human-koubo .kb-home-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 2px 16px;}'
       + '#content-digital-human-koubo .kb-home-tabs{display:flex;gap:6px;background:#e9edf4;padding:4px;border-radius:12px;}'
-      + '#content-digital-human-koubo .kb-home-tab{appearance:none;border:0;background:transparent;padding:6px 14px;border-radius:8px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;}
+      + '#content-digital-human-koubo .kb-home-tab{appearance:none;border:0;background:transparent;padding:6px 14px;border-radius:8px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;}'
       + '#content-digital-human-koubo #kbHomeNew{height:30px;padding:0 12px;font-size:12.5px;line-height:30px;}'
       + '#content-digital-human-koubo .kb-home-tab.is-active{background:#fff;color:#0f172a;box-shadow:0 2px 10px rgba(15,23,42,.10);}'
       + '#content-digital-human-koubo .kb-home-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:16px;padding:0 2px;}'
