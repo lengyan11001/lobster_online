@@ -332,6 +332,24 @@
       + '#content-digital-human-koubo .kb-gen-row label{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:999px;font-size:12px;color:#475569;cursor:pointer;background:#fff;}'
       + '#content-digital-human-koubo .kb-gen-row input{accent-color:#2563eb;}'
       + '#content-digital-human-koubo .kb-hifly-avatar select{height:34px;border:1px solid #e2e8f0;border-radius:8px;padding:0 8px;font-size:12px;}';
+    css += '#content-digital-human-koubo .kb-root{position:relative;}'
+      + '#content-digital-human-koubo .kb-home{position:absolute;inset:0;z-index:60;background:#f8fafc;overflow:auto;padding:2px;}'
+      + '#content-digital-human-koubo .kb-home-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 14px;}'
+      + '#content-digital-human-koubo .kb-home-tabs{display:flex;gap:6px;background:#eef2f7;padding:4px;border-radius:10px;}'
+      + '#content-digital-human-koubo .kb-home-tab{appearance:none;border:0;background:transparent;padding:7px 16px;border-radius:8px;font-size:13px;color:#64748b;cursor:pointer;}'
+      + '#content-digital-human-koubo .kb-home-tab.is-active{background:#fff;color:#0f172a;box-shadow:0 2px 8px rgba(15,23,42,.08);}'
+      + '#content-digital-human-koubo .kb-home-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;}'
+      + '#content-digital-human-koubo .kb-home-card{background:#fff;border:1px solid #e5e8ee;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;}'
+      + '#content-digital-human-koubo .kb-home-cover{aspect-ratio:16/9;background:linear-gradient(135deg,#334155,#0f172a);display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px;}'
+      + '#content-digital-human-koubo .kb-home-cover img{width:100%;height:100%;object-fit:cover;}'
+      + '#content-digital-human-koubo .kb-home-card-body{padding:10px 12px;display:flex;flex-direction:column;gap:6px;}'
+      + '#content-digital-human-koubo .kb-home-card-body strong{font-size:13px;color:#0f172a;}'
+      + '#content-digital-human-koubo .kb-home-card-body small{font-size:11px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-home-card-actions{display:flex;gap:6px;margin-top:4px;}'
+      + '#content-digital-human-koubo .kb-preview-mask{position:fixed;inset:0;z-index:10200;background:rgba(5,9,18,.8);display:flex;align-items:center;justify-content:center;padding:20px;}'
+      + '#content-digital-human-koubo .kb-preview-box{position:relative;max-width:min(92vw,520px);max-height:88vh;background:#0b1220;border-radius:14px;overflow:hidden;}'
+      + '#content-digital-human-koubo .kb-preview-box video{display:block;width:100%;max-height:80vh;background:#000;}'
+      + '#content-digital-human-koubo .kb-preview-close{position:absolute;top:8px;right:10px;border:0;background:rgba(15,23,42,.7);color:#fff;width:30px;height:30px;border-radius:999px;font-size:16px;cursor:pointer;}';
     style.textContent = css;
     document.head.appendChild(style);
   }
@@ -354,7 +372,7 @@
       + '</aside>'
       + '<section class="kb-stage">'
       + '  <div class="kb-toolbar"><div class="kb-crumb">工作台 / <b id="kbProjName">未命名项目</b></div>'
-      + '    <div class="kb-tools"><button type="button" class="kb-btn" id="kbSave">保存项目</button><button type="button" class="kb-btn" id="kbExport">导出 tasks.json</button><button type="button" class="kb-btn" id="kbDeps">运行环境</button><button type="button" class="kb-btn" id="kbBack">返回商店</button></div></div>'
+      + '    <div class="kb-tools"><button type="button" class="kb-btn" id="kbSave">保存项目</button><button type="button" class="kb-btn" id="kbExport">导出 tasks.json</button><button type="button" class="kb-btn" id="kbDeps">运行环境</button><button type="button" class="kb-btn" id="kbHomeBack">返回列表</button><button type="button" class="kb-btn" id="kbBack">返回商店</button></div></div>'
       + '  <div class="kb-preview" id="kbPreview"><div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div></div>'
       + '  <div class="kb-meta" id="kbMeta"></div>'
       + '  <div id="kbPack"></div>'
@@ -371,7 +389,13 @@
       + '    <div class="kb-hint" id="kbHiflyTrainMsg" style="margin-top:8px;"></div>'
       + '  </div>'
       + '</div>'
-      + '</section></div>';
+      + '</section>'
+      + '<div id="kbHome" class="kb-home">'
+      + '  <div class="kb-home-head"><div class="kb-home-tabs"><button type="button" class="kb-home-tab is-active" data-home-tab="templates">模板</button><button type="button" class="kb-home-tab" data-home-tab="projects">项目记录</button></div>'
+      + '  <button type="button" class="kb-btn-primary" id="kbHomeNew">+ 新增</button></div>'
+      + '  <div id="kbHomeBody" class="kb-home-body"></div>'
+      + '</div>'
+      + '</div>';
   }
 
   function optList(key, value) {
@@ -2138,6 +2162,7 @@
   function loadTemplates() {
     return req('/api/skills/digital-human-koubo/templates').then(function (d) {
       state.render.templates = (d && d.templates) || [];
+      try { renderHome(); } catch (e) {}
       var has = state.render.templates.some(function (t) { return t.id === state.render.templateId; });
       if (!has) {
         var def = state.render.templates.filter(function (t) { return t.default; })[0] || state.render.templates[0];
@@ -2160,6 +2185,7 @@
   function loadProjects() {
     req('/api/skills/digital-human-koubo/projects/summary').then(function (d) {
       state.projects = d.projects || [];
+      try { renderHome(); } catch (e) {}
       if (state.project && state.project.id) {
         var cur = state.projects.filter(function (x) { return x.id === state.project.id; })[0];
         if (cur) Object.assign(state.project, cur);
@@ -2227,7 +2253,102 @@
     }, 1200);
   }
 
+  function showHome(tab) {
+    if (tab) state.homeTab = tab;
+    var home = $('kbHome');
+    if (home) home.style.display = '';
+    renderHome();
+  }
+
+  function hideHome() {
+    var home = $('kbHome');
+    if (home) home.style.display = 'none';
+  }
+
+  function projectPreviewUrl(p) {
+    var suffix = p.rendered ? '/rendered' : (p.preview_rendered ? '/preview' : '/video');
+    return API + '/api/skills/digital-human-koubo/projects/' + encodeURIComponent(p.id) + suffix;
+  }
+
+  function renderHome() {
+    var body = $('kbHomeBody');
+    if (!body) return;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-home-tab]'), function (b) {
+      b.classList.toggle('is-active', (b.getAttribute('data-home-tab') || '') === (state.homeTab || 'templates'));
+    });
+    if ((state.homeTab || 'templates') === 'projects') {
+      var rows = state.projects || [];
+      if (!rows.length) {
+        body.innerHTML = '<div class="kb-empty" style="grid-column:1/-1;">还没有项目，点右上角「+ 新增」开始。</div>';
+        return;
+      }
+      body.innerHTML = rows.map(function (p) {
+        var status = p.rendered ? '已出片' : (p.preview_rendered ? '已套模板（预览）' : (p.status === 'generated' ? '底片已就绪' : '未生成'));
+        return '<article class="kb-home-card">'
+          + '<div class="kb-home-cover">' + esc(status) + '</div>'
+          + '<div class="kb-home-card-body"><strong>' + esc(p.name || p.id) + '</strong>'
+          + '<small>' + esc(p.template_title || p.template_id || '未套模板') + ' · ' + esc(String(p.created_at || '').replace('T', ' ').slice(0, 16)) + '</small>'
+          + '<div class="kb-home-card-actions">'
+          + '<button type="button" class="kb-btn" data-home-preview="' + esc(p.id) + '">预览</button>'
+          + '<button type="button" class="kb-btn" data-home-edit="' + esc(p.id) + '">继续编辑</button>'
+          + '</div></div></article>';
+      }).join('');
+      return;
+    }
+    var tpls = (state.render && state.render.templates) || [];
+    if (!tpls.length) {
+      body.innerHTML = '<div class="kb-empty" style="grid-column:1/-1;">模板加载中…</div>';
+      return;
+    }
+    body.innerHTML = tpls.map(function (t) {
+      var cover = t.cover || t.cover_url || t.thumbnail || t.thumb || '';
+      return '<article class="kb-home-card">'
+        + '<div class="kb-home-cover">' + (cover ? '<img src="' + esc(cover) + '" alt="">' : esc(t.name || t.id)) + '</div>'
+        + '<div class="kb-home-card-body"><strong>' + esc(t.name || t.id) + '</strong><small>' + esc(t.category || t.layout_label || '') + '</small>'
+        + '<div class="kb-home-card-actions"><button type="button" class="kb-btn kb-btn-primary" data-home-use="' + esc(t.id) + '">用这个模板</button></div>'
+        + '</div></article>';
+    }).join('');
+  }
+
+  function openPreviewModal(url) {
+    var old = document.getElementById('kbPreviewMask');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var mask = document.createElement('div');
+    mask.id = 'kbPreviewMask';
+    mask.className = 'kb-preview-mask';
+    mask.innerHTML = '<div class="kb-preview-box"><button type="button" class="kb-preview-close" data-preview-close="1">×</button><video src="' + esc(url) + '" controls autoplay playsinline></video></div>';
+    document.body.appendChild(mask);
+    function close() {
+      var v = mask.querySelector('video');
+      if (v) { try { v.pause(); } catch (e) {} }
+      if (mask.parentNode) mask.parentNode.removeChild(mask);
+    }
+    mask.addEventListener('click', function (e) {
+      if (e.target === mask || (e.target && e.target.getAttribute && e.target.getAttribute('data-preview-close'))) close();
+    });
+    function onKey(e) { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } }
+    document.addEventListener('keydown', onKey);
+  }
+
   function bind() {
+    document.addEventListener('click', function (evt) {
+      var t = evt.target;
+      if (!t || !t.getAttribute) return;
+      var tab = t.getAttribute('data-home-tab');
+      if (tab) { state.homeTab = tab; renderHome(); return; }
+      if (t.id === 'kbHomeNew') { hideHome(); return; }
+      if (t.id === 'kbHomeBack') { showHome(); return; }
+      var use = t.getAttribute('data-home-use');
+      if (use) { hideHome(); openCreateModal(use); return; }
+      var prev = t.getAttribute('data-home-preview');
+      if (prev) {
+        var p = (state.projects || []).filter(function (x) { return String(x.id) === String(prev); })[0];
+        if (p) openPreviewModal(projectPreviewUrl(p));
+        return;
+      }
+      var edit = t.getAttribute('data-home-edit');
+      if (edit) { hideHome(); openProject(edit); return; }
+    });
     document.addEventListener('click', function(evt) {
       var t = evt.target;
       if (!t || !t.id) return;
@@ -2273,6 +2394,7 @@
       bind();
       if ((state.form && state.form.generator || 'hifly') === 'hifly') loadHiflyAvatars();
       renderAll();
+      showHome('templates');
       updateCount();
     }
     return root;
