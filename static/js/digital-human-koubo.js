@@ -332,6 +332,27 @@
       + '#content-digital-human-koubo .kb-gen-row label{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #e2e8f0;border-radius:999px;font-size:12px;color:#475569;cursor:pointer;background:#fff;}'
       + '#content-digital-human-koubo .kb-gen-row input{accent-color:#2563eb;}'
       + '#content-digital-human-koubo .kb-hifly-avatar select{height:34px;border:1px solid #e2e8f0;border-radius:8px;padding:0 8px;font-size:12px;}';
+    css += '#content-digital-human-koubo .hifly-modal{position:fixed;inset:0;z-index:10100;}'
+      + '#content-digital-human-koubo .hifly-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,0.58);backdrop-filter:blur(3px);}'
+      + '#content-digital-human-koubo .hifly-modal-card{position:relative;width:min(92vw,760px);max-height:92vh;overflow:auto;margin:4vh auto 0;border-radius:28px;background:#fff;box-shadow:0 32px 80px rgba(15,23,42,0.28);}'
+      + '#content-digital-human-koubo .hifly-mode-card{width:min(92vw,720px);}'
+      + '#content-digital-human-koubo .hifly-modal-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1.15rem 1.25rem;border-bottom:1px solid rgba(15,23,42,0.08);}'
+      + '#content-digital-human-koubo .hifly-modal-title{margin:0;font-size:1.4rem;color:#111827;}'
+      + '#content-digital-human-koubo .hifly-modal-close{border:none;background:transparent;font-size:2rem;line-height:1;color:#64748b;cursor:pointer;}'
+      + '#content-digital-human-koubo .hifly-modal-body{padding:1.25rem;display:flex;flex-direction:column;gap:1rem;}'
+      + '#content-digital-human-koubo .hifly-modal-foot{display:flex;justify-content:flex-end;gap:0.75rem;padding:1rem 1.25rem 1.25rem;border-top:1px solid rgba(15,23,42,0.08);}'
+      + '#content-digital-human-koubo .hifly-mode-list{display:flex;flex-direction:column;gap:1rem;padding:1.25rem;}'
+      + '#content-digital-human-koubo .hifly-mode-option{display:flex;align-items:center;gap:1rem;padding:1.2rem 1.25rem;border-radius:24px;border:1px solid rgba(15,23,42,0.08);background:#fff;cursor:pointer;text-align:left;box-shadow:0 12px 30px rgba(15,23,42,0.06);transition:transform .16s ease,box-shadow .16s ease;}'
+      + '#content-digital-human-koubo .hifly-mode-option:hover{transform:translateY(-1px);box-shadow:0 16px 34px rgba(15,23,42,0.10);}'
+      + '#content-digital-human-koubo .hifly-mode-icon{width:64px;height:64px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#6327ff,#c30099);color:#fff;font-weight:800;font-size:1.05rem;flex:0 0 auto;}'
+      + '#content-digital-human-koubo .hifly-mode-copy{display:flex;flex-direction:column;gap:0.28rem;min-width:0;}'
+      + '#content-digital-human-koubo .hifly-mode-copy strong{font-size:1rem;color:#111827;}'
+      + '#content-digital-human-koubo .hifly-mode-copy span{color:#4b5563;line-height:1.55;font-size:0.9rem;}'
+      + '#content-digital-human-koubo .hifly-recommend-chip{margin-left:auto;display:inline-flex;align-items:center;padding:0.42rem 0.82rem;border-radius:999px;background:rgba(124,94,255,0.12);color:#7c3aed;font-weight:700;white-space:nowrap;font-size:0.8rem;}'
+      + '#content-digital-human-koubo .hifly-upload-box{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.42rem;min-height:190px;padding:1rem;border-radius:22px;border:1px dashed rgba(124,94,255,0.25);background:linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,246,255,0.92));cursor:pointer;}'
+      + '#content-digital-human-koubo .hifly-upload-box strong{font-size:1rem;color:#1f2b42;}'
+      + '#content-digital-human-koubo .hifly-upload-box span{color:#667189;line-height:1.6;font-size:0.88rem;text-align:center;}'
+      + '#content-digital-human-koubo .hifly-file-meta{display:flex;justify-content:space-between;gap:0.75rem;margin-top:6px;padding:0.6rem 0.8rem;border-radius:14px;background:rgba(15,23,42,0.05);color:#334155;font-size:0.82rem;word-break:break-all;}';
     style.textContent = css;
     document.head.appendChild(style);
   }
@@ -360,15 +381,45 @@
       + '  <div id="kbPack"></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">项目记录<span><small id="kbProjCount"></small> <button type="button" class="kb-btn" id="kbProjRefresh" style="margin-left:8px;">刷新</button></span></div><div id="kbProjects"></div></div>'
       + '  <div class="kb-log" id="kbLog">准备就绪</div>'
-      + '<div id="kbHiflyTrainModal" style="display:none;position:fixed;inset:0;z-index:10100;background:rgba(15,23,42,.45);align-items:center;justify-content:center;">'
-      + '  <div style="width:min(420px,92vw);background:#fff;border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(15,23,42,.25);">'
-      + '    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b>训练海螺形象</b><button type="button" id="kbHiflyTrainClose" style="border:0;background:transparent;font-size:18px;cursor:pointer;">×</button></div>'
-      + '    <label class="kb-field">名称<input id="kbHiflyTrainName" maxlength="20" placeholder="例如：老板形象"></label>'
-      + '    <label class="kb-field">类型<select id="kbHiflyTrainType"><option value="image">图片</option><option value="video">视频</option></select></label>'
-      + '    <label class="kb-field">文件<input id="kbHiflyTrainFile" type="file" accept="image/*,video/*"></label>'
-      + '    <label style="display:flex;gap:6px;font-size:11px;color:#64748b;align-items:center;margin:6px 0;"><input type="checkbox" id="kbHiflyTrainAgree"> 我确认拥有该肖像授权</label>'
-      + '    <div style="display:flex;gap:8px;justify-content:flex-end;"><button type="button" class="kb-btn" id="kbHiflyTrainCancel">取消</button><button type="button" class="kb-btn-primary" id="kbHiflyTrainSubmit">提交训练</button></div>'
-      + '    <div class="kb-hint" id="kbHiflyTrainMsg" style="margin-top:8px;"></div>'
+      + '<div id="kbHfModeModal" class="hifly-modal" style="display:none;">'
+      + '  <div class="hifly-modal-backdrop" data-hf-close="kbHfModeModal"></div>'
+      + '  <div class="hifly-modal-card hifly-mode-card" role="dialog" aria-modal="true">'
+      + '    <div class="hifly-modal-head"><h4 class="hifly-modal-title">创建数字人</h4><button type="button" class="hifly-modal-close" data-hf-close="kbHfModeModal">×</button></div>'
+      + '    <div class="hifly-mode-list">'
+      + '      <button type="button" class="hifly-mode-option" data-hf-mode="image"><span class="hifly-mode-icon">图</span><span class="hifly-mode-copy"><strong>图片生成数字人</strong><span>上传一张正面清晰照片，快速创建数字人形象。</span></span><span class="hifly-recommend-chip">推荐</span></button>'
+      + '      <button type="button" class="hifly-mode-option" data-hf-mode="video"><span class="hifly-mode-icon">视</span><span class="hifly-mode-copy"><strong>视频生成数字人</strong><span>上传一段 5–30 秒单人正脸讲话视频，形象更自然。</span></span></button>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>'
+      + '<div id="kbHfImageModal" class="hifly-modal" style="display:none;">'
+      + '  <div class="hifly-modal-backdrop" data-hf-close="kbHfImageModal"></div>'
+      + '  <div class="hifly-modal-card" role="dialog" aria-modal="true">'
+      + '    <div class="hifly-modal-head"><h4 class="hifly-modal-title">图片生成数字人</h4><button type="button" class="hifly-modal-close" data-hf-close="kbHfImageModal">×</button></div>'
+      + '    <div class="hifly-modal-body">'
+      + '      <label class="kb-field">数字人名称<input id="kbHfImageName" maxlength="20" placeholder="例如：老板形象"></label>'
+      + '      <div class="hifly-upload-box" id="kbHfImageBox"><strong>点击或拖拽上传人物照片</strong><span>jpg / png / webp，≤ 15MB，建议正脸、光线均匀</span><div id="kbHfImageMeta" class="hifly-file-meta" style="display:none;"></div></div>'
+      + '      <input id="kbHfImageFile" type="file" accept="image/jpeg,image/png,image/webp" style="display:none;">'
+      + '      <label class="kb-field">模型<select id="kbHfImageModel"><option value="2">标准</option><option value="3">高清</option></select></label>'
+      + '      <label style="display:flex;gap:8px;font-size:12px;color:#475569;align-items:center;"><input type="checkbox" id="kbHfImageAgree"> 我确认拥有该肖像的合法授权</label>'
+      + '      <div class="kb-hint" id="kbHfImageMsg"></div>'
+      + '    </div>'
+      + '    <div class="hifly-modal-foot"><button type="button" class="kb-btn" data-hf-close="kbHfImageModal">取消</button><button type="button" class="kb-btn-primary" id="kbHfImageSubmit">提交训练</button></div>'
+      + '  </div>'
+      + '</div>'
+      + '<div id="kbHfVideoModal" class="hifly-modal" style="display:none;">'
+      + '  <div class="hifly-modal-backdrop" data-hf-close="kbHfVideoModal"></div>'
+      + '  <div class="hifly-modal-card" role="dialog" aria-modal="true">'
+      + '    <div class="hifly-modal-head"><h4 class="hifly-modal-title">视频生成数字人</h4><button type="button" class="hifly-modal-close" data-hf-close="kbHfVideoModal">×</button></div>'
+      + '    <div class="hifly-modal-body">'
+      + '      <label class="kb-field">数字人名称<input id="kbHfVideoName" maxlength="20" placeholder="例如：老板形象"></label>'
+      + '      <div class="hifly-upload-box" id="kbHfVideoBox"><strong>点击或拖拽上传人物视频</strong><span>mp4 / mov，5–30 秒单人正脸连续讲话，无背景音乐</span><div id="kbHfVideoMeta" class="hifly-file-meta" style="display:none;"></div></div>'
+      + '      <input id="kbHfVideoFile" type="file" accept="video/mp4,video/quicktime" style="display:none;">'
+      + '      <label style="display:flex;gap:8px;font-size:12px;color:#475569;align-items:center;"><input type="checkbox" id="kbHfVideoAgree"> 我确认拥有该肖像的合法授权</label>'
+      + '      <div class="kb-hint" id="kbHfVideoMsg"></div>'
+      + '    </div>'
+      + '    <div class="hifly-modal-foot"><button type="button" class="kb-btn" data-hf-close="kbHfVideoModal">取消</button><button type="button" class="kb-btn-primary" id="kbHfVideoSubmit">提交训练</button></div>'
+      + '  </div>'
+      + '</div>'
       + '  </div>'
       + '</div>'
       + '</section></div>';
@@ -418,79 +469,85 @@
       });
   }
 
-  function openHiflyTrainModal() {
-    var m = $('kbHiflyTrainModal');
-    if (!m) return;
-    m.style.display = 'flex';
-    var msg = $('kbHiflyTrainMsg');
-    if (msg) msg.textContent = '';
+  function showHfModal(id) {
+    var m = $(id);
+    if (m) m.style.display = 'block';
   }
 
-  function closeHiflyTrainModal() {
-    var m = $('kbHiflyTrainModal');
+  function closeHfModal(id) {
+    var m = $(id);
     if (m) m.style.display = 'none';
+  }
+
+  function openHiflyTrainModal() {
+    showHfModal('kbHfModeModal');
   }
 
   function hiflyCloudBase() {
     return (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : API;
   }
 
-  function submitHiflyTrain() {
-    var name = (($('kbHiflyTrainName') || {}).value || '').trim();
-    var type = (($('kbHiflyTrainType') || {}).value || 'image');
-    var fileInput = $('kbHiflyTrainFile');
+  function submitHfAvatar(mode) {
+    var isVideo = mode === 'video';
+    var nameInput = $(isVideo ? 'kbHfVideoName' : 'kbHfImageName');
+    var fileInput = $(isVideo ? 'kbHfVideoFile' : 'kbHfImageFile');
+    var agreeInput = $(isVideo ? 'kbHfVideoAgree' : 'kbHfImageAgree');
+    var msg = $(isVideo ? 'kbHfVideoMsg' : 'kbHfImageMsg');
+    var name = ((nameInput || {}).value || '').trim();
     var file = fileInput && fileInput.files ? fileInput.files[0] : null;
-    var agree = !!($('kbHiflyTrainAgree') || {}).checked;
-    var msg = $('kbHiflyTrainMsg');
+    var agree = !!(agreeInput || {}).checked;
     function setMsg(t) { if (msg) msg.textContent = t; }
-    if (!name) return setMsg('请填写名称');
-    if (!file) return setMsg('请选择图片或视频');
+    if (!name) return setMsg('请填写数字人名称');
+    if (!file) return setMsg(isVideo ? '请选择视频' : '请选择图片');
     if (!agree) return setMsg('请先勾选肖像授权确认');
     var base = hiflyCloudBase();
     var fd = new FormData();
     fd.append('title', name);
     fd.append('aigc_flag', '0');
-    if (typeof token !== 'undefined' && token) fd.append('token', token);
-    fd.append('file', file, file.name || (type === 'video' ? 'avatar.mp4' : 'avatar.jpg'));
+    if (!isVideo) fd.append('model', (($('kbHfImageModel') || {}).value || '2'));
+    fd.append('file', file, file.name || (isVideo ? 'avatar.mp4' : 'avatar.jpg'));
     setMsg('提交训练中…');
-    var url = base + (type === 'video' ? '/api/hifly/my/avatar/create-by-video-upload' : '/api/hifly/my/avatar/create-by-image-upload');
+    var url = base + (isVideo ? '/api/hifly/my/avatar/create-by-video-upload' : '/api/hifly/my/avatar/create-by-image-upload');
     fetch(url, { method: 'POST', headers: authOnly(), body: fd })
-      .then(function(r) {
-        return r.json().catch(function() { return {}; }).then(function(d) {
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
           if (!r.ok || d.ok === false) throw new Error(d.detail || ('HTTP ' + r.status));
           return d;
         });
       })
-      .then(function(d) {
+      .then(function (d) {
         var taskId = (d && (d.task_id || (d.item && d.item.task_id))) || '';
         if (!taskId) { setMsg('已提交，但没拿到任务号，请稍后刷新形象列表'); loadHiflyAvatars(); return; }
         setMsg('训练中，完成后会自动刷新…');
-        pollHiflyAvatarTask(taskId);
+        pollHiflyAvatarTask(taskId, setMsg, isVideo ? 'kbHfVideoModal' : 'kbHfImageModal');
       })
-      .catch(function(e) { setMsg('提交失败：' + (e && e.message ? e.message : e)); });
+      .catch(function (e) { setMsg('提交失败：' + (e && e.message ? e.message : e)); });
   }
 
-  function pollHiflyAvatarTask(taskId) {
+  function pollHiflyAvatarTask(taskId, setMsg, modalId) {
     var base = hiflyCloudBase();
     var tries = 0;
-    var timer = setInterval(function() {
+    var timer = setInterval(function () {
       tries += 1;
       fetch(base + '/api/hifly/my/avatar/task?task_id=' + encodeURIComponent(taskId), { headers: authOnly() })
-        .then(function(r) { return r.json().catch(function() { return {}; }); })
-        .then(function(d) {
-          var st = String((d && (d.status || (d.item && d.item.status))) || '').toLowerCase();
-          if (st === 'success' || st === 'succeed' || st === 'completed' || st === 'done') {
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (d) {
+          var item = d && d.item ? d.item : d;
+          item = item && typeof item === 'object' ? item : {};
+          var st = String(item.status || '').toLowerCase();
+          if (setMsg) setMsg('训练中…（第 ' + tries + ' 次检查）');
+          if (st === 'success' || st === 'succeed' || st === 'succeeded' || st === 'completed' || st === 'done') {
             clearInterval(timer);
-            var msg = $('kbHiflyTrainMsg'); if (msg) msg.textContent = '训练完成';
-            closeHiflyTrainModal();
+            if (setMsg) setMsg('训练完成');
+            if (modalId) closeHfModal(modalId);
             loadHiflyAvatars();
           } else if (st === 'failed' || st === 'error') {
             clearInterval(timer);
-            var msg2 = $('kbHiflyTrainMsg'); if (msg2) msg2.textContent = '训练失败：' + String((d && (d.message || d.error)) || '');
+            if (setMsg) setMsg('训练失败：' + String(item.message || item.error || ''));
           }
         })
-        .catch(function() {});
-      if (tries > 120) clearInterval(timer);
+        .catch(function () {});
+      if (tries > 180) clearInterval(timer);
     }, 5000);
   }
 
@@ -2233,8 +2290,8 @@
       if (!t || !t.id) return;
       if (t.id === 'kbHiflyRefresh') { evt.preventDefault(); loadHiflyAvatars(); }
       else if (t.id === 'kbHiflyCreate') { evt.preventDefault(); openHiflyTrainModal(); }
-      else if (t.id === 'kbHiflyTrainClose' || t.id === 'kbHiflyTrainCancel') { evt.preventDefault(); closeHiflyTrainModal(); }
-      else if (t.id === 'kbHiflyTrainSubmit') { evt.preventDefault(); submitHiflyTrain(); }
+      else if (t.id === 'kbHfImageSubmit') { evt.preventDefault(); submitHfAvatar('image'); }
+      else if (t.id === 'kbHfVideoSubmit') { evt.preventDefault(); submitHfAvatar('video'); }
     });
     document.addEventListener('change', function(evt) {
       var t = evt.target;
