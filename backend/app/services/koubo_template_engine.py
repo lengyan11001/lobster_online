@@ -171,6 +171,17 @@ _RATIO_LABELS = {'source': '跟随底片', '9:16': '竖屏 9:16', '16:9': '横�
 _MOTION_LABELS = {'push': '镜头缓推', 'pull': '镜头缓拉', 'none': '固定机位'}
 
 
+def _cover_for(spec_id: str, fallback: str) -> str:
+    """优先用样片抽帧的真实封面（static/koubo/templates/covers/<id>.jpg），没有才退回设计稿 SVG。"""
+    sid = str(spec_id or "").strip()
+    if sid:
+        root = Path(__file__).resolve().parents[3]
+        jpg = root / "static" / "koubo" / "templates" / "covers" / (sid + ".jpg")
+        if jpg.is_file():
+            return "/static/koubo/templates/covers/" + sid + ".jpg"
+    return fallback or ""
+
+
 def _public(spec: Dict[str, Any]) -> Dict[str, Any]:
     style = spec.get('style') or {}
     return {
@@ -184,7 +195,7 @@ def _public(spec: Dict[str, Any]) -> Dict[str, Any]:
         'ratio': spec.get('ratio') or 'source',
         'variant': spec.get('variant') or 'kinetic',
         'colors': [style.get('accent'), style.get('accent2'), style.get('accent3')],
-        'cover': spec.get('cover') or '',
+        'cover': _cover_for(str(spec.get('id') or ''), spec.get('cover') or ''),
         'sample_video_url': spec.get('sample_video_url') or '',
         'default': bool(spec.get('default')),
     }
