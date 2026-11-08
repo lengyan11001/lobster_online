@@ -2312,7 +2312,7 @@
       var sample = t.sample_video_url || '';
       var cover = t.cover || t.cover_url || t.thumbnail || t.thumb || '';
       var media = sample
-        ? '<video src="' + esc(sample) + '" muted loop playsinline preload="metadata" poster="' + esc(cover) + '"></video>'
+        ? '<video src="' + esc(sample) + '" muted loop playsinline autoplay preload="metadata"></video>'
         : (cover ? '<img src="' + esc(cover) + '" alt="">' : '');
       return '<article class="kb-home-card" data-home-use="' + esc(t.id) + '" style="background:linear-gradient(160deg,' + esc(colors[0]) + ',' + esc(colors[1]) + ' 55%,' + esc(colors[2]) + ');">'
         + '<div class="kb-home-media">' + media + '</div>'
@@ -2323,8 +2323,7 @@
         + '</article>';
     }).join('');
     Array.prototype.forEach.call(body.querySelectorAll('video'), function (v) {
-      v.addEventListener('mouseenter', function () { try { v.play(); } catch (e) {} });
-      v.addEventListener('mouseleave', function () { try { v.pause(); } catch (e) {} });
+      try { v.play(); } catch (e) {}
     });
   }
 
