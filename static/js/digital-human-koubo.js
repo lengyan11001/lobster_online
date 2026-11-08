@@ -361,9 +361,9 @@
     return '<div class="kb-root">'
       + '<aside class="kb-side">'
       + '  <div class="kb-side-head"><h3>数字人3.0</h3><span class="kb-pill" id="kbStatus">未保存</span></div>'
-      + '  <div class="kb-card"><div class="kb-sec-title">形象<small id="kbGenLabel">海螺数字人</small></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">形象<small id="kbGenLabel">数字人</small></div>'
       + '    <div class="kb-gen-row" id="kbGenRow">'
-      + '      <label><input type="radio" name="kbGen" value="hifly" checked><span>海螺数字人</span></label>'
+      + '      <label><input type="radio" name="kbGen" value="hifly" checked><span>数字人</span></label>'
       + '      <label><input type="radio" name="kbGen" value="grok"><span>Grok AI</span></label>'
       + '    </div>'
       + '    <div id="kbAvatar"></div></div>'
@@ -440,17 +440,17 @@
     var selected = String(state.form.hifly_avatar_id || '');
     var opts = '<option value="">当前默认（个人IP里最新的形象）</option>' + rows.map(function(it) {
       var id = String(it.avatar || it.hifly_avatar_id || '').trim();
-      var title = it.title || id || '海螺形象';
+      var title = it.title || id || '数字人形象';
       return '<option value="' + esc(id) + '"' + (id === selected ? ' selected' : '') + '>' + esc(title) + '</option>';
     }).join('');
     return '<div class="kb-hifly-avatar">'
-      + '<label style="display:block;font-size:11px;color:#64748b;margin-bottom:4px;">海螺形象</label>'
+      + '<label style="display:block;font-size:11px;color:#64748b;margin-bottom:4px;">数字人形象</label>'
       + '<select id="kbHiflyAvatar" style="width:100%;">' + opts + '</select>'
       + '<div style="display:flex;gap:6px;margin-top:6px;">'
       + '<button type="button" class="kb-btn" id="kbHiflyRefresh">刷新形象</button>'
       + '<button type="button" class="kb-btn" id="kbHiflyCreate">训练新形象</button>'
       + '</div>'
-      + '<div style="font-size:10.5px;color:#94a3b8;margin-top:4px;">海螺走已训练形象，口型由海螺保证</div>'
+      + '<div style="font-size:10.5px;color:#94a3b8;margin-top:4px;">走已训练形象，口型由生成引擎保证</div>'
       + '</div>';
   }
 
@@ -612,7 +612,7 @@
       + '  <label class="kb-field">场景<select id="kbScene">' + optList('scenes', f.scene) + '</select></label>'
       + '  <label class="kb-field">音色描述<input type="text" id="kbVoice" value="' + esc(f.voice || '') + '" placeholder="留空按照片自动匹配"></label>'
       + '</div>'
-      + '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;line-height:1.5;">底片来源：海螺数字人走「个人IP设置」里已训练的形象+声音，口型由海螺保证；Grok 图生视频更快，但口型不保证。普通生成和套模板共用这里选的底片来源。</div>'
+      + '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;line-height:1.5;">底片来源：数字人走「个人IP设置」里已训练的形象+声音，口型由生成引擎保证；Grok 图生视频更快，但口型不保证。普通生成和套模板共用这里选的底片来源。</div>'
       + '<div style="font-size:10.5px;color:#94a3b8;line-height:1.5;">「白背心」是固定女性形象；上传自己的照片请选「照片本人（自动匹配）」，否则提示词会按女性生成。</div>'
       + '<label class="kb-field" id="kbSceneWrap" style="display:' + (isCustom ? 'flex' : 'none') + ';">场景描述<input type="text" id="kbScenePrompt" value="' + esc(f.scene_prompt || '') + '" placeholder="例如：夜晚霓虹街头，浅景深"></label>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;"><input type="checkbox" id="kbCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（只生成背景，人物用原图抠像；特写照片会像贴片，建议半身照）</label>'
@@ -1153,13 +1153,13 @@
         + '<div class="kb-create-sub">模板决定标题、字幕、关键词、角标和 CTA 的样式；底片由你上传的真人照片生成，不需要再选别的模板。</div>'
         + '<div class="kb-create-sec"><b>1. 底片来源</b>'
         + '<div class="kb-gen-row" id="kbCreateGenRow">'
-        + '  <label><input type="radio" name="kbCreateGen" value="hifly" checked><span>海螺数字人</span></label>'
+        + '  <label><input type="radio" name="kbCreateGen" value="hifly" checked><span>数字人</span></label>'
         + '  <label><input type="radio" name="kbCreateGen" value="grok"><span>Grok AI</span></label>'
         + '</div>'
         + '<div id="kbCreateHifly" style="margin-top:8px;">'
         + '  <select id="kbCreateAvatar" style="width:100%;height:34px;border:1px solid #e2e8f0;border-radius:8px;padding:0 8px;font-size:12px;"></select>'
         + '  <div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="kb-btn" id="kbCreateAvatarRefresh">刷新形象</button><button type="button" class="kb-btn" id="kbCreateAvatarTrain">训练新形象</button></div>'
-        + '  <div class="kb-create-sub" style="margin-top:6px;">海螺走已训练形象，口型由海螺保证；留空用当前默认形象。</div>'
+        + '  <div class="kb-create-sub" style="margin-top:6px;">走已训练形象，口型由生成引擎保证；留空用当前默认形象。</div>'
         + '</div>'
         + '<div id="kbCreatePhotoWrap" style="display:none;margin-top:8px;"><div class="kb-create-photo" id="kbCreatePhoto"><img id="kbCreatePhotoImg" alt=""><span id="kbCreatePhotoText">点击上传正脸照片（jpg/png/webp，建议正脸、光线均匀）</span></div><input type="file" id="kbCreateFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>'
         + '</div>'
@@ -1177,7 +1177,7 @@
         var rows = (state.hiflyAvatars && state.hiflyAvatars.items) || [];
         sel.innerHTML = '<option value="">当前默认（个人IP里最新的形象）</option>' + rows.map(function (it) {
           var id = String(it.avatar || it.hifly_avatar_id || '').trim();
-          var title = it.title || id || '海螺形象';
+          var title = it.title || id || '数字人形象';
           return '<option value="' + esc(id) + '"' + (id === hiflyAvatarId ? ' selected' : '') + '>' + esc(title) + '</option>';
         }).join('');
       }
@@ -2297,7 +2297,7 @@
       if (t && t.id === 'kbHiflyAvatar') { state.form.hifly_avatar_id = t.value || ''; markDirty(); return; }
       if (t && t.name === 'kbGen') {
         state.form.generator = t.value || 'hifly';
-        if ($('kbGenLabel')) $('kbGenLabel').textContent = state.form.generator === 'hifly' ? '海螺数字人' : 'Grok AI';
+        if ($('kbGenLabel')) $('kbGenLabel').textContent = state.form.generator === 'hifly' ? '数字人' : 'Grok AI';
         renderAvatar();
         markDirty();
       }

@@ -621,7 +621,7 @@ _PACKAGING_OPTIONS = [
 
 
 _GENERATOR_OPTIONS: List[Dict[str, str]] = [
-    {"id": "hifly", "name": "海螺数字人（默认，口型准）"},
+    {"id": "hifly", "name": "数字人（默认，口型准）"},
     {"id": "grok", "name": "Grok 图生视频（快，口型不保证）"},
 ]
 
@@ -1537,7 +1537,7 @@ def _hifly_platform_headers(token: str, installation_id: str = "") -> Dict[str, 
 def _hifly_platform_create(token: str, payload: Dict[str, Any], installation_id: str = "") -> Dict[str, Any]:
     base = _hifly_platform_base()
     if not base:
-        raise RuntimeError("未配置 AUTH_SERVER_BASE，无法提交海螺数字人任务")
+        raise RuntimeError("未配置 AUTH_SERVER_BASE，无法提交数字人任务")
     with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0), trust_env=False) as client:
         resp = client.post(base + "/api/hifly/my/video/create-by-tts",
                            headers=_hifly_platform_headers(token, installation_id), json=payload)
@@ -1676,10 +1676,10 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
             if not urls and task_id:
                 job["message"] = "第 %d 段已提交，等待生成（task %s）" % (idx, task_id[:12])
                 if generator == "hifly":
-                    job["message"] = "第 %d 段已提交，等待海螺生成（task %s）" % (idx, task_id[:12])
+                    job["message"] = "第 %d 段已提交，等待数字人生成（task %s）" % (idx, task_id[:12])
                     url = _hifly_wait_video(token, task_id, installation_id)
                     if not url:
-                        raise RuntimeError("第 %d 段海螺生成失败或超时（task %s）" % (idx, task_id[:12]))
+                        raise RuntimeError("第 %d 段数字人生成失败或超时（task %s）" % (idx, task_id[:12]))
                     urls = [url]
                 else:
                     deadline = time.time() + 1800
@@ -1693,7 +1693,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                             detail = str(poll_err)
                             if "404" in detail or "任务不存在" in detail:
                                 raise RuntimeError(
-                                    "海螺任务查询失败：平台侧查不到 task %s（task.get_result 返回 404），已停止等待。"
+                                    "数字人任务查询失败：平台侧查不到 task %s（task.get_result 返回 404），已停止等待。"
                                     "请重启客户端后重试，或先把底片来源切到 Grok。" % task_id[:16]
                                 ) from poll_err
                             raise
