@@ -156,6 +156,9 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/tiktok-origin",
     "static/vendor",
     "static/data",
+    # 数字人3.0 模板封面/样片（static/koubo/templates）。之前没进 OTA，
+    # 用户机器上模板卡片没有封面，本机因为仓库里有才正常。
+    "static/koubo",
     "static/branding/brands.json",
     "static/index.html",
     "static/ai3d-model-preview.html",
