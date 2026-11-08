@@ -2286,11 +2286,32 @@
   function bind() {
     document.addEventListener('click', function(evt) {
       var t = evt.target;
-      if (!t || !t.id) return;
+      if (!t || !t.getAttribute) return;
+      var hfClose = t.getAttribute('data-hf-close');
+      if (hfClose) { evt.preventDefault(); closeHfModal(hfClose); return; }
+      var hfMode = t.getAttribute('data-hf-mode');
+      if (hfMode) {
+        evt.preventDefault();
+        closeHfModal('kbHfModeModal');
+        showHfModal(hfMode === 'video' ? 'kbHfVideoModal' : 'kbHfImageModal');
+        return;
+      }
+      if (t.id === 'kbHfImageBox') { var fi = document.getElementById('kbHfImageFile'); if (fi) fi.click(); return; }
+      if (t.id === 'kbHfVideoBox') { var fv = document.getElementById('kbHfVideoFile'); if (fv) fv.click(); return; }
+      if (!t.id) return;
       if (t.id === 'kbHiflyRefresh') { evt.preventDefault(); loadHiflyAvatars(); }
       else if (t.id === 'kbHiflyCreate') { evt.preventDefault(); openHiflyTrainModal(); }
       else if (t.id === 'kbHfImageSubmit') { evt.preventDefault(); submitHfAvatar('image'); }
       else if (t.id === 'kbHfVideoSubmit') { evt.preventDefault(); submitHfAvatar('video'); }
+    });
+    document.addEventListener('change', function(evt) {
+      var t = evt.target;
+      if (!t || !t.id) return;
+      if (t.id === 'kbHfImageFile' || t.id === 'kbHfVideoFile') {
+        var meta = document.getElementById(t.id === 'kbHfImageFile' ? 'kbHfImageMeta' : 'kbHfVideoMeta');
+        var f = t.files && t.files[0];
+        if (meta && f) { meta.style.display = 'flex'; meta.textContent = f.name + ' · ' + (f.size / 1024 / 1024).toFixed(2) + 'MB'; }
+      }
     });
     document.addEventListener('change', function(evt) {
       var t = evt.target;
