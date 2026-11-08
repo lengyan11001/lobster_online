@@ -133,13 +133,13 @@
       + '#content-digital-human-koubo .kb-packbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:#64748b;}'
       + '#content-digital-human-koubo .kb-packbar select{padding:5px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#334155;background:#fff;}'
       + '#content-digital-human-koubo .kb-packbar label{display:inline-flex;align-items:center;gap:4px;font-size:11px;}'
-      + '#content-digital-human-koubo .kb-templates{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;align-items:start;}'
+      + '#content-digital-human-koubo .kb-templates{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;align-items:start;}'
       + '#content-digital-human-koubo .kb-tpl{text-align:left;background:#fff;border:1px solid #eef2f7;border-radius:14px;padding:9px;cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s;}'
       + '#content-digital-human-koubo .kb-tpl:hover{transform:translateY(-1px);box-shadow:0 8px 20px -10px rgba(15,23,42,.25);}'
       + '#content-digital-human-koubo .kb-tpl.on{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.12);}'
       + '#content-digital-human-koubo .kb-tpl-preview{display:block;height:58px;border-radius:10px;margin-bottom:8px;position:relative;overflow:hidden;}'
-      + '#content-digital-human-koubo .kb-tpl-cover{display:block;width:100%;height:74px;object-fit:cover;border-radius:10px;margin-bottom:8px;background:#eef2f7;}'
-      + '#content-digital-human-koubo .kb-tpl-coverwrap{position:relative;margin-bottom:8px;}'
+      + '#content-digital-human-koubo .kb-tpl-cover{display:block;width:100%;height:100%;object-fit:cover;background:#0b1220;}'
+      + '#content-digital-human-koubo .kb-tpl-coverwrap{position:relative;aspect-ratio:9/16;border-radius:10px;overflow:hidden;background:#0b1220;margin-bottom:8px;}'
       + '#content-digital-human-koubo .kb-tpl-coverwrap .kb-tpl-cover{margin-bottom:0;}'
       + '#content-digital-human-koubo .kb-tpl-play{position:absolute;right:6px;bottom:6px;border:0;border-radius:999px;padding:3px 8px;background:rgba(5,9,18,.72);color:#fff;font-size:10px;cursor:pointer;backdrop-filter:blur(6px);}'
       + '#content-digital-human-koubo .kb-tpl-play:hover{background:rgba(37,99,235,.9);}'
@@ -1663,8 +1663,7 @@
     return '<div class="kb-tpl' + (on ? ' on' : '') + '" data-tpl="' + esc(t.id) + '">'
       + '<div class="kb-tpl-coverwrap">' + visual + favBtn + play + '</div>'
       + '<b>' + esc(t.name || t.id) + '</b>'
-      + '<p>' + esc(t.description || '') + '</p>'
-      + '<div class="kb-tpl-foot"><small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small><button type="button" class="kb-tpl-use" data-use="' + esc(t.id) + '">用这个模板</button><button type="button" class="kb-tpl-detail" data-detail="' + esc(t.id) + '">详情</button></div>'
+      + '<div class="kb-tpl-foot"><small>' + esc(t.category || '') + '</small><button type="button" class="kb-tpl-use" data-use="' + esc(t.id) + '">用这个模板</button></div>'
       + '</div>';
   }
 
@@ -1705,7 +1704,7 @@
     var emptyText = cat === 'recent' ? '最近还没有用过模板' : (cat === 'favorites' ? '还没有收藏模板' : '没有匹配的模板');
     grid.innerHTML = list.map(templateCardHtml).join('') || '<span style="font-size:12px;color:#94a3b8;padding:10px 0;">' + emptyText + '</span>';
     grid.querySelectorAll('[data-tpl]').forEach(function (card) {
-      card.onclick = function () { selectTemplate(card.getAttribute('data-tpl')); };
+      card.onclick = function () { openTemplateDetail(card.getAttribute('data-tpl')); };
     });
     grid.querySelectorAll('[data-sample]').forEach(function (btn) {
       btn.onclick = function (e) {
