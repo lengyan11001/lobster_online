@@ -357,30 +357,186 @@
     document.head.appendChild(style);
   }
 
+  function injectCssV3() {
+    if ($('kbStyleV3')) return;
+    var css = ''
+      + '#content-digital-human-koubo{background:#f6f8fb;padding:0;color:#334155;}'
+      + '.kbv{max-width:1240px;margin:0 auto;padding:16px 24px 48px;box-sizing:border-box;font-size:13px;}'
+      + '.kbv-head{display:flex;align-items:center;gap:20px;padding:4px 0 14px;border-bottom:1px solid #e9eef5;margin-bottom:18px;}'
+      + '.kbv-title{font-size:20px;font-weight:600;color:#0f172a;letter-spacing:-.02em;line-height:1.2;}'
+      + '.kbv-sub{font-size:11.5px;color:#94a3b8;margin-top:3px;}'
+      + '.kbv-tabs{display:flex;gap:2px;background:#eef2f7;padding:3px;border-radius:10px;}'
+      + '.kbv-tab{border:0;background:transparent;color:#64748b;font-size:13px;padding:7px 16px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:6px;}'
+      + '.kbv-tab:hover{color:#0f172a;}'
+      + '.kbv-tab.on{background:#fff;color:#0f172a;font-weight:500;box-shadow:0 1px 3px rgba(15,23,42,.1);}'
+      + '.kbv-tab i{font-style:normal;font-size:10.5px;color:#94a3b8;}'
+      + '.kbv-head-actions{margin-left:auto;display:flex;gap:8px;}'
+      + '.kbv-page[hidden]{display:none!important;}'
+      + '.kbv-filter{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;}'
+      + '.kbv-search{width:230px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:9px;background:#fff;font-size:12.5px;outline:none;}'
+      + '.kbv-search:focus{border-color:#93c5fd;}'
+      + '.kbv-chips{display:flex;gap:6px;flex-wrap:wrap;}'
+      + '.kbv-chip{border:1px solid #e6ecf4;background:#fff;color:#64748b;border-radius:999px;padding:5px 12px;font-size:12px;cursor:pointer;}'
+      + '.kbv-chip:hover{border-color:#cbd5e1;color:#0f172a;}'
+      + '.kbv-chip.on{background:#0f172a;border-color:#0f172a;color:#fff;}'
+      + '.kbv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:18px;}'
+      + '.kbv-grid-sm{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;}'
+      + '.kbv-card9{background:#fff;border:1px solid #eef2f7;border-radius:16px;overflow:hidden;cursor:pointer;transition:transform .18s,box-shadow .18s;box-shadow:0 2px 10px -4px rgba(15,23,42,.12);}'
+      + '.kbv-card9:hover{transform:translateY(-3px);box-shadow:0 18px 36px -14px rgba(15,23,42,.35);}'
+      + '.kbv-thumb{position:relative;aspect-ratio:9/16;background:#0b1220;overflow:hidden;}'
+      + '.kbv-thumb img,.kbv-thumb video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;}'
+      + '.kbv-thumb video{opacity:0;transition:opacity .2s;}'
+      + '.kbv-card9:hover .kbv-thumb video{opacity:1;}'
+      + '.kbv-thumb-fallback{position:absolute;inset:0;}'
+      + '.kbv-badge{position:absolute;left:8px;top:8px;z-index:2;background:rgba(10,15,26,.62);color:#fff;font-size:10.5px;padding:3px 8px;border-radius:999px;backdrop-filter:blur(6px);}'
+      + '.kbv-play{position:absolute;right:9px;bottom:9px;z-index:2;width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,.9);color:#0f172a;font-size:9px;display:flex;align-items:center;justify-content:center;transition:opacity .18s;}'
+      + '.kbv-card9:hover .kbv-play{opacity:0;}'
+      + '.kbv-cardbody{padding:10px 12px 12px;}'
+      + '.kbv-cardname{font-size:13.5px;font-weight:500;color:#0f172a;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
+      + '.kbv-cardmeta{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:4px;font-size:11px;color:#94a3b8;}'
+      + '.kbv-cardmeta span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
+      + '.kbv-loading{grid-column:1/-1;padding:70px 0;text-align:center;color:#94a3b8;font-size:12.5px;}'
+      + '.kbv-empty2{grid-column:1/-1;min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#94a3b8;font-size:12.5px;}'
+      + '.kbv-empty2 b{display:block;font-size:15px;color:#334155;margin-bottom:6px;font-weight:500;}'
+      + '.kbv-empty2 span{display:block;margin-bottom:16px;}'
+      + '.kbv-pagebar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:16px;}'
+      + '.kbv-pagebar-title{font-size:15px;font-weight:500;color:#0f172a;}'
+      + '.kbv-pagebar-sub{font-size:11.5px;color:#94a3b8;margin-top:3px;}'
+      + '.kbv-pagebar-actions{display:flex;gap:8px;}'
+      + '.kbv-projgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;}'
+      + '.kbv-proj{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px;background:#fff;border:1px solid #eef2f7;border-radius:14px;padding:10px;box-shadow:0 2px 10px -6px rgba(15,23,42,.15);}'
+      + '.kbv-projthumb{position:relative;width:96px;aspect-ratio:9/16;border-radius:10px;overflow:hidden;background:#0b1220;}'
+      + '.kbv-projthumb img,.kbv-projthumb video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;}'
+      + '.kbv-projthumb video{opacity:0;transition:opacity .2s;}'
+      + '.kbv-projthumb:hover video{opacity:1;}'
+      + '.kbv-projbody{display:flex;flex-direction:column;gap:4px;min-width:0;padding:2px 0;}'
+      + '.kbv-projactions{margin-top:auto;display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;}'
+      + '.kbv-danger{color:#b91c1c!important;}'
+      + '.kbv-createbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;padding:8px 2px 10px;margin:0 auto 6px;max-width:780px;background:#f6f8fb;border-bottom:1px solid #e9eef5;}'
+      + '.kbv-createtitle-wrap{min-width:0;}'
+      + '.kbv-genhint{font-size:11px;color:#94a3b8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:430px;}'
+      + '.kbv-create-title{font-size:16px;font-weight:500;color:#0f172a;}'
+      + '.kbv-createform{display:flex;flex-direction:column;gap:14px;max-width:780px;margin:0 auto;}'
+      + '.kbv-sec{background:#fff;border:1px solid #eef2f7;border-radius:16px;padding:16px 18px;}'
+      + '.kbv-sec-head{display:flex;align-items:center;gap:8px;margin-bottom:12px;}'
+      + '.kbv-step{width:20px;height:20px;border-radius:6px;background:#eef2ff;color:#4f46e5;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none;}'
+      + '.kbv-sec-title{font-size:13.5px;font-weight:500;color:#0f172a;}'
+      + '.kbv-sec-hint{margin-left:auto;font-size:11px;color:#94a3b8;}'
+      + '.kbv-tplpick{display:flex;gap:12px;align-items:center;}'
+      + '.kbv-tplthumb{width:62px;height:110px;border-radius:10px;object-fit:cover;background:#0b1220;flex:none;}'
+      + '.kbv-tplinfo{min-width:0;}'
+      + '.kbv-cardmeta2{font-size:11.5px;color:#94a3b8;margin-top:3px;}'
+      + '.kbv-link{border:0;background:none;color:#2563eb;font-size:11.5px;padding:6px 0 0;cursor:pointer;text-decoration:underline;text-underline-offset:2px;}'
+      + '.kbv-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}'
+      + '.kbv-segments{margin-top:8px;}'
+      + '.kbv-segments table{width:100%;border-collapse:collapse;font-size:11.5px;color:#475569;}'
+      + '.kbv-segments th{text-align:left;font-weight:400;color:#94a3b8;padding:6px 8px 6px 0;border-bottom:1px solid #f1f5f9;white-space:nowrap;}'
+      + '.kbv-segments td{padding:6px 8px 6px 0;border-bottom:1px solid #f8fafc;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+      + '.kbv-segments .kb-total{display:flex;align-items:center;justify-content:space-between;margin-top:8px;font-size:11.5px;color:#64748b;}'
+      + '.kbv-acc{display:flex;align-items:center;width:100%;border:0;background:#f8fafc;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#334155;cursor:pointer;gap:8px;}'
+      + '.kbv-acc span{margin-left:auto;font-size:11px;color:#94a3b8;}'
+      + '.kbv-acc i{font-style:normal;color:#94a3b8;transition:transform .18s;}'
+      + '.kbv-acc.open i{transform:rotate(180deg);}'
+      + '.kbv-extras{margin-top:12px;}'
+      + '.kbv-extras-foot{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:11px;color:#94a3b8;}'
+      + '.kbv-check{display:flex;align-items:center;gap:7px;font-size:12px;color:#64748b;margin-top:12px;}'
+      + '.kbv-footnote{padding:2px 4px 20px;font-size:11px;color:#94a3b8;}'
+      + '.kbv-emptyart{width:74px;height:132px;border:1.5px dashed #cbd5e1;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:26px;margin-bottom:18px;background:#fff;}'
+      + '.kbv-sticky-hint{font-size:11.5px;color:#94a3b8;}'
+      + '.kbv-train{display:flex;align-items:center;gap:8px;background:#eef2ff;border:1px solid #e0e7ff;border-radius:10px;padding:8px 10px;font-size:12px;color:#4338ca;margin-bottom:10px;}'
+      + '.kbv-train b{font-weight:500;}'
+      + '.kbv-train .bar{flex:1;height:4px;border-radius:999px;background:#dbe3ff;overflow:hidden;}'
+      + '.kbv-train .bar i{display:block;height:100%;width:40%;background:#4f46e5;animation:kbvslide 1.4s infinite;}'
+      + '@keyframes kbvslide{0%{margin-left:-40%}100%{margin-left:100%}}'
+      + '.kbv-modal{position:fixed;inset:0;z-index:10095;background:rgba(6,11,20,.82);display:flex;align-items:center;justify-content:center;padding:24px;}'
+      + '.kbv-modal-card{display:grid;grid-template-columns:300px minmax(0,1fr);width:min(92vw,860px);max-height:90vh;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 40px 90px rgba(0,0,0,.45);}'
+      + '.kbv-modal-media{background:#060a12;display:flex;align-items:center;justify-content:center;padding:16px;}'
+      + '.kbv-modal-media video,.kbv-modal-media img{width:100%;max-height:76vh;border-radius:12px;object-fit:contain;background:#000;display:block;}'
+      + '.kbv-modal-body{position:relative;padding:24px 26px;overflow:auto;display:flex;flex-direction:column;}'
+      + '.kbv-x{position:absolute;right:14px;top:12px;border:0;background:#f1f5f9;color:#64748b;width:28px;height:28px;border-radius:50%;font-size:16px;line-height:1;cursor:pointer;}'
+      + '.kbv-modal-kicker{font-size:11px;color:#6366f1;letter-spacing:.06em;}'
+      + '.kbv-modal-body h3{margin:6px 0 8px;font-size:21px;color:#0f172a;font-weight:600;}'
+      + '.kbv-modal-desc{font-size:12.5px;line-height:1.8;color:#64748b;margin:0 0 14px;max-width:46ch;}'
+      + '.kbv-modal-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;}'
+      + '.kbv-tag{font-size:11px;color:#475569;background:#f1f5f9;border-radius:999px;padding:4px 10px;}'
+      + '.kbv-modal-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:20px;}'
+      + '.kbv-modal-kv span{font-size:11.5px;color:#475569;background:#f8fafc;border-radius:8px;padding:7px 9px;}'
+      + '.kbv-modal-actions{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:16px;border-top:1px solid #f1f5f9;}'
+      + '.kbv-modal-actions .btn:last-child{margin-left:auto;}'
+      + '.kbv-picker{width:min(94vw,980px);max-height:88vh;background:#fff;border-radius:20px;display:flex;flex-direction:column;overflow:hidden;}'
+      + '.kbv-picker-head{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid #f1f5f9;}'
+      + '.kbv-picker-head h3{margin:0;font-size:15px;color:#0f172a;font-weight:500;}'
+      + '.kbv-picker-body{padding:18px 20px 22px;overflow:auto;}'
+      + '.kbv-player{position:relative;width:min(90vw,420px);background:#060a12;border-radius:20px;padding:14px;display:flex;flex-direction:column;gap:10px;}'
+      + '.kbv-player video{width:100%;aspect-ratio:9/16;max-height:72vh;object-fit:contain;background:#000;border-radius:12px;}'
+      + '.kbv-player-tabs{display:flex;gap:6px;}'
+      + '.kbv-player-tabs button{border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#cbd5e1;font-size:11.5px;border-radius:999px;padding:4px 12px;cursor:pointer;}'
+      + '.kbv-player-tabs button.on{background:#fff;color:#0f172a;border-color:#fff;}'
+      + '.kbv-player-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#94a3b8;font-size:11.5px;}'
+      + '.kbv-player-foot a{color:#cbd5e1;}'
+      + '.kbv-confirm{width:min(90vw,360px);background:#fff;border-radius:16px;padding:20px;}'
+      + '.kbv-confirm h4{margin:0 0 8px;font-size:15px;color:#0f172a;font-weight:500;}'
+      + '.kbv-confirm p{margin:0 0 18px;font-size:12.5px;color:#64748b;line-height:1.7;}'
+      + '.kbv-confirm-actions{display:flex;justify-content:flex-end;gap:8px;}'
+      + '@media(max-width:860px){.kbv-modal-card{grid-template-columns:1fr;}.kbv-modal-media{max-height:40vh;}.kbv-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));}}';
+    var style = document.createElement('style');
+    style.id = 'kbStyleV3';
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
   function shell() {
-    return '<div class="kb-root">'
-      + '<aside class="kb-side">'
-      + '  <div class="kb-side-head"><h3>数字人3.0</h3><span class="kb-pill" id="kbStatus">未保存</span></div>'
-      + '  <div class="kb-card"><div class="kb-sec-title">形象<small id="kbGenLabel">数字人</small></div>'
-      + '    <div class="kb-gen-row" id="kbGenRow">'
-      + '      <label><input type="radio" name="kbGen" value="hifly" checked><span>数字人</span></label>'
-      + '      <label><input type="radio" name="kbGen" value="grok"><span>Grok AI</span></label>'
-      + '    </div>'
-      + '    <div id="kbAvatar"></div></div>'
-      + '  <div class="kb-card"><div class="kb-sec-title">口播稿<small id="kbCount">0 字</small></div><textarea id="kbText" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒。"></textarea></div>'
-      + '  <div class="kb-card"><button type="button" class="kb-collapse" id="kbParamToggle">高级设置<span id="kbParamSummary">一般不用改</span></button><div class="kb-params" id="kbParams"></div></div>'
-      + '  <div class="kb-cta"><button type="button" class="kb-btn-primary" id="kbGenerate">生成第 1 段</button>'
-      + '    <div class="kb-cta-row"><button type="button" class="kb-btn" id="kbGenerateAll">生成全部</button></div>'
-      + '    <div class="kb-hint">先出第 1 段确认效果，再生成全部</div></div>'
-      + '</aside>'
-      + '<section class="kb-stage">'
-      + '  <div class="kb-toolbar"><div class="kb-crumb">工作台 / <b id="kbProjName">未命名项目</b></div>'
-      + '    <div class="kb-tools"><button type="button" class="kb-btn" id="kbSave">保存项目</button><button type="button" class="kb-btn" id="kbExport">导出 tasks.json</button><button type="button" class="kb-btn" id="kbDeps">运行环境</button><button type="button" class="kb-btn" id="kbBack">返回商店</button></div></div>'
-      + '  <div class="kb-preview" id="kbPreview"><div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div></div>'
-      + '  <div class="kb-meta" id="kbMeta"></div>'
-      + '  <div id="kbPack"></div>'
-      + '  <div class="kb-card"><div class="kb-sec-title">项目记录<span><small id="kbProjCount"></small> <button type="button" class="kb-btn" id="kbProjRefresh" style="margin-left:8px;">刷新</button></span></div><div id="kbProjects"></div></div>'
-      + '  <div class="kb-log" id="kbLog">准备就绪</div>'
+    return '<div class="kbv">'
+      + '<header class="kbv-head">'
+      + '  <div class="kbv-brand"><div class="kbv-title">数字人3.0</div><div class="kbv-sub">选模板 · 填素材 · 出成片</div></div>'
+      + '  <nav class="kbv-tabs" id="kbvTabs">'
+      + '    <button type="button" class="kbv-tab on" data-kbv-page="templates">模板</button>'
+      + '    <button type="button" class="kbv-tab" data-kbv-page="projects">项目记录<i id="kbvProjCount"></i></button>'
+      + '  </nav>'
+      + '  <div class="kbv-head-actions">'
+      + '    <button type="button" class="btn btn-ghost btn-sm" id="kbvRefresh">刷新</button>'
+      + '    <button type="button" class="btn btn-primary btn-sm" id="kbvNew">新增</button>'
+      + '  </div>'
+      + '</header>'
+      + '<section class="kbv-page" id="kbvPageTemplates">'
+      + '  <div class="kbv-filter"><input id="kbvSearch" class="kbv-search" placeholder="搜索模板 / 场景 / 标签"><div class="kbv-chips" id="kbvChips"></div></div>'
+      + '  <div class="kbv-grid" id="kbvTplGrid"><div class="kbv-loading">正在加载模板…</div></div>'
+      + '</section>'
+      + '<section class="kbv-page" id="kbvPageProjects" hidden>'
+      + '  <div class="kbv-pagebar"><div><div class="kbv-pagebar-title">项目记录</div><div class="kbv-pagebar-sub" id="kbvProjMeta">生成中的任务每 3 秒自动刷新</div></div>'
+      + '  <div class="kbv-pagebar-actions"><button type="button" class="btn btn-ghost btn-sm" id="kbvBatch">批量出片</button><button type="button" class="btn btn-ghost btn-sm" id="kbvMatrix">矩阵批量</button><button type="button" class="btn btn-ghost btn-sm" id="kbvProjRefresh">刷新</button></div></div>'
+      + '  <div class="kbv-projgrid" id="kbvProjGrid"></div>'
+      + '</section>'
+      + '<section class="kbv-page" id="kbvPageCreate" hidden>'
+      + '  <div class="kbv-createbar"><button type="button" class="btn btn-ghost btn-sm" id="kbvBack">← 返回</button><div class="kbv-createtitle-wrap"><div class="kbv-create-title" id="kbvCreateTitle">新建项目</div><div class="kbv-genhint" id="kbvGenHint">生成后自动跳到项目记录，不用在这里等</div></div><span class="kb-pill" id="kbStatus">未保存</span><span id="kbProjName" style="display:none;"></span><span style="flex:1"></span><button type="button" class="btn btn-primary btn-sm" id="kbGenerate">生成</button></div>'
+      + '  <div class="kbv-createform">'
+      + '    <section class="kbv-sec">'
+      + '      <div class="kbv-sec-head"><span class="kbv-step">1</span><span class="kbv-sec-title">模板</span><span class="kbv-sec-hint">决定标题、字幕、花字和结尾的样式</span></div>'
+      + '      <div class="kbv-tplpick" id="kbvTplPick"></div>'
+      + '    </section>'
+      + '    <section class="kbv-sec">'
+      + '      <div class="kbv-sec-head"><span class="kbv-step">2</span><span class="kbv-sec-title">形象</span><span class="kbv-sec-hint" id="kbGenLabel">数字人</span></div>'
+      + '      <div class="kb-gen-row" id="kbGenRow"><label><input type="radio" name="kbGen" value="hifly" checked><span>数字人</span></label><label><input type="radio" name="kbGen" value="grok"><span>Grok AI</span></label></div>'
+      + '      <div id="kbvTrainBar"></div>'
+      + '      <div id="kbAvatar"></div>'
+      + '    </section>'
+      + '    <section class="kbv-sec">'
+      + '      <div class="kbv-sec-head"><span class="kbv-step">3</span><span class="kbv-sec-title">口播稿</span><span class="kbv-sec-hint" id="kbCount">0 字</span></div>'
+      + '      <textarea id="kbText" placeholder="粘贴口播稿。按句自动分段，没有固定时长限制，写多长都能生成。"></textarea>'
+      + '      <div class="kbv-meta" id="kbMeta"></div>'
+      + '      <div class="kbv-segments" id="kbSegments"></div>'
+      + '    </section>'
+      + '    <section class="kbv-sec">'
+      + '      <div class="kbv-sec-head"><span class="kbv-step">4</span><span class="kbv-sec-title">画面与包装</span><span class="kbv-sec-hint">一般不用改</span></div>'
+      + '      <button type="button" class="kbv-acc" id="kbParamToggle">高级设置 <span id="kbParamSummary">全屏 · 9:16</span><i>▾</i></button>'
+      + '      <div class="kb-params" id="kbParams"></div>'
+      + '      <div id="kbExtras" class="kbv-extras"></div>'
+      + '      <label class="kbv-check" id="kbvFirstOnlyWrap"><input type="checkbox" id="kbvFirstOnly"> 先只生成第 1 段看效果（其余之后再生成）</label>'
+      + '    </section>'
+      + '    <div class="kbv-footnote">生成后会自动套用模板出 480p 预览；满意再出高清。换模板不会重复扣底片算力。</div>'
+      + '  </div>'
+      + '</section>'
+      + '<div class="kb-log" id="kbLog" style="display:none;"></div>'
       + '<div id="kbHfModeModal" class="hifly-modal" style="display:none;">'
       + '  <div class="hifly-modal-backdrop" data-hf-close="kbHfModeModal"></div>'
       + '  <div class="hifly-modal-card hifly-mode-card" role="dialog" aria-modal="true">'
@@ -389,6 +545,7 @@
       + '      <button type="button" class="hifly-mode-option" data-hf-mode="image"><span class="hifly-mode-icon">图</span><span class="hifly-mode-copy"><strong>图片生成数字人</strong><span>上传一张正面清晰照片，快速创建数字人形象。</span></span><span class="hifly-recommend-chip">推荐</span></button>'
       + '      <button type="button" class="hifly-mode-option" data-hf-mode="video"><span class="hifly-mode-icon">视</span><span class="hifly-mode-copy"><strong>视频生成数字人</strong><span>上传一段 5–30 秒单人正脸讲话视频，形象更自然。</span></span></button>'
       + '    </div>'
+      + '    <div class="hifly-modal-foot" style="justify-content:center;color:#94a3b8;font-size:11px;">提交后弹窗会自动收起，训练在后台继续，你可以接着写口播稿</div>'
       + '  </div>'
       + '</div>'
       + '<div id="kbHfImageModal" class="hifly-modal" style="display:none;">'
@@ -420,9 +577,7 @@
       + '    <div class="hifly-modal-foot"><button type="button" class="kb-btn" data-hf-close="kbHfVideoModal">取消</button><button type="button" class="kb-btn-primary" id="kbHfVideoSubmit">提交训练</button></div>'
       + '  </div>'
       + '</div>'
-      + '  </div>'
-      + '</div>'
-      + '</section></div>';
+      + '</div>';
   }
 
   function optList(key, value) {
@@ -518,8 +673,12 @@
       .then(function (d) {
         var taskId = (d && (d.task_id || (d.item && d.item.task_id))) || '';
         if (!taskId) { setMsg('已提交，但没拿到任务号，请稍后刷新形象列表'); loadHiflyAvatars(); return; }
-        setMsg('训练中，完成后会自动刷新…');
-        pollHiflyAvatarTask(taskId, setMsg, isVideo ? 'kbHfVideoModal' : 'kbHfImageModal');
+        state.train = { name: name, mode: mode, taskId: taskId, startedAt: Date.now(), status: 'running', message: '已提交，后台训练中' };
+        renderTrainBar();
+        closeHfModal(isVideo ? 'kbHfVideoModal' : 'kbHfImageModal');
+        setMsg('训练中…');
+        toast('已提交训练，弹窗已收起，可以接着写稿');
+        pollHiflyAvatarTask(taskId, setMsg, '');
       })
       .catch(function (e) { setMsg('提交失败：' + (e && e.message ? e.message : e)); });
   }
@@ -535,19 +694,35 @@
           var item = d && d.item ? d.item : d;
           item = item && typeof item === 'object' ? item : {};
           var st = String(item.status || '').toLowerCase();
-          if (setMsg) setMsg('训练中…（第 ' + tries + ' 次检查）');
+          if (setMsg) setMsg(tries < 3 ? '训练中…' : '训练在后台继续，完成后会提示');
+          var mine = state.train && state.train.taskId === taskId;
+          if (mine && state.train.status === 'running') {
+            state.train.message = '第 ' + tries + ' 次检查 · ' + (item.status || '训练中');
+            renderTrainBar();
+          }
           if (st === 'success' || st === 'succeed' || st === 'succeeded' || st === 'completed' || st === 'done') {
             clearInterval(timer);
             if (setMsg) setMsg('训练完成');
             if (modalId) closeHfModal(modalId);
-            loadHiflyAvatars();
+            if (mine) { state.train.status = 'done'; state.train.message = ''; renderTrainBar(); }
+            loadHiflyAvatars().then(function () {
+              if (!mine) return;
+              var items = (state.hiflyAvatars && state.hiflyAvatars.items) || [];
+              var hit = items.filter(function (it) { return String(it.title || '') === String(state.train.name || ''); })[0] || items[0];
+              if (hit) {
+                state.form.hifly_avatar_id = String(hit.avatar || hit.hifly_avatar_id || '');
+                renderAvatar();
+              }
+              toast('数字人形象「' + state.train.name + '」训练完成，已自动选中');
+            });
           } else if (st === 'failed' || st === 'error') {
             clearInterval(timer);
             if (setMsg) setMsg('训练失败：' + String(item.message || item.error || ''));
+            if (mine) { state.train.status = 'failed'; state.train.message = String(item.message || item.error || '上游返回失败'); renderTrainBar(); toast('形象训练失败：' + state.train.message); }
           }
         })
         .catch(function () {});
-      if (tries > 180) clearInterval(timer);
+      if (tries > 360) { clearInterval(timer); if (state.train && state.train.taskId === taskId && state.train.status === 'running') { state.train.status = 'failed'; state.train.message = '超时未拿到结果，可稍后刷新形象列表'; renderTrainBar(); } }
     }, 5000);
   }
 
@@ -685,7 +860,7 @@
     if (!box) return;
     var q = state.quote || (state.project && state.project.segments ? state.project : null);
     if (!q || !q.segments || !q.segments.length) {
-      box.innerHTML = '<span style="font-size:12px;color:#94a3b8;">还没有分段，先点「只看分段报价」或直接生成。</span>';
+      box.innerHTML = '<span style="font-size:11.5px;color:#94a3b8;">输入口播稿后自动计算分段和时长。</span>';
       if ($('kbSegCount')) $('kbSegCount').textContent = '0 段';
       return;
     }
@@ -1095,279 +1270,7 @@
   }
 
   function openCreateModal(templateId) {
-    var local = (state.render.templates || []).filter(function (t) { return t.id === templateId; })[0] || { id: templateId, name: templateId };
-    var old = document.getElementById('kbCreateModal');
-    if (old && old.parentNode) old.parentNode.removeChild(old);
-    var modal = document.createElement('div');
-    modal.id = 'kbCreateModal';
-    document.body.appendChild(modal);
-    var tpl = local;
-    loadHiflyAvatars().catch(function () {});
-    var photoId = '';
-    var photoUrl = '';
-    var generator = 'hifly';
-    var hiflyAvatarId = '';
-    var project = null;
-    var timer = null;
-    var busy = false;
-    var projectTitle = '';
-    var lastStage = '';
-    var quote = null;
-    var quoteTimer = null;
-
-    function close() { if (timer) clearInterval(timer); if (modal.parentNode) modal.parentNode.removeChild(modal); }
-    function sampleSrc(t) {
-      var u = t.sample_video_url || '';
-      return u ? (String(u).indexOf('http') === 0 ? u : API + u) : '';
-    }
-    function estimate() {
-      var text = (modal.querySelector('#kbCreateScript') || {}).value || '';
-      var chars = text.replace(/\s/g, '').length;
-      var el = modal.querySelector('#kbCreateMeta');
-      if (!el) return;
-      if (!chars) { el.textContent = '按字数自动分段，生成时扣算力'; quote = null; return; }
-      var guessSecs = Math.max(6, Math.ceil(chars / 5.4));
-      el.textContent = '预计 ' + guessSecs + ' 秒 · 计算真实分段中…';
-      clearTimeout(quoteTimer);
-      quoteTimer = setTimeout(function () {
-        req('/api/skills/digital-human-koubo/quote', {
-          method: 'POST', headers: headers(),
-          body: JSON.stringify({ text: text, shot: 'full', resolution: '720p', generator: (state.form && state.form.generator) || 'hifly' })
-        }).then(function (d) {
-          quote = d;
-          el.textContent = '预计 ' + d.total_seconds + ' 秒 · ' + d.segments.length + ' 段 · 约 ' + d.total_credits + ' credits';
-        }).catch(function () {
-          el.textContent = '预计 ' + guessSecs + ' 秒 · 以创建后实际分段为准';
-        });
-      }, 450);
-    }
-
-    function paintForm() {
-      var media = sampleSrc(tpl)
-        ? '<video autoplay muted loop playsinline src="' + esc(sampleSrc(tpl)) + '"></video>'
-        : '<div style="height:220px;border-radius:12px;background:linear-gradient(135deg,#334155,#0f172a)"></div>';
-      modal.innerHTML = '<div class="kb-create">'
-        + '<div class="kb-create-media">' + media + '<div class="kb-create-tpl">将使用模板<br><b>' + esc(tpl.name || tpl.id) + '</b></div></div>'
-        + '<div class="kb-create-body">'
-        + '<div class="kb-create-head"><h3>用「' + esc(tpl.name || tpl.id) + '」创作</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
-        + '<div class="kb-create-sub">模板决定标题、字幕、关键词、角标和 CTA 的样式；底片由你上传的真人照片生成，不需要再选别的模板。</div>'
-        + '<div class="kb-create-sec"><b>1. 底片来源</b>'
-        + '<div class="kb-gen-row" id="kbCreateGenRow">'
-        + '  <label><input type="radio" name="kbCreateGen" value="hifly" checked><span>数字人</span></label>'
-        + '  <label><input type="radio" name="kbCreateGen" value="grok"><span>Grok AI</span></label>'
-        + '</div>'
-        + '<div id="kbCreateHifly" style="margin-top:8px;">'
-        + '  <select id="kbCreateAvatar" style="width:100%;height:34px;border:1px solid #e2e8f0;border-radius:8px;padding:0 8px;font-size:12px;"></select>'
-        + '  <div style="display:flex;gap:8px;margin-top:8px;"><button type="button" class="kb-btn" id="kbCreateAvatarRefresh">刷新形象</button><button type="button" class="kb-btn" id="kbCreateAvatarTrain">训练新形象</button></div>'
-        + '  <div class="kb-create-sub" style="margin-top:6px;">走已训练形象，口型由生成引擎保证；留空用当前默认形象。</div>'
-        + '</div>'
-        + '<div id="kbCreatePhotoWrap" style="display:none;margin-top:8px;"><div class="kb-create-photo" id="kbCreatePhoto"><img id="kbCreatePhotoImg" alt=""><span id="kbCreatePhotoText">点击上传正脸照片（jpg/png/webp，建议正脸、光线均匀）</span></div><input type="file" id="kbCreateFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>'
-        + '</div>'
-        + '<div class="kb-create-sec"><b>2. 口播文案</b><textarea id="kbCreateScript" placeholder="粘贴你的口播稿，按字数自动分段"></textarea></div>'
-        + '<div class="kb-create-sec"><b>3. 标题（可选）</b><input type="text" id="kbCreateTitle" maxlength="24" placeholder="留空自动从口播稿提取"></div>'
-        + '<div class="kb-create-meta" id="kbCreateMeta">按字数自动分段，生成时扣算力</div>'
-        + '<div class="kb-create-actions"><span style="font-size:10.5px;color:#94a3b8;">创建任务后会先生成底片，再自动套用「' + esc(tpl.name || tpl.id) + '」出 480p 预览</span><span style="flex:1"></span><button type="button" class="kb-btn-primary" id="kbCreateStart">创建任务</button></div>'
-        + '<div id="kbCreateSteps"></div><div class="kb-create-bar" id="kbCreateBar" style="display:none;"><i></i></div>'
-        + '</div></div>';
-      modal.querySelector('[data-close]').onclick = close;
-      modal.querySelector('#kbCreatePhoto').onclick = function () { modal.querySelector('#kbCreateFile').click(); };
-      function paintAvatarOptions() {
-        var sel = modal.querySelector('#kbCreateAvatar');
-        if (!sel) return;
-        var rows = (state.hiflyAvatars && state.hiflyAvatars.items) || [];
-        sel.innerHTML = '<option value="">当前默认（个人IP里最新的形象）</option>' + rows.map(function (it) {
-          var id = String(it.avatar || it.hifly_avatar_id || '').trim();
-          var title = it.title || id || '数字人形象';
-          return '<option value="' + esc(id) + '"' + (id === hiflyAvatarId ? ' selected' : '') + '>' + esc(title) + '</option>';
-        }).join('');
-      }
-      paintAvatarOptions();
-      Array.prototype.forEach.call(modal.querySelectorAll('input[name="kbCreateGen"]'), function (radio) {
-        radio.onchange = function () {
-          generator = radio.value || 'hifly';
-          var hiflyBox = modal.querySelector('#kbCreateHifly');
-          var photoBox = modal.querySelector('#kbCreatePhotoWrap');
-          if (hiflyBox) hiflyBox.style.display = generator === 'hifly' ? '' : 'none';
-          if (photoBox) photoBox.style.display = generator === 'hifly' ? 'none' : '';
-        };
-      });
-      var avSel = modal.querySelector('#kbCreateAvatar');
-      if (avSel) avSel.onchange = function () { hiflyAvatarId = avSel.value || ''; };
-      var avRefresh = modal.querySelector('#kbCreateAvatarRefresh');
-      if (avRefresh) avRefresh.onclick = function () { loadHiflyAvatars().then(function () { paintAvatarOptions(); }); };
-      var avTrain = modal.querySelector('#kbCreateAvatarTrain');
-      if (avTrain) avTrain.onclick = function () { openHiflyTrainModal(); };
-      modal.querySelector('#kbCreateFile').onchange = function (e) { if (e.target.files && e.target.files[0]) uploadPhoto(e.target.files[0]); };
-      modal.querySelector('#kbCreateScript').oninput = estimate;
-      modal.querySelector('#kbCreateStart').onclick = startCreate;
-      estimate();
-    }
-
-    function uploadPhoto(file) {
-      var fd = new FormData(); fd.append('file', file);
-      var txt = modal.querySelector('#kbCreatePhotoText');
-      if (txt) txt.textContent = '上传中…';
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', API + '/api/skills/digital-human-koubo/uploads');
-      var h = {};
-      try { h = authOnly(); } catch (e) { h = {}; }
-      Object.keys(h).forEach(function (k) { try { xhr.setRequestHeader(k, h[k]); } catch (e) {} });
-      xhr.onload = function () {
-        try {
-          var d = JSON.parse(xhr.responseText || '{}');
-          if (xhr.status >= 400) throw new Error(typeof d.detail === 'string' ? d.detail : ('HTTP ' + xhr.status));
-          photoId = d.id; photoUrl = d.url;
-          var img = modal.querySelector('#kbCreatePhotoImg');
-          if (img) { img.src = API + d.url; img.style.display = 'block'; }
-          if (txt) txt.textContent = '已上传 ' + (file.name || d.id) + '，点击可更换';
-        } catch (e) { if (txt) txt.textContent = '上传失败：' + e.message; }
-      };
-      xhr.onerror = function () { if (txt) txt.textContent = '上传失败：网络错误'; };
-      xhr.send(fd);
-    }
-
-    function paintSteps(active, pct, message) {
-      var names = ['创建项目', '生成底片', '套用模板', '完成'];
-      var html = names.map(function (n, i) {
-        var cls = i < active ? 'done' : (i === active ? 'run' : '');
-        return '<div class="kb-create-step ' + cls + '"><span class="dot">' + (i < active ? '✓' : (i + 1)) + '</span>' + n + (i === active && message ? ' · ' + esc(message) : '') + '</div>';
-      }).join('');
-      var box = modal.querySelector('#kbCreateSteps');
-      if (box) box.innerHTML = html;
-      var bar = modal.querySelector('#kbCreateBar');
-      if (bar) { bar.style.display = 'block'; bar.querySelector('i').style.width = Math.max(2, pct || 0) + '%'; }
-    }
-
-    function startCreate() {
-      if (busy) return;
-      var script = (modal.querySelector('#kbCreateScript') || {}).value || '';
-      if (generator !== 'hifly' && !photoId) { toast('先上传一张形象照'); return; }
-      if (!script.trim()) { toast('先粘贴口播稿'); return; }
-      busy = true;
-      var btn = modal.querySelector('#kbCreateStart');
-      if (btn) { btn.disabled = true; btn.textContent = '处理中…'; }
-      projectTitle = (modal.querySelector('#kbCreateTitle') || {}).value || '';
-      if (project && project.id) {
-        if (lastStage === 'render') { paintSteps(2, 70, '重新套用模板'); startPreview(); return; }
-        paintSteps(1, 8, '重新提交生成');
-        lastStage = 'generate';
-        req('/api/skills/digital-human-koubo/projects/' + project.id + '/generate', {
-          method: 'POST', headers: headers(), body: JSON.stringify({ all: true })
-        }).then(function (g) { pollGenerate(g.job_id); })
-          .catch(function (e) { fail('生成提交失败：' + e.message); });
-        return;
-      }
-      paintSteps(0, 3, '创建项目');
-      req('/api/skills/digital-human-koubo/projects', {
-        method: 'POST', headers: headers(),
-        body: JSON.stringify({ name: '', script: script, photo_id: photoId, host: 'photo', shot: 'full',
-          options: { host: 'photo', shot: 'full', language: 'Mandarin Chinese', resolution: '720p', generator: generator, hifly_avatar_id: hiflyAvatarId } })
-      }).then(function (p) {
-        project = p;
-        state.project = p;
-        state.render.templateId = tpl.id;
-        state.render.packaged = false;
-        state.render.previewReady = false;
-        loadProjects();
-        var meta = modal.querySelector('#kbCreateMeta');
-        if (meta) meta.textContent = '实际 ' + p.total_seconds + ' 秒 · ' + (p.segments || []).length + ' 段 · ' + p.total_credits + ' credits';
-        paintSteps(1, 8, '提交生成');
-        lastStage = 'generate';
-        req('/api/skills/digital-human-koubo/projects/' + p.id + '/generate', {
-          method: 'POST', headers: headers(), body: JSON.stringify({ all: true })
-        }).then(function (g) { pollGenerate(g.job_id); })
-          .catch(function (e) { fail('生成提交失败：' + e.message); });
-      }).catch(function (e) { fail('创建项目失败：' + e.message); });
-    }
-
-    function pollGenerate(jobId) {
-      timer = setInterval(function () {
-        req('/api/skills/digital-human-koubo/generate/jobs/' + encodeURIComponent(jobId)).then(function (job) {
-          paintSteps(1, 10 + (job.progress || 0) * 0.55, job.message || '生成中');
-          if (job.status === 'running') return;
-          if (timer) { clearInterval(timer); timer = null; }
-          if (job.status === 'done') startPreview();
-          else fail('底片生成失败：' + (job.error || job.message || '未知错误'));
-        }).catch(function () { });
-      }, 2000);
-    }
-
-    function startPreview() {
-      lastStage = 'render';
-      paintSteps(2, 70, '套用 ' + (tpl.name || tpl.id));
-      req('/api/skills/digital-human-koubo/projects/' + project.id + '/render', {
-        method: 'POST', headers: headers(),
-        body: JSON.stringify({ template_id: tpl.id, title: projectTitle || '', quality: 'preview' })
-      }).then(function (r) { pollRender(r.job_id); })
-        .catch(function (e) { fail('套用模板失败：' + e.message); });
-    }
-
-    function pollRender(jobId) {
-      timer = setInterval(function () {
-        req('/api/skills/digital-human-koubo/render/jobs/' + encodeURIComponent(jobId)).then(function (job) {
-          paintSteps(2, 70 + (job.progress || 0) * 0.3, job.message || '套用模板');
-          if (job.status === 'running') return;
-          if (timer) { clearInterval(timer); timer = null; }
-          if (job.status === 'done') finish();
-          else fail('套用模板失败：' + (job.error || job.message || '未知错误'));
-        }).catch(function () { });
-      }, 1500);
-    }
-
-    function finish() {
-      busy = false;
-      paintSteps(4, 100, '完成');
-      loadProjects();
-      req('/api/skills/digital-human-koubo/projects/' + project.id).then(function (p) {
-        state.project = p; state.render.templateId = tpl.id;
-        renderPreview(); renderProjects();
-        var warn = document.getElementById('kbCreateWarn');
-        if (warn) {
-          var bad = (p.generated_segments || []).filter(function (x) { return x.trimmed; });
-          if (bad.length) warn.textContent = '检测到上游时长异常：' + bad.map(function (x) { return (x.requested_seconds || '?') + 's→' + (x.actual_seconds || '?') + 's 已裁剪'; }).join('；');
-        }
-      }).catch(function () { });
-      var src = API + '/api/skills/digital-human-koubo/projects/' + project.id + '/preview?v=' + Date.now();
-      var body = modal.querySelector('.kb-create-body');
-      body.innerHTML = '<div class="kb-create-head"><h3>完成：已套用「' + esc(tpl.name || tpl.id) + '」</h3><button type="button" class="kb-batch-close" data-close>关闭</button></div>'
-        + '<div class="kb-create-sub">底片已按你的照片和口播生成，并自动套用了这个模板。下面是 480p 预览；满意后去工作台生成高清。</div>'
-        + '<div class="kb-create-sub" id="kbCreateWarn" style="color:#b45309;"></div>'
-        + '<div class="kb-create-result"><video controls autoplay playsinline src="' + esc(src) + '"></video></div>'
-        + '<div class="kb-create-actions"><a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + project.id + '/preview') + '" download>下载预览</a><span style="flex:1"></span><button type="button" class="kb-btn" data-switch>换个模板</button><button type="button" class="kb-btn-primary" data-go>去工作台</button></div>';
-      body.querySelector('[data-close]').onclick = close;
-      body.querySelector('[data-switch]').onclick = function () {
-        close();
-        renderPack();
-        var grid = document.getElementById('kbTplGrid');
-        if (grid) { try { grid.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {} }
-        toast('选另一个模板后点「预览效果」，同一段底片不会重新扣算力');
-      };
-      body.querySelector('[data-go]').onclick = function () {
-        close();
-        openProject(project.id);
-        toast('已进入工作台，当前模板：' + (tpl.name || tpl.id));
-      };
-    }
-
-    function fail(msg) {
-      busy = false;
-      if (timer) { clearInterval(timer); timer = null; }
-      paintSteps(1, 5, '失败');
-      var body = modal.querySelector('.kb-create-body');
-      if (body) {
-        var note = document.createElement('div');
-        note.className = 'kb-create-sub';
-        note.style.color = '#b91c1c';
-        note.textContent = msg;
-        body.appendChild(note);
-      }
-      var btn = modal.querySelector('#kbCreateStart');
-      if (btn) { btn.disabled = false; btn.textContent = lastStage === 'render' ? '重试套用模板' : '重试生成'; }
-      toast(msg);
-    }
-
-    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
-    paintForm();
+    kbvNewProject(templateId);
   }
 
   function fitBlock(t) {
@@ -1399,91 +1302,6 @@
     pills.push('<span class="kb-fit-pill ' + (titleOver ? 'warn' : 'ok') + '">标题 ' + title.length + '/' + titleMax + ' 字' + (titleOver ? '，会截断' : '') + '</span>');
     return '<div class="kb-detail-sec"><b>适配你的口播稿</b><div class="kb-fit">' + pills.join('') + '</div>'
       + '<div class="kb-detail-note" style="margin-top:6px;">' + esc(sampleLine) + '；你的稿 ' + total + ' 字 / ' + segs.length + ' 段，单段最长 ' + longest + ' 字，模板单屏约 ' + Math.floor(capacity) + ' 字（竖屏成片估算）。</div></div>';
-  }
-
-  function openTemplateDetail(id) {
-    if (!id) return;
-    var old = document.getElementById('kbTplModal');
-    if (old && old.parentNode) old.parentNode.removeChild(old);
-    var local = (state.render.templates || []).filter(function (t) { return t.id === id; })[0] || null;
-    var modal = document.createElement('div');
-    modal.id = 'kbTplModal';
-    document.body.appendChild(modal);
-    var current = local || { id: id, name: id };
-    var alive = true;
-
-    function videoHtml(t) {
-      var sample = t.sample_video_url || '';
-      if (!sample) return '<div class="kb-detail-nosample">样片制作中<br><small>可直接套用，用你的口播稿出片</small></div>';
-      var src = String(sample).indexOf('http') === 0 ? sample : API + sample;
-      var poster = t.cover ? (String(t.cover).indexOf('http') === 0 ? t.cover : API + t.cover) : '';
-      return '<video controls playsinline preload="metadata"' + (poster ? ' poster="' + esc(poster) + '"' : '') + ' src="' + esc(src) + '"></video>';
-    }
-
-    function paint(t) {
-      if (!alive) return;
-      current = t || current;
-      var colors = current.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
-      var cover = current.cover ? (String(current.cover).indexOf('http') === 0 ? current.cover : API + current.cover) : '';
-      var media = cover
-        ? '<img src="' + esc(cover) + '" alt="">'
-        : '<span class="kb-tpl-preview" style="height:180px;margin:0;background:linear-gradient(135deg,' + esc(colors[0]) + ',' + esc(colors[1]) + ',' + esc(colors[2]) + ')"></span>';
-      var scenes = current.scenes || [];
-      var tags = current.tags || [];
-      var chips = scenes.concat(tags.filter(function (x) { return scenes.indexOf(x) < 0; })).map(function (x) {
-        return '<span class="kb-detail-chip">' + esc(x) + '</span>';
-      }).join('');
-      var kv = [
-        ['画幅', current.ratio_label || current.ratio || '跟随底片'],
-        ['排版', current.layout_label || current.variant || '标准排版'],
-        ['镜头', current.motion_label || '固定机位'],
-        ['转场', current.transition_label || '硬切'],
-        ['字幕', '安全区内自动断句'],
-        ['节奏', '跟随口播停顿']
-      ].map(function (row) { return '<span>' + esc(row[0]) + '：' + esc(row[1]) + '</span>'; }).join('');
-      var copy = current.copy || {};
-      var notes = [];
-      if (copy.badge) notes.push('角标「' + copy.badge + '」');
-      if (copy.lowerTitle) notes.push('落版「' + copy.lowerTitle + (copy.lowerSub ? ' / ' + copy.lowerSub : '') + '」');
-      if (copy.cta) notes.push('结尾「' + copy.cta + '」');
-      var fav = (state.render.favoriteTemplateIds || []).indexOf(current.id) >= 0;
-      var hasBase = !!(state.project && state.project.status === 'generated');
-      modal.innerHTML = '<div class="kb-detail">'
-        + '<div class="kb-detail-media">' + media + videoHtml(current) + '</div>'
-        + '<div class="kb-detail-body">'
-        + '<div class="kb-detail-head"><div><h3>' + esc(current.name || id) + '</h3><div class="kb-detail-sub">' + esc(current.category || '') + (current.layout_label ? ' · ' + esc(current.layout_label) : '') + '</div></div><button type="button" class="kb-sample-close" data-detail-close>关闭</button></div>'
-        + '<div class="kb-detail-desc">' + esc(current.description || '') + '</div>'
-        + fitBlock(current)
-        + (chips ? '<div class="kb-detail-sec"><b>适用场景</b><div class="kb-detail-chips">' + chips + '</div></div>' : '')
-        + '<div class="kb-detail-sec"><b>画面设置</b><div class="kb-detail-kv">' + kv + '</div></div>'
-        + (notes.length ? '<div class="kb-detail-sec"><b>这版会怎么排</b><div class="kb-detail-note">' + esc(notes.join(' · ')) + '</div></div>' : '')
-        + '<div class="kb-detail-note" style="margin-top:10px;">点下面按钮，上传形象照和口播稿，创建任务后自动用这个模板出 480p 预览。</div>'
-        + '<div class="kb-detail-actions"><button type="button" class="kb-btn" data-detail-fav>' + (fav ? '★ 已收藏' : '☆ 收藏') + '</button><span style="flex:1"></span><button type="button" class="kb-btn-primary" data-detail-apply>用这个模板创作</button></div>'
-        + '</div></div>';
-      modal.querySelector('[data-detail-close]').onclick = close;
-      modal.querySelector('[data-detail-apply]').onclick = function () {
-        close();
-        openCreateModal(current.id);
-      };
-      modal.querySelector('[data-detail-fav]').onclick = function () {
-        toggleFavoriteTemplate(current.id);
-        renderPack();
-        paint(current);
-      };
-    }
-
-    function close() {
-      alive = false;
-      var v = modal.querySelector('video');
-      if (v) { try { v.pause(); } catch (e) {} }
-      if (modal.parentNode) modal.parentNode.removeChild(modal);
-    }
-
-    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
-    paint(current);
-    req('/api/skills/digital-human-koubo/templates/' + encodeURIComponent(id), { headers: headers() })
-      .then(function (d) { if (d && d.id) paint(d); })
-      .catch(function () {});
   }
 
   function openBatchModal() {
@@ -1787,7 +1605,7 @@
 
   function renderPack() {
     var box = $('kbPack');
-    if (!box) return;
+    if (!box) { renderExtras(); return; }
     if (!state.project || state.project.status !== 'generated') {
       box.innerHTML = (state.render.templates || []).length ? renderGallery() : '';
       if (!box.innerHTML) return;
@@ -1903,9 +1721,22 @@
             state.render.job = null;
             state.render.qa = job.qa || null;
             log(mode === 'preview' ? '预览完成' : '高清成片完成');
-            req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) { state.project = p; renderAll(); });
+            req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) {
+              var pid2 = p.id;
+              state.project = p;
+              renderAll();
+              renderCreateTemplateCard();
+              kbvRenderCreateMode();
+              loadProjects();
+              toast(mode === 'preview' ? '预览已生成' : '高清成片已生成');
+              if (kbvUi().page === 'projects') openProjectPreview(pid2, mode === 'preview' ? 'preview' : 'rendered');
+            });
           } else {
-            log((state.render.runningMode === 'preview' ? '预览失败：' : '高清生成失败：') + (job.error || job.message || ''));
+            var rmsg = job.error || job.message || '未知错误';
+            log((state.render.runningMode === 'preview' ? '预览失败：' : '高清生成失败：') + rmsg);
+            toast((state.render.runningMode === 'preview' ? '预览失败：' : '高清生成失败：') + rmsg);
+            state.render.job = null;
+            kbvRenderCreateMode();
           }
         }
       }).catch(function () {});
@@ -1963,65 +1794,57 @@
     var el = $('kbStatus');
     if (!el) return;
     if (state.job && state.job.status === 'running') { el.textContent = '生成中'; el.className = 'kb-pill warn'; return; }
-    if (state.dirty) { el.textContent = '有未保存修改'; el.className = 'kb-pill warn'; return; }
+    if (state.dirty) { el.textContent = (state.project && state.project.id) ? '有未保存修改' : '未生成'; el.className = 'kb-pill warn'; return; }
     if (state.project && state.project.status === 'generated') { el.textContent = '已出片'; el.className = 'kb-pill ok'; return; }
     if (state.project && state.project.id) { el.textContent = '已保存'; el.className = 'kb-pill'; return; }
     el.textContent = '未保存'; el.className = 'kb-pill';
   }
 
   function renderProjects() {
-    var box = $('kbProjects');
-    if (!box) return;
-    if ($('kbProjCount')) $('kbProjCount').textContent = state.projects.length ? state.projects.length + ' 个' : '';
-    if (!state.projects.length) {
-      box.innerHTML = '<span style="font-size:12px;color:#94a3b8;">还没有项目。生成或保存后会出现在这里。</span>';
+    var grid = $('kbvProjGrid');
+    var n = (state.projects || []).length;
+    if ($('kbvProjCount')) $('kbvProjCount').textContent = n ? String(n) : '';
+    if ($('kbvProjMeta')) $('kbvProjMeta').textContent = n ? (n + ' 个项目 · 生成中的每 3 秒自动刷新') : '生成中的任务每 3 秒自动刷新';
+    if (!grid) return;
+    if (!n) {
+      grid.innerHTML = '<div class="kbv-empty2"><div class="kbv-emptyart">＋</div><b>还没有项目</b><span>点右上角「新增」，选一个模板开始创作。</span><button type="button" class="btn btn-primary btn-sm" id="kbvEmptyNew">新增项目</button></div>';
+      var b = $('kbvEmptyNew');
+      if (b) b.onclick = function () { kbvNewProject(state.render.templateId); };
       return;
     }
-    var activeId = (state.preview && state.preview.id) || (state.project && state.project.id);
-    box.innerHTML = state.projects.map(function (p) {
-      var st = p.status || 'ready';
-      var badge = st === 'generated' ? (p.rendered ? '已包装' : '已出片') : (st === 'generating' ? '生成中' : '未生成');
-      var cls = st === 'generated' ? 'ok' : (st === 'generating' ? 'warn' : '');
-      var active = p.id === activeId;
-      return '<div class="kb-proj" style="' + (active ? 'background:#f0f7ff;border-radius:8px;padding-left:8px;padding-right:8px;' : '') + '">'
-        + '<div><b>' + esc(p.name) + '</b> <span class="kb-pill ' + cls + '" style="margin-left:6px;">' + badge + '</span><br>'
-        + '<small>' + esc(String(p.created_at || '').replace('T', ' ')) + ' · ' + (p.segments_count || 0) + ' 段 · ' + (p.total_credits || 0) + ' credits' + (active ? ' · 当前' : '') + '</small></div>'
-        + '<div style="display:flex;gap:6px;">'
-        + (p.has_video ? '<button type="button" class="kb-btn" data-preview="' + esc(p.id) + '">预览</button>' : '')
-        + '<button type="button" class="kb-btn" data-open="' + esc(p.id) + '">打开</button>'
-        + '<button type="button" class="kb-btn" data-del="' + esc(p.id) + '">删除</button>'
-        + '</div></div>';
-    }).join('');
-    box.querySelectorAll('[data-preview]').forEach(function (btn) {
-      btn.onclick = function () { previewProject(btn.getAttribute('data-preview')); };
+    grid.innerHTML = state.projects.map(kbvProjCard).join('');
+    grid.querySelectorAll('[data-kbv-preview]').forEach(function (btn) {
+      btn.onclick = function (e) { if (e && e.stopPropagation) e.stopPropagation(); openProjectPreview(btn.getAttribute('data-kbv-preview')); };
     });
-    box.querySelectorAll('[data-open]').forEach(function (btn) {
-      btn.onclick = function () { openProject(btn.getAttribute('data-open')); };
+    grid.querySelectorAll('[data-kbv-open]').forEach(function (btn) {
+      btn.onclick = function (e) { if (e && e.stopPropagation) e.stopPropagation(); openProject(btn.getAttribute('data-kbv-open')); };
     });
-    box.querySelectorAll('[data-del]').forEach(function (btn) {
-      btn.onclick = function () {
-        var pid = btn.getAttribute('data-del');
-        if (!window.confirm('删除这个项目？')) return;
-        fetch(API + '/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid), { method: 'DELETE', headers: authOnly() })
-          .then(function () {
-            log('已删除 ' + pid);
-            if (state.preview && state.preview.id === pid) state.preview = null;
-            if (state.project && state.project.id === pid) state.project = null;
-            state.render.packaged = false;
-            loadProjects(); renderPreview(); renderStatus();
-          });
+    grid.querySelectorAll('.kbv-projthumb video').forEach(function (v) {
+      var box = v.parentNode;
+      box.addEventListener('mouseenter', function () { try { v.currentTime = 0; var pr = v.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {} });
+      box.addEventListener('mouseleave', function () { try { v.pause(); } catch (e) {} });
+    });
+    grid.querySelectorAll('[data-kbv-del]').forEach(function (btn) {
+      btn.onclick = function (e) {
+        if (e && e.stopPropagation) e.stopPropagation();
+        var pid = btn.getAttribute('data-kbv-del');
+        var name = btn.getAttribute('data-kbv-name') || pid;
+        kbvConfirm('删除项目', '「' + name + '」和它的底片、预览、成片会一起删除，不能恢复。', '删除', function () {
+          fetch(API + '/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid), { method: 'DELETE', headers: authOnly() })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json().catch(function () { return {}; }); })
+            .then(function () {
+              if (state.project && state.project.id === pid) state.project = null;
+              if (state.preview && state.preview.id === pid) state.preview = null;
+              toast('已删除「' + name + '」');
+              loadProjects();
+            })
+            .catch(function (err) { toast('删除失败：' + err.message); });
+        });
       };
     });
   }
 
-  function previewProject(pid) {
-    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
-      state.preview = p;
-      renderPreview();
-      renderProjects();
-      log('预览历史项目 ' + p.name);
-    }).catch(function (e) { log('预览失败：' + e.message); });
-  }
+  function previewProject(pid) { openProjectPreview(pid); }
 
   function renderAll() {
     renderAvatar(); renderParams(); renderSegments(); renderPreview(); renderStatus(); renderMeta(); renderPack(); renderProjects();
@@ -2072,8 +1895,11 @@
     return req('/api/skills/digital-human-koubo/projects', {
       method: 'POST', headers: headers(),
       body: JSON.stringify({
-        name: '', script: text, shot: state.form.shot, host: state.form.host,
-        photo_id: state.upload ? state.upload.id : '', options: state.form
+        name: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 16),
+        script: text, shot: state.form.shot, host: state.form.host,
+        photo_id: state.upload ? state.upload.id : '',
+        template_id: state.render.templateId || '',
+        options: state.form
       })
     }).then(function (p) {
       state.project = p;
@@ -2102,8 +1928,12 @@
       });
     }).then(function (d) {
       state.job = { status: 'running', message: '准备提交', progress: 0, done: 0, total: all ? (state.quote ? state.quote.segments.length : 1) : 1 };
+      state.dirty = false;
       renderAll();
       log('任务已提交 ' + d.job_id);
+      toast('已提交生成，完成后会自动提示');
+      kbvGo('projects');
+      loadProjects();
       pollJob(d.job_id);
     }).catch(function (e) {
       if (btn) btn.disabled = false;
@@ -2137,7 +1967,11 @@
               }
             });
           } else {
-            log('生成失败：' + (job.error || job.message || ''));
+            var emsg = job.error || job.message || '未知错误';
+            log('生成失败：' + emsg);
+            toast('底片生成失败：' + emsg);
+            loadProjects();
+            kbvRenderCreateMode();
           }
         }
       }).catch(function () {});
@@ -2149,16 +1983,18 @@
       state.preview = null;
       state.project = p;
       state.dirty = false;
+      state.job = null;
+      state.qa = null;
+      kbvUi().projectId = p.id;
       state.script = p.script || '';
       state.form = Object.assign({}, state.form, p.options || {});
       state.quote = { segments: p.segments || [], total_seconds: p.total_seconds || 0, total_credits: p.total_credits || 0 };
-      state.job = null;
       if (p.template_id) state.render.templateId = p.template_id;
       else if (p.preview_template_id) state.render.templateId = p.preview_template_id;
       state.render.title = p.template_title || p.preview_template_title || '';
       state.render.packaged = !!p.rendered;
       state.render.previewReady = !!p.preview_rendered;
-      state.render.showPreview = !!p.preview_rendered && !p.rendered;
+      state.render.job = null;
       state.render.qa = p.rendered ? (p.qa_final || null) : (p.qa_preview || null);
       state.render.broll = (p.broll && p.broll.asset_id) ? p.broll : null;
       state.render.brollOpen = !!state.render.broll;
@@ -2168,14 +2004,21 @@
       state.render.shotsEnabled = state.render.shots.length >= 2;
       state.render.recommendFor = '';
       state.render.recommendations = [];
-      if (p.photo_id) {
-        state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };
-      }
+      state.upload = p.photo_id ? { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} } : null;
       if ($('kbText')) $('kbText').value = p.script || '';
-      if ($('kbProjName')) $('kbProjName').textContent = p.name;
-      renderAll(); updateCount();
+      if ($('kbProjName')) $('kbProjName').textContent = p.name || '';
+      kbvGo('create');
+      renderCreateTemplateCard();
+      renderAvatar();
+      renderParams();
+      renderMeta();
+      renderSegments();
+      updateCount();
+      renderStatus();
+      renderExtras();
+      kbvRenderCreateMode();
       log('打开项目 ' + p.id);
-    }).catch(function (e) { log('打开失败：' + e.message); });
+    }).catch(function (e) { toast('打开失败：' + e.message); });
   }
 
   function exportTasks() {
@@ -2200,6 +2043,8 @@
         if (def) state.render.templateId = def.id;
       }
       renderPack();
+      renderTemplatePage();
+      renderCreateTemplateCard();
       return state.render.templates;
     }).catch(function (e) { log('模板读取失败：' + e.message); });
   }
@@ -2283,28 +2128,439 @@
     }, 1200);
   }
 
+  // ---------- 3.0 三屏交互：模板 / 创作 / 项目记录 ----------
+  function kbvUi() {
+    if (!state.ui) state.ui = { page: 'templates', search: '', cat: 'all', projectId: '' };
+    return state.ui;
+  }
+  function kbvCover(t) {
+    var c = t && t.cover ? String(t.cover) : '';
+    if (!c) return '';
+    return (c.indexOf('http') === 0 || c.indexOf('data:') === 0) ? c : API + c;
+  }
+  function kbvSample(t) {
+    var u = t && t.sample_video_url ? String(t.sample_video_url) : '';
+    if (!u) return '';
+    return u.indexOf('http') === 0 ? u : API + u;
+  }
+  function kbvTpl(id) {
+    return (state.render.templates || []).filter(function (x) { return x.id === id; })[0] || null;
+  }
+  function kbvTplName(id) {
+    var t = kbvTpl(id);
+    return (t && t.name) || id || '未选模板';
+  }
+  function kbvHasVideo(p) {
+    if (!p) return false;
+    if (p.has_video === false) return false;
+    return !!(p.has_video || p.video_v || p.rendered || p.preview_rendered || p.status === 'generated');
+  }
+  function kbvGo(page) {
+    var ui = kbvUi();
+    ui.page = page;
+    var map = { templates: 'kbvPageTemplates', projects: 'kbvPageProjects', create: 'kbvPageCreate' };
+    Object.keys(map).forEach(function (k) {
+      var el = $(map[k]);
+      if (el) el.hidden = (k !== page);
+    });
+    document.querySelectorAll('#kbvTabs .kbv-tab').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-kbv-page') === page);
+    });
+    if (page === 'templates') renderTemplatePage();
+    if (page === 'projects') { renderProjects(); loadProjects(); kbvProjTimerStart(); } else { kbvProjTimerStop(); }
+    try { var main = document.querySelector('#content-digital-human-koubo'); if (main) main.scrollTop = 0; if (window.scrollTo) window.scrollTo(0, 0); } catch (e) {}
+  }
+  function renderTemplatePage() {
+    var grid = $('kbvTplGrid');
+    if (!grid) return;
+    var ui = kbvUi();
+    var tpls = (state.render.templates || []).slice();
+    if (!tpls.length) { grid.innerHTML = '<div class="kbv-loading">正在加载模板…</div>'; return; }
+    var cats = [];
+    tpls.forEach(function (t) { if (t.category && cats.indexOf(t.category) < 0) cats.push(t.category); });
+    var chips = $('kbvChips');
+    if (chips) {
+      chips.innerHTML = ['all'].concat(cats).map(function (c) {
+        return '<button type="button" class="kbv-chip' + ((ui.cat || 'all') === c ? ' on' : '') + '" data-kbvc="' + esc(c) + '">' + esc(c === 'all' ? '全部' : c) + '</button>';
+      }).join('');
+      chips.querySelectorAll('[data-kbvc]').forEach(function (b) {
+        b.onclick = function () { ui.cat = b.getAttribute('data-kbvc') || 'all'; renderTemplatePage(); };
+      });
+    }
+    var q = String(ui.search || '').trim().toLowerCase();
+    var list = tpls.filter(function (t) {
+      if ((ui.cat || 'all') !== 'all' && t.category !== ui.cat) return false;
+      if (!q) return true;
+      var hay = [t.name, t.id, t.category, t.description].concat(t.tags || []).join(' ').toLowerCase();
+      return hay.indexOf(q) >= 0;
+    });
+    if (!list.length) { grid.innerHTML = '<div class="kbv-loading">没有匹配的模板</div>'; return; }
+    grid.innerHTML = list.map(kbvTemplateCard).join('');
+    grid.querySelectorAll('[data-kbv-tpl]').forEach(function (card) {
+      card.onclick = function () { openTemplateDetail(card.getAttribute('data-kbv-tpl')); };
+      var v = card.querySelector('video');
+      if (v) {
+        card.addEventListener('mouseenter', function () { try { v.currentTime = 0; var pr = v.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {} });
+        card.addEventListener('mouseleave', function () { try { v.pause(); } catch (e) {} });
+      }
+    });
+  }
+  function kbvTemplateCard(t) {
+    var cover = kbvCover(t);
+    var sample = kbvSample(t);
+    var colors = t.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
+    var tags = (t.tags || []).slice(0, 2).join(' · ') || '9:16';
+    return '<article class="kbv-card9" data-kbv-tpl="' + esc(t.id) + '">'
+      + '<div class="kbv-thumb">'
+      + (cover ? '<img src="' + esc(cover) + '" alt="" loading="lazy">' : '<div class="kbv-thumb-fallback" style="background:linear-gradient(135deg,' + esc(colors[0] || '#334155') + ',' + esc(colors[1] || '#1e293b') + ')"></div>')
+      + (sample ? '<video muted loop playsinline preload="none" src="' + esc(sample) + '"></video>' : '')
+      + '<span class="kbv-badge">' + esc(t.category || '模板') + '</span>'
+      + '<span class="kbv-play">▶</span>'
+      + '</div>'
+      + '<div class="kbv-cardbody"><div class="kbv-cardname">' + esc(t.name || t.id) + '</div>'
+      + '<div class="kbv-cardmeta"><span>' + esc(tags) + '</span><span>用这个 →</span></div></div>'
+      + '</article>';
+  }
+  function openTemplateDetail(id) {
+    var t = kbvTpl(id);
+    if (!t) return;
+    var old = document.getElementById('kbvTplModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var modal = document.createElement('div');
+    modal.id = 'kbvTplModal';
+    modal.className = 'kbv-modal';
+    var sample = kbvSample(t);
+    var cover = kbvCover(t);
+    var colors = t.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
+    var media = sample
+      ? '<video controls autoplay muted loop playsinline' + (cover ? ' poster="' + esc(cover) + '"' : '') + ' src="' + esc(sample) + '"></video>'
+      : (cover ? '<img src="' + esc(cover) + '" alt="">' : '<div class="kbv-thumb-fallback" style="width:100%;aspect-ratio:9/16;border-radius:12px;background:linear-gradient(135deg,' + esc(colors[0]) + ',' + esc(colors[1]) + ')"></div>');
+    var tags = (t.tags || []).map(function (x) { return '<span class="kbv-tag">' + esc(x) + '</span>'; }).join('');
+    modal.innerHTML = '<div class="kbv-modal-card">'
+      + '<div class="kbv-modal-media">' + media + '</div>'
+      + '<div class="kbv-modal-body">'
+      + '<button type="button" class="kbv-x" data-close>×</button>'
+      + '<div class="kbv-modal-kicker">' + esc(t.category || '模板') + '</div>'
+      + '<h3>' + esc(t.name || t.id) + '</h3>'
+      + '<p class="kbv-modal-desc">' + esc(t.description || '套用这个模板后，标题、字幕、关键词和结尾都按这套设计生成。') + '</p>'
+      + (tags ? '<div class="kbv-modal-tags">' + tags + '</div>' : '')
+      + '<div class="kbv-modal-kv"><span>画幅：9:16</span><span>字幕：安全区自动断句</span><span>时长：跟随口播，不截断</span><span>换模板：不重复扣底片算力</span></div>'
+      + '<div class="kbv-modal-actions"><button type="button" class="btn btn-ghost btn-sm" data-close>关闭</button><button type="button" class="btn btn-primary btn-sm" data-use>用这个模板创作</button></div>'
+      + '</div></div>';
+    document.body.appendChild(modal);
+    function close() {
+      var v = modal.querySelector('video');
+      if (v) { try { v.pause(); } catch (e) {} }
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    modal.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = close; });
+    modal.querySelector('[data-use]').onclick = function () { close(); kbvNewProject(t.id); };
+  }
+  function openTemplatePicker() {
+    var old = document.getElementById('kbvPickerModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var modal = document.createElement('div');
+    modal.id = 'kbvPickerModal';
+    modal.className = 'kbv-modal';
+    modal.innerHTML = '<div class="kbv-picker"><div class="kbv-picker-head"><h3>换一个模板</h3><span style="flex:1"></span><button type="button" class="kbv-x" style="position:static;" data-close>×</button></div><div class="kbv-picker-body"><div class="kbv-grid kbv-grid-sm" id="kbvPickerGrid"></div></div></div>';
+    document.body.appendChild(modal);
+    var grid = modal.querySelector('#kbvPickerGrid');
+    grid.innerHTML = (state.render.templates || []).map(kbvTemplateCard).join('');
+    grid.querySelectorAll('[data-kbv-tpl]').forEach(function (card) {
+      card.onclick = function () {
+        var id = card.getAttribute('data-kbv-tpl');
+        state.render.templateId = id;
+        state.render.packaged = false;
+        state.render.previewReady = false;
+        if (modal.parentNode) modal.parentNode.removeChild(modal);
+        renderCreateTemplateCard();
+        kbvRenderCreateMode();
+        toast('已选「' + kbvTplName(id) + '」');
+      };
+    });
+    function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    modal.querySelector('[data-close]').onclick = close;
+  }
+  function kbvNewProject(templateId, skipConfirm) {
+    if (!skipConfirm && state.dirty && state.project && state.project.id) {
+      kbvConfirm('放弃当前修改？', '当前项目的文案或形象改过，还没生成；新建会丢掉这些改动。', '继续新建', function () { kbvNewProject(templateId, true); });
+      return;
+    }
+    state.project = null;
+    state.preview = null;
+    state.quote = null;
+    state.job = null;
+    state.upload = null;
+    state.dirty = false;
+    state.qa = null;
+    state.render.packaged = false;
+    state.render.previewReady = false;
+    state.render.job = null;
+    state.render.title = '';
+    state.render.broll = null;
+    state.render.bgm = null;
+    state.render.shotsEnabled = false;
+    if (templateId) state.render.templateId = templateId;
+    if (!state.render.templateId) {
+      var def = (state.render.templates || []).filter(function (x) { return x.default; })[0] || (state.render.templates || [])[0];
+      if (def) state.render.templateId = def.id;
+    }
+    if ($('kbText')) $('kbText').value = '';
+    if ($('kbProjName')) $('kbProjName').textContent = '';
+    kbvGo('create');
+    renderCreateTemplateCard();
+    renderAvatar();
+    renderParams();
+    renderMeta();
+    renderSegments();
+    updateCount();
+    renderStatus();
+    renderTrainBar();
+    kbvRenderCreateMode();
+  }
+  function renderCreateTemplateCard() {
+    var box = $('kbvTplPick');
+    if (!box) return;
+    var t = kbvTpl(state.render.templateId);
+    if (!t) {
+      box.innerHTML = '<div class="kbv-tplinfo"><div class="kbv-cardname">还没选模板</div><div class="kbv-cardmeta2">选一个模板，成片才有标题和字幕样式</div><button type="button" class="kbv-link" id="kbvTplChange">选择模板</button></div>';
+      var b0 = $('kbvTplChange'); if (b0) b0.onclick = openTemplatePicker;
+      return;
+    }
+    var cover = kbvCover(t);
+    var colors = t.colors || ['#334155', '#0f172a', '#1e293b'];
+    var thumb = cover
+      ? '<img class="kbv-tplthumb" src="' + esc(cover) + '" alt="">'
+      : '<div class="kbv-tplthumb" style="background:linear-gradient(135deg,' + esc(colors[0]) + ',' + esc(colors[1]) + ')"></div>';
+    box.innerHTML = thumb + '<div class="kbv-tplinfo"><div class="kbv-cardname">' + esc(t.name || t.id) + '</div>'
+      + '<div class="kbv-cardmeta2">' + esc(t.category || '模板') + ' · 9:16 自动适配</div>'
+      + '<button type="button" class="kbv-link" id="kbvTplChange">更换模板</button></div>';
+    var b = $('kbvTplChange');
+    if (b) b.onclick = openTemplatePicker;
+  }
+  function renderExtras() {
+    var box = $('kbExtras');
+    if (!box) { return; }
+    box.innerHTML = renderBrollBlock() + renderBgmBlock()
+      + '<div class="kbv-extras-foot"><button type="button" class="btn btn-ghost btn-sm" id="kbQa">口播质检</button><span>回听比对文稿，低于 85% 建议重录</span></div>'
+      + (state.qa ? renderQaResult(state.qa) : '');
+    bindBrollHandlers();
+    bindBgmHandlers();
+    var qa = $('kbQa');
+    if (qa) qa.onclick = runQa;
+    kbvRenderCreateMode();
+  }
+  function kbvElapsed(ts) {
+    var s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    return s >= 60 ? (Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')) : (s + ' 秒');
+  }
+  function renderTrainBar() {
+    var box = $('kbvTrainBar');
+    if (!box) return;
+    var tr = state.train;
+    if (!tr) { box.innerHTML = ''; return; }
+    var label = tr.status === 'done' ? '训练完成' : (tr.status === 'failed' ? '训练失败' : '训练中');
+    box.innerHTML = '<div class="kbv-train"><b>' + esc(tr.name || '新形象') + '</b><span>' + label + ' · ' + kbvElapsed(tr.startedAt) + '</span>'
+      + (tr.status === 'running' ? '<span class="bar"><i></i></span><span style="font-size:11px;color:#6366f1;">可继续写稿</span>' : '')
+      + (tr.status === 'failed' ? '<button type="button" class="btn btn-ghost btn-sm" id="kbvTrainRetry">重试</button>' : '')
+      + (tr.status === 'running' ? '' : '<button type="button" class="btn btn-ghost btn-sm" id="kbvTrainClose">' + (tr.status === 'failed' ? '关闭' : '知道了') + '</button>')
+      + '</div>' + (tr.message ? '<div style="font-size:11px;color:#94a3b8;margin:-6px 0 8px;">' + esc(tr.message) + '</div>' : '');
+    var retry = $('kbvTrainRetry');
+    if (retry) retry.onclick = function () { state.train = null; renderTrainBar(); openHiflyTrainModal(); };
+    var close = $('kbvTrainClose');
+    if (close) close.onclick = function () { state.train = null; renderTrainBar(); };
+    if (!state.trainTimer) {
+      state.trainTimer = setInterval(function () {
+        if (!state.train) { clearInterval(state.trainTimer); state.trainTimer = null; return; }
+        renderTrainBar();
+      }, 1000);
+    }
+  }
+  function kbvRenderCreateMode() {
+    var p = state.project;
+    var title = $('kbvCreateTitle');
+    if (title) title.textContent = (p && p.id) ? (p.name || ('项目 ' + p.id)) : '新建项目';
+    var primary = $('kbGenerate');
+    if (!primary) return;
+    var hint = $('kbvGenHint');
+    var oldBtn = document.getElementById('kbvFinalBtn');
+    if (oldBtn && oldBtn.parentNode) oldBtn.parentNode.removeChild(oldBtn);
+    var hasVideo = kbvHasVideo(p);
+    var mode = 'new';
+    if (p && p.id) {
+      if (p.status === 'generating') mode = 'running';
+      else if (hasVideo) mode = state.dirty ? 'dirty' : 'video';
+      else mode = 'ready';
+    }
+    primary.disabled = false;
+    var foWrap = $('kbvFirstOnlyWrap');
+    if (foWrap) foWrap.style.display = (mode === 'new' || mode === 'ready') ? 'flex' : 'none';
+    if (mode === 'video') {
+      primary.textContent = (state.render.previewReady || p.preview_rendered) ? '重新出预览' : '预览效果';
+      if (hint) hint.textContent = '底片已生成，换模板只重新套样式，不再扣底片算力';
+      if (p.preview_rendered || state.render.previewReady) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'kbvFinalBtn';
+        btn.className = 'btn btn-ghost btn-sm';
+        btn.textContent = p.rendered ? '重新出高清' : '生成高清成片';
+        btn.onclick = function () { startRender('final'); };
+        primary.parentNode.insertBefore(btn, primary);
+      }
+    } else if (mode === 'dirty') {
+      primary.textContent = '按新内容生成新项目';
+      if (hint) hint.textContent = '文案或形象改过了，生成会保存成一个新项目';
+    } else if (mode === 'running') {
+      primary.textContent = '生成中…';
+      primary.disabled = true;
+      if (hint) hint.textContent = '底片生成中，完成会自动套模板并弹出预览';
+    } else if (mode === 'ready') {
+      primary.textContent = '生成底片';
+      if (hint) hint.textContent = '生成后自动跳到项目记录，不用在这里等';
+    } else {
+      primary.textContent = '生成';
+      if (hint) hint.textContent = '生成后自动跳到项目记录，不用在这里等';
+    }
+    var job = state.render.job;
+    if (job && job.status === 'running') {
+      primary.disabled = true;
+      primary.textContent = ((state.render.runningMode === 'final') ? '高清生成中 ' : '预览生成中 ') + (job.progress || 0) + '%';
+      if (hint) hint.textContent = job.message || '正在套用模板';
+    }
+  }
+  function kbvProjCard(p) {
+    var t = kbvTpl(p.template_id);
+    var cover = kbvCover(t);
+    var colors = (t && t.colors) || ['#1e293b', '#0f172a', '#334155'];
+    var hasVideo = kbvHasVideo(p);
+    var label = p.status === 'generating' ? ('生成中' + (state.job && state.job.project_id === p.id && state.job.progress ? ' ' + state.job.progress + '%' : '')) : (p.rendered ? '已成片' : (p.preview_rendered ? '有预览' : (hasVideo ? '底片已好' : '未生成')));
+    var base = cover
+      ? '<img src="' + esc(cover) + '" alt="">'
+      : '<div class="kbv-thumb-fallback" style="background:linear-gradient(135deg,' + esc(colors[0] || '#334155') + ',' + esc(colors[1] || '#0f172a') + ')"></div>';
+    var visual = base + (hasVideo ? '<video muted loop playsinline preload="none" src="' + esc(API + '/api/skills/digital-human-koubo/projects/' + p.id + '/video?v=' + (p.video_v || 0)) + '"></video>' : '');
+    var when = String(p.created_at || '').replace('T', ' ').slice(5, 16);
+    return '<article class="kbv-proj">'
+      + '<div class="kbv-projthumb">' + visual + '<span class="kbv-badge">' + esc(label) + '</span></div>'
+      + '<div class="kbv-projbody">'
+      + '<div class="kbv-cardname">' + esc(p.name || p.id) + '</div>'
+      + '<div class="kbv-cardmeta2">' + esc(kbvTplName(p.template_id)) + ' · ' + (p.total_seconds || 0) + 's · ' + (p.segments_count || 0) + ' 段</div>'
+      + '<div class="kbv-cardmeta2">' + esc(when) + ' · ' + (p.total_credits || 0) + ' credits</div>'
+      + '<div class="kbv-projactions">'
+      + (hasVideo ? '<button type="button" class="btn btn-primary btn-sm" data-kbv-preview="' + esc(p.id) + '">预览</button>' : '')
+      + '<button type="button" class="btn btn-ghost btn-sm" data-kbv-open="' + esc(p.id) + '">' + (hasVideo ? '套模板' : '继续生成') + '</button>'
+      + (p.status === 'generating'
+          ? '<button type="button" class="btn btn-ghost btn-sm" disabled title="生成中不能删除">删除</button>'
+          : '<button type="button" class="btn btn-ghost btn-sm kbv-danger" data-kbv-del="' + esc(p.id) + '" data-kbv-name="' + esc(p.name || p.id) + '">删除</button>')
+      + '</div></div></article>';
+  }
+  function openProjectPreview(pid, prefer) {
+    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
+      var kinds = [];
+      if (p.rendered) kinds.push({ k: 'rendered', label: '高清成片' });
+      if (p.preview_rendered) kinds.push({ k: 'preview', label: '模板预览' });
+      if (kbvHasVideo(p)) kinds.push({ k: 'video', label: '原片' });
+      if (!kinds.length) { toast('这个项目还没有视频'); return; }
+      var pick = kinds.filter(function (x) { return x.k === prefer; })[0] ? prefer : kinds[0].k;
+      var old = document.getElementById('kbvPlayer');
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+      var modal = document.createElement('div');
+      modal.id = 'kbvPlayer';
+      modal.className = 'kbv-modal';
+      document.body.appendChild(modal);
+      function paint(k) {
+        var foot = kinds.map(function (x) { return '<button type="button" class="' + (x.k === k ? 'on' : '') + '" data-k="' + x.k + '">' + x.label + '</button>'; }).join('');
+        modal.innerHTML = '<div class="kbv-player">'
+          + '<video controls autoplay playsinline src="' + esc(API + '/api/skills/digital-human-koubo/projects/' + p.id + '/' + k + '?v=' + Date.now()) + '"></video>'
+          + '<div class="kbv-player-tabs">' + foot + '</div>'
+          + '<div class="kbv-player-foot"><span>' + esc(p.name || p.id) + '</span><span style="display:flex;gap:14px;align-items:center;"><a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + p.id + '/' + k) + '" download>下载</a><button type="button" class="kbv-link" style="color:#cbd5e1;padding:0;" data-close>关闭</button></span></div>'
+          + '<button type="button" class="kbv-x" data-close style="background:rgba(255,255,255,.14);color:#f1f5f9;">×</button>'
+          + '</div>';
+        modal.querySelectorAll('[data-k]').forEach(function (b) { b.onclick = function () { paint(b.getAttribute('data-k')); }; });
+        modal.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = function () { close(); }; });
+      }
+      function close() {
+        var v = modal.querySelector('video');
+        if (v) { try { v.pause(); } catch (e) {} }
+        if (modal.parentNode) modal.parentNode.removeChild(modal);
+        document.removeEventListener('keydown', onKey);
+      }
+      function onKey(e) { if (e.key === 'Escape') close(); }
+      document.addEventListener('keydown', onKey);
+      modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+      paint(pick);
+    }).catch(function (e) { toast('预览失败：' + e.message); });
+  }
+  function kbvConfirm(title, text, okLabel, onOk) {
+    var old = document.getElementById('kbvConfirm');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var modal = document.createElement('div');
+    modal.id = 'kbvConfirm';
+    modal.className = 'kbv-modal';
+    modal.innerHTML = '<div class="kbv-confirm"><h4>' + esc(title) + '</h4><p>' + esc(text) + '</p><div class="kbv-confirm-actions"><button type="button" class="btn btn-ghost btn-sm" data-no>取消</button><button type="button" class="btn btn-primary btn-sm" data-yes>' + esc(okLabel) + '</button></div></div>';
+    document.body.appendChild(modal);
+    function close() { if (modal.parentNode) modal.parentNode.removeChild(modal); }
+    modal.querySelector('[data-no]').onclick = close;
+    modal.querySelector('[data-yes]').onclick = function () { close(); onOk(); };
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+  }
+  function kbvProjTimerStart() {
+    if (state.projTimer) return;
+    state.projTimer = setInterval(function () {
+      if (kbvUi().page !== 'projects') return;
+      if ((state.projects || []).some(function (p) { return p.status === 'generating' || !p.has_video; })) loadProjects();
+    }, 3000);
+  }
+  function kbvProjTimerStop() {
+    if (state.projTimer) { clearInterval(state.projTimer); state.projTimer = null; }
+  }
+  function kbvBack() {
+    var p = state.project;
+    if (state.dirty && p && p.id) {
+      kbvConfirm('返回项目记录？', '当前改动还没生成，返回后不会保存。', '返回', function () { state.dirty = false; kbvGo('projects'); });
+      return;
+    }
+    if (p && p.id) { kbvGo('projects'); return; }
+    kbvGo('templates');
+  }
+  function kbvPrimaryClick() {
+    var p = state.project;
+    var firstOnly = !!($('kbvFirstOnly') || {}).checked;
+    if (p && p.id && kbvHasVideo(p) && !state.dirty) { startRender('preview'); return; }
+    generate(!firstOnly);
+  }
+
   function bind() {
-    document.addEventListener('click', function(evt) {
+    document.addEventListener('click', function (evt) {
       var t = evt.target;
       if (!t || !t.getAttribute) return;
-      var hfClose = t.getAttribute('data-hf-close');
-      if (hfClose) { evt.preventDefault(); closeHfModal(hfClose); return; }
-      var hfMode = t.getAttribute('data-hf-mode');
-      if (hfMode) {
+      var closeEl = t.closest ? t.closest('[data-hf-close]') : null;
+      if (closeEl) { evt.preventDefault(); closeHfModal(closeEl.getAttribute('data-hf-close')); return; }
+      var modeEl = t.closest ? t.closest('[data-hf-mode]') : null;
+      if (modeEl) {
         evt.preventDefault();
+        var hfMode = modeEl.getAttribute('data-hf-mode');
         closeHfModal('kbHfModeModal');
         showHfModal(hfMode === 'video' ? 'kbHfVideoModal' : 'kbHfImageModal');
         return;
       }
-      if (t.id === 'kbHfImageBox') { var fi = document.getElementById('kbHfImageFile'); if (fi) fi.click(); return; }
-      if (t.id === 'kbHfVideoBox') { var fv = document.getElementById('kbHfVideoFile'); if (fv) fv.click(); return; }
+      var imgBox = t.closest ? t.closest('#kbHfImageBox') : null;
+      if (imgBox) { var fi = document.getElementById('kbHfImageFile'); if (fi) fi.click(); return; }
+      var vidBox = t.closest ? t.closest('#kbHfVideoBox') : null;
+      if (vidBox) { var fv = document.getElementById('kbHfVideoFile'); if (fv) fv.click(); return; }
       if (!t.id) return;
       if (t.id === 'kbHiflyRefresh') { evt.preventDefault(); loadHiflyAvatars(); }
       else if (t.id === 'kbHiflyCreate') { evt.preventDefault(); openHiflyTrainModal(); }
       else if (t.id === 'kbHfImageSubmit') { evt.preventDefault(); submitHfAvatar('image'); }
       else if (t.id === 'kbHfVideoSubmit') { evt.preventDefault(); submitHfAvatar('video'); }
     });
-    document.addEventListener('change', function(evt) {
+    document.addEventListener('change', function (evt) {
       var t = evt.target;
       if (!t || !t.id) return;
       if (t.id === 'kbHfImageFile' || t.id === 'kbHfVideoFile') {
@@ -2313,7 +2569,7 @@
         if (meta && f) { meta.style.display = 'flex'; meta.textContent = f.name + ' · ' + (f.size / 1024 / 1024).toFixed(2) + 'MB'; }
       }
     });
-    document.addEventListener('change', function(evt) {
+    document.addEventListener('change', function (evt) {
       var t = evt.target;
       if (t && t.id === 'kbHiflyAvatar') { state.form.hifly_avatar_id = t.value || ''; markDirty(); return; }
       if (t && t.name === 'kbGen') {
@@ -2323,34 +2579,56 @@
         markDirty();
       }
     });
-    var ta = $('kbText');
-    if (ta) ta.addEventListener('input', function () { updateCount(); markDirty(); });
-    var tgl = $('kbParamToggle');
-    if (tgl) tgl.onclick = function () { $('kbParams').classList.toggle('open'); };
-    var q = $('kbQuote'); if (q) q.onclick = function () { quote(false); };
-    var g = $('kbGenerate'); if (g) g.onclick = function () { generate(false); };
-    var ga = $('kbGenerateAll'); if (ga) ga.onclick = function () { generate(true); };
-    var sv = $('kbSave'); if (sv) sv.onclick = function () { quote(false).then(saveProject).catch(function () {}); };
-    var ex = $('kbExport'); if (ex) ex.onclick = exportTasks;
-    var dp = $('kbDeps'); if (dp) dp.onclick = openDeps;
-    var pr = $('kbProjRefresh'); if (pr) pr.onclick = function () { loadProjects(); log('已刷新项目列表'); };
-    var bk = $('kbBack'); if (bk) bk.onclick = function () {
-      if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView('skill-store');
-      else if (typeof showLobsterView === 'function') showLobsterView('skill-store');
+    var tabs = $('kbvTabs');
+    if (tabs) tabs.onclick = function (e) {
+      var b = e.target && e.target.closest ? e.target.closest('[data-kbv-page]') : null;
+      if (b) kbvGo(b.getAttribute('data-kbv-page'));
     };
+    var nb = $('kbvNew'); if (nb) nb.onclick = function () { kbvNewProject(state.render.templateId); };
+    var rf = $('kbvRefresh'); if (rf) rf.onclick = function () { loadTemplates(); loadProjects(); toast('已刷新'); };
+    var sr = $('kbvSearch'); if (sr) sr.oninput = function () { kbvUi().search = sr.value || ''; renderTemplatePage(); };
+    var pr = $('kbvProjRefresh'); if (pr) pr.onclick = function () { loadProjects(); toast('已刷新项目记录'); };
+    var bt = $('kbvBatch'); if (bt) bt.onclick = openBatchModal;
+    var mx = $('kbvMatrix'); if (mx) mx.onclick = openMatrixModal;
+    var bk = $('kbvBack'); if (bk) bk.onclick = kbvBack;
+    var cn = $('kbvCancel'); if (cn) cn.onclick = kbvBack;
+    var ta = $('kbText');
+    var estTimer = null;
+    if (ta) ta.addEventListener('input', function () {
+      updateCount();
+      markDirty();
+      clearTimeout(estTimer);
+      estTimer = setTimeout(function () {
+        var text = (ta.value || '').trim();
+        if (!text) { state.quote = null; renderSegments(); renderMeta(); return; }
+        quote(false).catch(function () {});
+      }, 700);
+    });
+    var tgl = $('kbParamToggle');
+    if (tgl) tgl.onclick = function () {
+      var box = $('kbParams');
+      if (!box) return;
+      box.classList.toggle('open');
+      tgl.classList.toggle('open', box.classList.contains('open'));
+    };
+    var g = $('kbGenerate'); if (g) g.onclick = kbvPrimaryClick;
+    var fo = $('kbvFirstOnly'); if (fo) fo.onchange = kbvRenderCreateMode;
   }
 
   function ensureShell() {
     var root = document.getElementById('content-' + VIEW_ID);
     if (!root) return null;
     if (!root.dataset.kouboBuilt) {
+      injectCss();
+      injectCssV3();
       root.innerHTML = shell();
       root.dataset.kouboBuilt = '1';
-      injectCss();
       bind();
       if ((state.form && state.form.generator || 'hifly') === 'hifly') loadHiflyAvatars();
       renderAll();
       updateCount();
+      kbvGo('templates');
+      renderTrainBar();
     }
     return root;
   }

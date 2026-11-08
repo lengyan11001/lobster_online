@@ -923,6 +923,7 @@ class ProjectBody(BaseModel):
     shot: str = "full"
     host: str = "tank"
     photo_id: Optional[str] = None
+    template_id: str = ""
     options: Optional[Dict[str, Any]] = None
 
 
@@ -1032,6 +1033,7 @@ def koubo_project_create(body: ProjectBody):
         "total_credits": sum(s["credits"] for s in segs),
         "status": "ready",
         "created_at": now,
+        "template_id": (body.template_id or "").strip(),
     }
     items.insert(0, row)
     _save_projects(items[:200])
@@ -1067,6 +1069,8 @@ def _summary_row(row: Dict[str, Any], running: set) -> Dict[str, Any]:
         "preview_v": int(preview.stat().st_mtime_ns // 1_000_000) if preview.is_file() else 0,
         "rendered": packaged.is_file(),
         "rendered_v": int(packaged.stat().st_mtime_ns // 1_000_000) if packaged.is_file() else 0,
+        "template_id": row.get("template_id") or row.get("preview_template_id") or "",
+        "template_title": row.get("template_title") or row.get("preview_template_title") or "",
     }
 
 
