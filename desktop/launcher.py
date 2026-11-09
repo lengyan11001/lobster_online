@@ -1947,6 +1947,43 @@ class DesktopApi:
             return {"ok": False, "error": f"保存失败：{exc}"}
         return {"ok": True, "path": str(target), "filename": target.name}
 
+    def save_local_media(self, relative_path: str, suggested_name: str = "") -> dict:
+        """保存 <root>/data 下的本地媒体文件（内嵌 WebView 不能直接下载）。"""
+        raw = str(relative_path or "").strip().replace("\\", "/").lstrip("/")
+        if not raw or ":" in raw or ".." in raw.split("/"):
+            return {"ok": False, "error": "路径不合法"}
+        data_root = (ROOT / "data").resolve()
+        try:
+            source = (data_root / raw).resolve()
+        except Exception as exc:
+            return {"ok": False, "error": f"路径不合法：{exc}"}
+        if data_root not in source.parents or not source.is_file():
+            return {"ok": False, "error": "文件不存在或已过期"}
+        try:
+            import webview  # type: ignore
+
+            window = webview.active_window()
+            default_name = safe_filename(suggested_name or source.name, source.name)
+            result = window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=default_name,
+                file_types=("视频文件 (*.mp4;*.webm;*.mov;*.m4v)", "图片文件 (*.png;*.jpg;*.jpeg;*.webp)", "所有文件 (*.*)"),
+            )
+        except Exception as exc:
+            log(f"save local media dialog failed: {exc}")
+            return {"ok": False, "error": f"无法打开保存窗口：{exc}"}
+        if not result:
+            return {"ok": False, "cancelled": True}
+        target_raw = result[0] if isinstance(result, (list, tuple)) else result
+        target = Path(str(target_raw)).expanduser()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except Exception as exc:
+            log(f"save local media failed source={source} target={target}: {exc}")
+            return {"ok": False, "error": f"保存失败：{exc}"}
+        return {"ok": True, "path": str(target), "filename": target.name}
+
     def save_text_file(self, suggested_name: str, content: str) -> dict:
         """Save authenticated/generated text that a WebView cannot download as a blob URL."""
         raw = str(content or "")

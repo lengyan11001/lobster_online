@@ -2460,6 +2460,33 @@
           : '<button type="button" class="btn btn-ghost btn-sm kbv-danger" data-kbv-del="' + esc(p.id) + '" data-kbv-name="' + esc(p.name || p.id) + '">删除</button>')
       + '</div></div></article>';
   }
+  function kbvDownload(pid, kind) {
+    var file = kind === 'rendered' ? 'final_packaged.mp4' : (kind === 'preview' ? 'final_preview.mp4' : 'final.mp4');
+    var suffix = kind === 'rendered' ? 'final' : (kind === 'preview' ? 'preview' : 'source');
+    var name = 'koubo-' + pid + '-' + suffix + '.mp4';
+    var api = window.pywebview && window.pywebview.api;
+    if (api && typeof api.save_local_media === 'function') {
+      toast('选择保存位置…');
+      api.save_local_media('koubo/output/' + pid + '/' + file, name)
+        .then(function (d) {
+          if (d && d.cancelled) return;
+          if (!d || !d.ok) throw new Error((d && d.error) || '保存失败');
+          toast('已保存：' + (d.path || d.filename || ''));
+        })
+        .catch(function (e) { toast('保存失败：' + (e && e.message ? e.message : e)); });
+      return;
+    }
+    var url = API + '/api/skills/digital-human-koubo/projects/' + pid + '/' + kind;
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   function openProjectPreview(pid, prefer) {
     req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
       var kinds = [];
@@ -2479,11 +2506,12 @@
         modal.innerHTML = '<div class="kbv-player">'
           + '<video controls autoplay playsinline src="' + esc(API + '/api/skills/digital-human-koubo/projects/' + p.id + '/' + k + '?v=' + Date.now()) + '"></video>'
           + '<div class="kbv-player-tabs">' + foot + '</div>'
-          + '<div class="kbv-player-foot"><span>' + esc(p.name || p.id) + '</span><span style="display:flex;gap:14px;align-items:center;"><a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + p.id + '/' + k) + '" download>下载</a><button type="button" class="kbv-link" style="color:#cbd5e1;padding:0;" data-close>关闭</button></span></div>'
+          + '<div class="kbv-player-foot"><span>' + esc(p.name || p.id) + '</span><span style="display:flex;gap:14px;align-items:center;"><button type="button" class="kbv-link" style="color:#cbd5e1;padding:0;" data-dl="' + k + '">下载</button><button type="button" class="kbv-link" style="color:#cbd5e1;padding:0;" data-close>关闭</button></span></div>'
           + '<button type="button" class="kbv-x" data-close style="background:rgba(255,255,255,.14);color:#f1f5f9;">×</button>'
           + '</div>';
         modal.querySelectorAll('[data-k]').forEach(function (b) { b.onclick = function () { paint(b.getAttribute('data-k')); }; });
         modal.querySelectorAll('[data-close]').forEach(function (b) { b.onclick = function () { close(); }; });
+        modal.querySelectorAll('[data-dl]').forEach(function (b) { b.onclick = function () { kbvDownload(p.id, b.getAttribute('data-dl')); }; });
       }
       function close() {
         var v = modal.querySelector('video');
