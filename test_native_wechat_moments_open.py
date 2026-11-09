@@ -177,3 +177,35 @@ def test_open_moments_uses_existing_global_window_without_clicking_nav(monkeypat
     assert 55 in focused
     assert steps[0]["entry"] == "existing_window"
     assert steps[0]["ok"] is True
+
+
+def test_find_nav_more_button_prefers_left_rail():
+    left_more = _Node("…", "mmui::XButton")
+    right_more = _Node("…", "mmui::XButton")
+    left_more.BoundingRectangle = type("R", (), {"left": 40, "top": 300, "right": 60, "bottom": 320})
+    right_more.BoundingRectangle = type("R", (), {"left": 900, "top": 300, "right": 920, "bottom": 320})
+    root = _Node("微信", "mmui::MainWindow", [right_more, left_more])
+
+    found = engine._find_nav_more_button(root, (0, 0, 1200, 800))
+
+    assert found is left_more
+
+
+def test_collapsed_nav_expands_more_then_clicks_moments(monkeypatch):
+    moments_entry = _Node("朋友圈", "mmui::XButton")
+    more = _Node("…", "mmui::XButton")
+    main_root = _Node("微信", "mmui::MainWindow", [more])
+    popup_root = _Node("", "mmui::Popup", [moments_entry])
+    clicks = []
+
+    monkeypatch.setattr(engine, "_uia_main_root", lambda hwnd: main_root)
+    monkeypatch.setattr(engine, "_wechat_popup_roots", lambda hwnd: [popup_root])
+    monkeypatch.setattr(engine, "_uia_click", lambda node, require_bounds=True: clicks.append(node))
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+
+    steps = []
+    ok = engine._expand_collapsed_nav(123, steps)
+
+    assert ok is True
+    assert clicks == [more, moments_entry]
+    assert [s["step"] for s in steps] == ["expand_nav", "open_moments_from_more"]

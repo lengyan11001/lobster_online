@@ -16969,6 +16969,99 @@ def _accept_open_moments(
     return True
 
 
+_NAV_MORE_NAMES = {"更多", "更多功能", "...", "…", "•••", "More"}
+
+
+def _find_nav_more_button(root: Any, window_rect: Any = None) -> Optional[Any]:
+    """窄窗口时左侧栏折叠，朋友圈被收进「…」按钮；先把这个按钮找出来。"""
+    left_limit = None
+    if window_rect:
+        try:
+            left_limit = float(window_rect[0]) + 170.0
+        except Exception:
+            left_limit = None
+    for node in _uia_walk(root, max_depth=10, max_nodes=900):
+        name = _uia_control_text(node)
+        class_name = _uia_control_class(node).lower()
+        looks = name in _NAV_MORE_NAMES or "more" in class_name or "overflow" in class_name
+        if not looks:
+            continue
+        rect = _uia_rect(node)
+        if left_limit is not None and rect and rect[0] > left_limit:
+            continue
+        return node
+    return None
+
+
+def _wechat_popup_roots(hwnd: int) -> List[Any]:
+    """同一微信进程里其它可见顶层窗口（… 展开的浮层通常是独立 popup）。"""
+    roots: List[Any] = []
+    try:
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+    except Exception:
+        return roots
+    try:
+        _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+    except Exception:
+        return roots
+
+    def _enum(h: int, _extra: Any) -> None:
+        try:
+            _t, p = win32process.GetWindowThreadProcessId(h)
+            if p != pid or int(h) == int(hwnd) or not win32gui.IsWindowVisible(h):
+                return
+            roots.append(_uia_main_root(h))
+        except Exception:
+            return
+
+    try:
+        win32gui.EnumWindows(_enum, None)
+    except Exception:
+        pass
+    return roots[:8]
+
+
+def _expand_collapsed_nav(hwnd: int, steps: List[Dict[str, Any]]) -> bool:
+    """点开左侧「…」，从浮层里打开朋友圈。返回 True 表示已点到入口。"""
+    try:
+        root = _uia_main_root(hwnd)
+    except Exception:
+        return False
+    window_rect = None
+    try:
+        import win32gui  # type: ignore
+
+        window_rect = win32gui.GetWindowRect(hwnd)
+    except Exception:
+        window_rect = None
+    more = _find_nav_more_button(root, window_rect)
+    if more is None:
+        return False
+    try:
+        _uia_click(more)
+    except Exception as exc:
+        steps.append({"step": "expand_nav", "ok": False, "error": str(exc)[:160]})
+        return False
+    steps.append({"step": "expand_nav", "ok": True})
+    time.sleep(0.5)
+    for candidate in [root] + _wechat_popup_roots(hwnd):
+        node = _uia_find_by_names(candidate, ["朋友圈"], contains=False, max_depth=14)
+        if node is None:
+            node = _uia_find_by_names(candidate, ["朋友圈"], contains=True, max_depth=14)
+        if node is None:
+            continue
+        try:
+            _uia_click(node)
+        except Exception:
+            continue
+        steps.append({"step": "open_moments_from_more", "ok": True})
+        time.sleep(1.2)
+        return True
+    steps.append({"step": "open_moments_from_more", "ok": False})
+    return False
+
+
 def _open_existing_global_moments(hwnd: int, steps: List[Dict[str, Any]], attempt: int) -> bool:
     try:
         moments_hwnd = int(_find_visible_local_moments_hwnd() or 0)
@@ -17032,6 +17125,13 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
                 "error": _MOMENTS_ENTRY_MISSING,
             }
         )
+        if _expand_collapsed_nav(hwnd, steps):
+            try:
+                surface = _scan_moments_surface(_uia_foreground_or_main_root(hwnd))
+            except Exception:
+                surface = {"kind": "none", "nav": None}
+            if _accept_open_moments(hwnd, surface, steps, attempt, entry="more_menu"):
+                return
         if attempt >= 3:
             break
         _recover_local_moments_entry(hwnd, steps, attempt)
