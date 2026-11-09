@@ -15282,10 +15282,26 @@ def _probe_tree_backends(hwnd: int) -> Dict[str, Any]:
     info: Dict[str, Any] = {"hwnd": int(hwnd)}
     try:
         import win32gui  # type: ignore
+        import win32process  # type: ignore
 
         info["class"] = str(win32gui.GetClassName(int(hwnd)) or "")
         info["title"] = str(win32gui.GetWindowText(int(hwnd)) or "")
         info["rect"] = list(win32gui.GetWindowRect(int(hwnd)))
+        info["visible"] = bool(win32gui.IsWindowVisible(int(hwnd)))
+        info["iconic"] = bool(win32gui.IsIconic(int(hwnd)))
+        info["foreground"] = int(win32gui.GetForegroundWindow() or 0) == int(hwnd)
+        try:
+            info["screen"] = [win32gui.GetSystemMetrics(0), win32gui.GetSystemMetrics(1)]
+        except Exception:
+            pass
+        try:
+            _thread_id, wpid = win32process.GetWindowThreadProcessId(int(hwnd))
+            import win32ts  # type: ignore
+
+            info["window_session"] = int(win32ts.ProcessIdToSessionId(int(wpid)) or 0)
+            info["client_session"] = int(win32ts.ProcessIdToSessionId(os.getpid()) or 0)
+        except Exception as exc:
+            info["session_error"] = f"{type(exc).__name__}: {exc}"[:120]
     except Exception as exc:
         info["win32_error"] = f"{type(exc).__name__}: {exc}"[:160]
     try:
