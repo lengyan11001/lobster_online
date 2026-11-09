@@ -15222,17 +15222,90 @@ class _PwaNode:
 _PWA_ROOT_CACHE: Dict[int, tuple] = {}
 
 
+def _pwa_candidates(hwnd: int) -> List[tuple]:
+    """按几种连接方式各拿一次 UIA 根节点；不同机器上哪种能work不一样。"""
+    from pywinauto.application import Application  # type: ignore
+
+    out: List[tuple] = []
+    pid = 0
+    try:
+        import win32process  # type: ignore
+
+        _thread_id, pid = win32process.GetWindowThreadProcessId(int(hwnd))
+    except Exception:
+        pid = 0
+    try:
+        app = Application(backend="uia").connect(handle=int(hwnd))
+        out.append(("connect_handle", _PwaNode(app.window(handle=int(hwnd)))))
+    except Exception as exc:
+        out.append(("connect_handle", exc))
+    if pid:
+        try:
+            app = Application(backend="uia").connect(process=int(pid))
+            out.append(("connect_process", _PwaNode(app.window(handle=int(hwnd)))))
+        except Exception as exc:
+            out.append(("connect_process", exc))
+    try:
+        from pywinauto import Desktop  # type: ignore
+
+        out.append(("desktop", _PwaNode(Desktop(backend="uia").window(handle=int(hwnd)))))
+    except Exception as exc:
+        out.append(("desktop", exc))
+    return out
+
+
 def _pwa_root(hwnd: int) -> Any:
     now = time.time()
     cached = _PWA_ROOT_CACHE.get(int(hwnd))
     if cached and now - float(cached[0]) < 0.8:
         return cached[1]
-    from pywinauto.application import Application  # type: ignore
+    first: Any = None
+    for _name, node in _pwa_candidates(hwnd):
+        if isinstance(node, Exception):
+            continue
+        if first is None:
+            first = node
+        try:
+            if node.GetChildren():
+                _PWA_ROOT_CACHE[int(hwnd)] = (now, node)
+                return node
+        except Exception:
+            continue
+    if first is None:
+        raise RuntimeError("pywinauto 无法连接微信窗口")
+    _PWA_ROOT_CACHE[int(hwnd)] = (now, first)
+    return first
 
-    app = Application(backend="uia").connect(handle=int(hwnd))
-    root = _PwaNode(app.window(handle=int(hwnd)))
-    _PWA_ROOT_CACHE[int(hwnd)] = (now, root)
-    return root
+
+def _probe_tree_backends(hwnd: int) -> Dict[str, Any]:
+    """记录各后端真实报错，供朋友圈失败诊断使用。"""
+    info: Dict[str, Any] = {"hwnd": int(hwnd)}
+    try:
+        import win32gui  # type: ignore
+
+        info["class"] = str(win32gui.GetClassName(int(hwnd)) or "")
+        info["title"] = str(win32gui.GetWindowText(int(hwnd)) or "")
+        info["rect"] = list(win32gui.GetWindowRect(int(hwnd)))
+    except Exception as exc:
+        info["win32_error"] = f"{type(exc).__name__}: {exc}"[:160]
+    try:
+        import uiautomation as auto  # type: ignore
+
+        root = auto.ControlFromHandle(int(hwnd))
+        info["uia_children"] = len(root.GetChildren() or [])
+    except Exception as exc:
+        info["uia_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    pwa: Dict[str, Any] = {}
+    for name, node in _pwa_candidates(int(hwnd)):
+        if isinstance(node, Exception):
+            pwa[name] = f"{type(node).__name__}: {node}"[:200]
+            continue
+        try:
+            pwa[name] = len(node.GetChildren() or [])
+        except Exception as exc:
+            pwa[name] = f"{type(exc).__name__}: {exc}"[:200]
+    info["pwa"] = pwa
+    return info
 
 
 def _is_qt_wechat_window(hwnd: int) -> bool:
@@ -15250,7 +15323,9 @@ def _uia_root_with_fallback(hwnd: int) -> Any:
 
     if _is_qt_wechat_window(hwnd):
         try:
-            return _pwa_root(int(hwnd))
+            root = _pwa_root(int(hwnd))
+            if root.GetChildren():
+                return root
         except Exception:
             pass
     root = auto.ControlFromHandle(int(hwnd or 0))
@@ -17256,6 +17331,11 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
         if attempt >= 3:
             break
         _recover_local_moments_entry(hwnd, steps, attempt)
+    tree_probe: Dict[str, Any] = {}
+    try:
+        tree_probe = _probe_tree_backends(int(hwnd))
+    except Exception:
+        tree_probe = {}
     try:
         _append_rotating_log(
             NATIVE_WECHAT_DIAGNOSTIC_LOG,
@@ -17265,6 +17345,7 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
                     "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                     "hwnd": int(hwnd),
                     "qt_window": _is_qt_wechat_window(int(hwnd)),
+                    "tree_probe": tree_probe,
                     "steps": steps[-12:],
                     "error": _MOMENTS_ENTRY_MISSING,
                 },
@@ -17278,6 +17359,18 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     summary = "; ".join(
         f"{item.get('step')}={'ok' if item.get('ok') else 'fail'}" for item in steps[-6:]
     )
+    pwa = tree_probe.get("pwa") if isinstance(tree_probe.get("pwa"), dict) else {}
+    empty_tree = (
+        bool(str(tree_probe.get("class") or "").strip())
+        and not int(tree_probe.get("uia_children") or 0)
+        and not any(isinstance(value, int) and value > 0 for value in pwa.values())
+    )
+    if empty_tree:
+        hint = (
+            "微信窗口当前读不到界面（UIA 为空）。请确认 PC 微信已登录、"
+            "窗口没有最小化/收进托盘、屏幕已解锁，然后重试。"
+        )
+        raise RuntimeError(f"{hint}（{summary}）" if summary else hint)
     raise RuntimeError(f"{_MOMENTS_ENTRY_MISSING}（{summary}）" if summary else _MOMENTS_ENTRY_MISSING)
 
 
