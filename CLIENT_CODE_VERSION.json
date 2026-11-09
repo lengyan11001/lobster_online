@@ -1,7 +1,7 @@
 {
-  "version": "2.0.255",
-  "build": 556,
-  "applied_at": "2026-11-09T20:51:41+08:00",
-  "note": "微信4.x：UIA读不到时回退pywinauto；窄窗口左侧栏折叠时点…进朋友圈",
-  "bundle_sha256": "16ab7ed93d142b15c543deb4c6493620ffdbb63ba46163d2d5939df616069152"
+  "version": "2.0.256",
+  "build": 557,
+  "applied_at": "2026-11-09T21:10:00+08:00",
+  "note": "微信4.x Qt窗口直接走pywinauto；朋友圈入口失败步骤写入诊断",
+  "bundle_sha256": "7b2c4b1bb2f28f36ce8eb5fa33c2e501f1627b357da69fb7d6c080e748519ac5"
 }
