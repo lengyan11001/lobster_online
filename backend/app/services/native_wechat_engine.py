@@ -15235,9 +15235,24 @@ def _pwa_root(hwnd: int) -> Any:
     return root
 
 
+def _is_qt_wechat_window(hwnd: int) -> bool:
+    """微信 4.x 主窗口是 Qt（类名 Qt51514QWindowIcon），uiautomation 常只给部分树。"""
+    try:
+        import win32gui  # type: ignore
+
+        return str(win32gui.GetClassName(int(hwnd)) or "").startswith("Qt")
+    except Exception:
+        return False
+
+
 def _uia_root_with_fallback(hwnd: int) -> Any:
     import uiautomation as auto  # type: ignore
 
+    if _is_qt_wechat_window(hwnd):
+        try:
+            return _pwa_root(int(hwnd))
+        except Exception:
+            pass
     root = auto.ControlFromHandle(int(hwnd or 0))
     try:
         if root is not None and (root.GetChildren() or []):
@@ -17241,7 +17256,29 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
         if attempt >= 3:
             break
         _recover_local_moments_entry(hwnd, steps, attempt)
-    raise RuntimeError(_MOMENTS_ENTRY_MISSING)
+    try:
+        _append_rotating_log(
+            NATIVE_WECHAT_DIAGNOSTIC_LOG,
+            json.dumps(
+                {
+                    "operation": "moments_open_failed",
+                    "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                    "hwnd": int(hwnd),
+                    "qt_window": _is_qt_wechat_window(int(hwnd)),
+                    "steps": steps[-12:],
+                    "error": _MOMENTS_ENTRY_MISSING,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n",
+        )
+    except Exception:
+        pass
+    summary = "; ".join(
+        f"{item.get('step')}={'ok' if item.get('ok') else 'fail'}" for item in steps[-6:]
+    )
+    raise RuntimeError(f"{_MOMENTS_ENTRY_MISSING}（{summary}）" if summary else _MOMENTS_ENTRY_MISSING)
 
 
 def _find_local_contact_list(root: Any) -> Optional[Any]:
