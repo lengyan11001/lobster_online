@@ -209,3 +209,43 @@ def test_collapsed_nav_expands_more_then_clicks_moments(monkeypatch):
     assert ok is True
     assert clicks == [more, moments_entry]
     assert [s["step"] for s in steps] == ["expand_nav", "open_moments_from_more"]
+
+
+def test_pwa_node_adapter_exposes_uiautomation_shape():
+    class _Info:
+        class_name = "mmui::XTabBarItem"
+        control_type = "Button"
+        automation_id = "aid-1"
+        handle = 0
+
+    class _Rect:
+        left, top, right, bottom = 1.0, 2.0, 3.0, 4.0
+
+    calls = []
+
+    class _Wrapper:
+        element_info = _Info()
+
+        def window_text(self):
+            return "朋友圈"
+
+        def rectangle(self):
+            return _Rect()
+
+        def children(self):
+            return []
+
+        def click_input(self):
+            calls.append("click")
+
+    node = engine._PwaNode(_Wrapper())
+
+    assert node.Name == "朋友圈"
+    assert node.ClassName == "mmui::XTabBarItem"
+    assert node.ControlTypeName == "Button"
+    assert node.AutomationId == "aid-1"
+    rect = node.BoundingRectangle
+    assert (rect.left, rect.top, rect.right, rect.bottom) == (1.0, 2.0, 3.0, 4.0)
+    assert node.GetChildren() == []
+    node.Click()
+    assert calls == ["click"]

@@ -15139,13 +15139,119 @@ def _uia_foreground_or_main_root(hwnd: int) -> Any:
                 fg = 0
     except Exception:
         fg = 0
-    return auto.ControlFromHandle(fg or int(hwnd))
+    return _uia_root_with_fallback(int(fg or hwnd))
+
+
+class _PwaRect:
+    __slots__ = ("left", "top", "right", "bottom")
+
+    def __init__(self, rect: Any) -> None:
+        self.left = float(getattr(rect, "left", 0) or 0)
+        self.top = float(getattr(rect, "top", 0) or 0)
+        self.right = float(getattr(rect, "right", 0) or 0)
+        self.bottom = float(getattr(rect, "bottom", 0) or 0)
+
+
+class _PwaNode:
+    """把 pywinauto 的 UIA wrapper 包成 uiautomation 风格的节点。
+
+    微信 4.x（Qt）主窗口，uiautomation.ControlFromHandle 只能拿到根节点（children=0），
+    pywinauto 的 UIA backend 却能完整遍历；引擎在 uiautomation 树为空时改用它。
+    """
+
+    __slots__ = ("_w",)
+
+    def __init__(self, wrapper: Any) -> None:
+        self._w = wrapper
+
+    @property
+    def Name(self) -> str:
+        try:
+            return self._w.window_text() or ""
+        except Exception:
+            return ""
+
+    @property
+    def ClassName(self) -> str:
+        try:
+            return self._w.element_info.class_name or ""
+        except Exception:
+            return ""
+
+    @property
+    def ControlTypeName(self) -> str:
+        try:
+            return str(self._w.element_info.control_type or "")
+        except Exception:
+            return ""
+
+    @property
+    def AutomationId(self) -> str:
+        try:
+            return str(self._w.element_info.automation_id or "")
+        except Exception:
+            return ""
+
+    @property
+    def NativeWindowHandle(self) -> int:
+        try:
+            return int(getattr(self._w.element_info, "handle", 0) or 0)
+        except Exception:
+            return 0
+
+    @property
+    def BoundingRectangle(self) -> Any:
+        try:
+            return _PwaRect(self._w.rectangle())
+        except Exception:
+            return None
+
+    def GetChildren(self) -> List[Any]:
+        try:
+            return [_PwaNode(child) for child in self._w.children()]
+        except Exception:
+            return []
+
+    def Click(self, simulateMove: bool = True) -> None:
+        try:
+            self._w.click_input()
+        except Exception:
+            self._w.invoke()
+
+
+_PWA_ROOT_CACHE: Dict[int, tuple] = {}
+
+
+def _pwa_root(hwnd: int) -> Any:
+    now = time.time()
+    cached = _PWA_ROOT_CACHE.get(int(hwnd))
+    if cached and now - float(cached[0]) < 0.8:
+        return cached[1]
+    from pywinauto.application import Application  # type: ignore
+
+    app = Application(backend="uia").connect(handle=int(hwnd))
+    root = _PwaNode(app.window(handle=int(hwnd)))
+    _PWA_ROOT_CACHE[int(hwnd)] = (now, root)
+    return root
+
+
+def _uia_root_with_fallback(hwnd: int) -> Any:
+    import uiautomation as auto  # type: ignore
+
+    root = auto.ControlFromHandle(int(hwnd or 0))
+    try:
+        if root is not None and (root.GetChildren() or []):
+            return root
+    except Exception:
+        pass
+    try:
+        return _pwa_root(int(hwnd))
+    except Exception:
+        return root
 
 
 def _uia_main_root(hwnd: int) -> Any:
-    import uiautomation as auto  # type: ignore
-
-    return auto.ControlFromHandle(int(hwnd or 0))
+    return _uia_root_with_fallback(int(hwnd or 0))
 
 
 def _uia_wait_for_names(hwnd: int, names: List[str], *, timeout: float = 8.0, contains: bool = False) -> Optional[Any]:
