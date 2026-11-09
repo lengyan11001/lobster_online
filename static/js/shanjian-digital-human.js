@@ -4384,19 +4384,17 @@
     });
 
     if ($('shanjianOpenAvatarCreateBtn')) $('shanjianOpenAvatarCreateBtn').addEventListener('click', function() {
+      // 2026-11-09：形象训练统一在 2.0，不再弹「选择数字人通道」把人带去 1.0。
       resetCreateForms();
-      openModal('shanjianAvatarProviderModal');
+      openModal('shanjianAvatarModeModal');
     });
     Array.prototype.forEach.call(document.querySelectorAll('[data-avatar-provider]'), function(btn) {
       btn.addEventListener('click', function() {
         var provider = btn.getAttribute('data-avatar-provider');
         closeModal('shanjianAvatarProviderModal');
-        if (provider === 'hifly') {
-          openHiflyAvatarCreateFromLibrary();
-        } else {
-          resetCreateForms();
-          openModal('shanjianAvatarModeModal');
-        }
+        // 海螺通道的新建入口已下线；老 DOM 里如果还残留这个按钮，也走 2.0 训练。
+        resetCreateForms();
+        openModal('shanjianAvatarModeModal');
       });
     });
     if ($('shanjianOpenVoiceCreateBtn')) $('shanjianOpenVoiceCreateBtn').addEventListener('click', function() {
