@@ -1,7 +1,7 @@
 {
-  "version": "2.0.256",
-  "build": 557,
-  "applied_at": "2026-11-09T21:10:00+08:00",
-  "note": "微信4.x Qt窗口直接走pywinauto；朋友圈入口失败步骤写入诊断",
-  "bundle_sha256": "7b2c4b1bb2f28f36ce8eb5fa33c2e501f1627b357da69fb7d6c080e748519ac5"
+  "version": "2.0.257",
+  "build": 558,
+  "applied_at": "2026-11-09T22:37:41+08:00",
+  "note": "诊断包带微信UIA探针；微信多策略读树与空树提示",
+  "bundle_sha256": "2113d68bbb16796ce790202d49539e4daaed1789ae37652dcebc9f1b4fd44a75"
 }
