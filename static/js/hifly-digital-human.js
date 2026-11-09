@@ -2567,6 +2567,11 @@
       if (created) selectAvatar(created, false);
       renderResultSuccessCard('数字人创建成功', renderAvatarSuccessBody(created || item));
       showMessage('数字人创建成功，已自动刷新“我的数字人”。', false);
+      var returnView = '';
+      try { returnView = window.__lobsterAvatarTrainReturnView || ''; window.__lobsterAvatarTrainReturnView = ''; } catch (e1) {}
+      if (returnView === 'shanjian-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
+        setTimeout(function() { try { window._openShanjianDigitalHumanView(); } catch (e2) {} }, 1200);
+      }
     });
   }
 

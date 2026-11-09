@@ -4241,7 +4241,9 @@
   }
 
   function openHiflyAvatarCreateFromLibrary() {
-    // 海螺形象训练在海螺数字人工作台里；跳过去并自动打开创建弹窗
+    // 海螺形象训练在海螺数字人工作台里；跳过去并自动打开创建弹窗。
+    // 训练成功后由 1.0 页面自动切回 2.0，避免用户留在 1.0 里生成视频。
+    try { window.__lobsterAvatarTrainReturnView = 'shanjian-digital-human'; } catch (e0) {}
     try {
       if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
       else if (typeof _switchToHiddenView === 'function') _switchToHiddenView('hifly-digital-human');
