@@ -4240,25 +4240,6 @@
       });
   }
 
-  function openHiflyAvatarCreateFromLibrary() {
-    // 海螺形象训练在海螺数字人工作台里；跳过去并自动打开创建弹窗。
-    // 训练成功后由 1.0 页面自动切回 2.0，避免用户留在 1.0 里生成视频。
-    try { window.__lobsterAvatarTrainReturnView = 'shanjian-digital-human'; } catch (e0) {}
-    try {
-      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
-      else if (typeof _switchToHiddenView === 'function') _switchToHiddenView('hifly-digital-human');
-    } catch (err) {}
-    var tries = 0;
-    var timer = setInterval(function() {
-      var btn = document.getElementById('hiflyOpenAvatarCreateBtn');
-      if (btn) {
-        clearInterval(timer);
-        try { btn.click(); } catch (err) {}
-      } else if (++tries > 60) {
-        clearInterval(timer);
-      }
-    }, 150);
-  }
 
   function bindEvents() {
     ['shanjianAvatarImageAuthText', 'shanjianAvatarVideoAuthText'].forEach(function(id) {
@@ -4387,15 +4368,6 @@
       // 2026-11-09：形象训练统一在 2.0，不再弹「选择数字人通道」把人带去 1.0。
       resetCreateForms();
       openModal('shanjianAvatarModeModal');
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-avatar-provider]'), function(btn) {
-      btn.addEventListener('click', function() {
-        var provider = btn.getAttribute('data-avatar-provider');
-        closeModal('shanjianAvatarProviderModal');
-        // 海螺通道的新建入口已下线；老 DOM 里如果还残留这个按钮，也走 2.0 训练。
-        resetCreateForms();
-        openModal('shanjianAvatarModeModal');
-      });
     });
     if ($('shanjianOpenVoiceCreateBtn')) $('shanjianOpenVoiceCreateBtn').addEventListener('click', function() {
       resetCreateForms();
@@ -5076,33 +5048,6 @@
               </div>
             </div>
           </section>
-        </div>
-      </div>
-
-      <div id="shanjianAvatarProviderModal" class="shanjian-modal" style="display:none;">
-        <div class="shanjian-modal-backdrop" data-modal-close="shanjianAvatarProviderModal"></div>
-        <div class="shanjian-modal-card shanjian-mode-card" role="dialog" aria-modal="true" aria-labelledby="shanjianAvatarProviderTitle">
-          <div class="shanjian-modal-head">
-            <h4 id="shanjianAvatarProviderTitle" class="shanjian-modal-title">选择数字人通道</h4>
-            <button type="button" class="shanjian-modal-close" data-modal-close="shanjianAvatarProviderModal" aria-label="关闭">×</button>
-          </div>
-          <div class="shanjian-mode-list">
-            <button type="button" class="shanjian-mode-option" data-avatar-provider="hifly">
-              <span class="shanjian-mode-icon">海</span>
-              <span class="shanjian-mode-copy">
-                <strong>海螺数字人</strong>
-                <span>音频驱动、口型准，用海螺积分训练；训练后可在数字人口播里直接选它出底片。</span>
-              </span>
-              <span class="shanjian-recommend-chip">推荐</span>
-            </button>
-            <button type="button" class="shanjian-mode-option" data-avatar-provider="shanjian">
-              <span class="shanjian-mode-icon">剪</span>
-              <span class="shanjian-mode-copy">
-                <strong>闪剪数字人</strong>
-                <span>闪剪通道训练，适合走闪剪模板/素材混剪。</span>
-              </span>
-            </button>
-          </div>
         </div>
       </div>
 
