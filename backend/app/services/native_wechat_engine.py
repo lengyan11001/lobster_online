@@ -1210,7 +1210,12 @@ def _wechat_window_rank(item: Dict[str, Any]) -> int:
         rank += 60
     if item.get("is_iconic"):
         rank -= 4
-    if str(item.get("class_name") or "") in WECHAT_WINDOW_CLASSES:
+    class_name = str(item.get("class_name") or "")
+    if _is_wechat_main_window_class(class_name):
+        rank += 200
+    elif "qwindowtool" in class_name.lower():
+        rank -= 200
+    elif class_name in WECHAT_WINDOW_CLASSES:
         rank += 8
     if str(item.get("title") or "").strip() in WECHAT_WINDOW_TITLES:
         rank += 4
@@ -1611,11 +1616,28 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0, allow_laun
     return result
 
 
+def _is_wechat_main_window_class(class_name: str) -> bool:
+    """微信主窗口类名：3.9 是 WeChatMainWndForPC/mmui::MainWindow，4.x 是 Qt...QWindowIcon。
+
+    Qt 里还有 QWindowToolSaveBits / QWindowToolTip 这类小工具窗，UIA 树是空的，
+    绝不能当主窗口用（2026-11-09 用户 142 就是被工具窗顶替了主窗口）。
+    """
+    name = str(class_name or "").strip()
+    if name in WECHAT_WINDOW_CLASSES:
+        return True
+    low = name.lower()
+    return low.startswith("qt") and low.endswith("qwindowicon")
+
+
 def _looks_like_wechat_window(title: str, class_name: str, process_meta: Dict[str, Any]) -> bool:
     title = str(title or "").strip()
     class_name = str(class_name or "").strip()
     process_ok = _looks_like_wechat_process(process_meta)
     class_l = class_name.lower()
+    # Qt 的工具窗（QWindowToolSaveBits / ToolTip / Popup）名字也可能叫 Weixin，
+    # 必须最先排除，否则会把空 UIA 树的工具窗当成主窗口。
+    if any(token in class_l for token in ("qwindowtool", "toolsavebits", "tooltip", "qwindowpopup")):
+        return False
     if class_name in WECHAT_WINDOW_CLASSES:
         return True
     if title in WECHAT_WINDOW_TITLES and process_ok:
@@ -1776,9 +1798,9 @@ def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str
             meta = _process_meta(int(pid or 0))
             if not _looks_like_wechat_window(title, class_name, meta):
                 return
-            if not visible and "TrayIcon" not in class_name:
-                return
             if "TrayIcon" in class_name:
+                return
+            if not visible and not _is_wechat_main_window_class(class_name):
                 return
             items.append(
                 {
@@ -20848,6 +20870,9 @@ def _find_local_account(account_id: str) -> Dict[str, Any]:
     for item in _scan_local_wechat_windows(max_age_seconds=0):
         if int(item.get("hwnd") or 0) == hwnd:
             return item
+    candidates = _scan_local_wechat_windows(max_age_seconds=0)
+    if candidates:
+        return candidates[0]
     raise RuntimeError("没有检测到对应的本机微信窗口，请打开已登录的 PC 微信主窗口后重试")
 
 

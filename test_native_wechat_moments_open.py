@@ -249,3 +249,23 @@ def test_pwa_node_adapter_exposes_uiautomation_shape():
     assert node.GetChildren() == []
     node.Click()
     assert calls == ["click"]
+
+
+def test_qt_tool_window_is_not_treated_as_main_window():
+    meta = {"name": "Weixin.exe", "exe": r"C:\Weixin\Weixin.exe", "version": "4.1.7.59"}
+    # 用户 142 的机器上就是名字也叫 Weixin 的工具窗顶替了主窗口
+    assert engine._looks_like_wechat_window("Weixin", "Qt51514QWindowToolSaveBits", meta) is False
+    assert engine._looks_like_wechat_window("Weixin", "QWindowToolTip", meta) is False
+    assert engine._looks_like_wechat_window("微信", "Qt51514QWindowIcon", meta) is True
+    assert engine._is_wechat_main_window_class("Qt51514QWindowIcon") is True
+    assert engine._is_wechat_main_window_class("Qt51514QWindowToolSaveBits") is False
+
+
+def test_wechat_window_rank_prefers_main_over_tool():
+    main = engine._wechat_window_rank(
+        {"class_name": "Qt51514QWindowIcon", "area": 500000, "full_driver_ready": True}
+    )
+    tool = engine._wechat_window_rank(
+        {"class_name": "Qt51514QWindowToolSaveBits", "area": 270000, "full_driver_ready": False}
+    )
+    assert main > tool
