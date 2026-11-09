@@ -1648,8 +1648,10 @@ window._openHiddenWorkspaceView = function(view) {
       if (typeof window.isLobsterFeatureGateAllowed !== 'function' && typeof window.isLobsterFeatureAllowed === 'function' && !window.isLobsterFeatureAllowed(gate)) return;
     }
   }
-  if (target === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
-    window._openHiflyDigitalHumanView();
+  if (target === 'hifly-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
+    // 2026-11-09 统一到 2.0：任何按旧 view 名打开数字人的入口都改走闪剪。
+    // 1.0 页面本身保留，只给 2.0 的「训练新形象」内部流程用。
+    window._openShanjianDigitalHumanView();
     return;
   }
   if (target === 'shanjian-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
@@ -4014,13 +4016,13 @@ function _bindHiflyDigitalHumanCardEntry() {
   document.querySelectorAll('.hifly-digital-human-card').forEach(function(card) {
     card.addEventListener('click', function(e) {
       if (e.target.closest('.card-actions')) return;
-      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+      if (typeof window._openShanjianDigitalHumanView === 'function') window._openShanjianDigitalHumanView();
     });
   });
   document.querySelectorAll('.hifly-digital-human-entry-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
-      if (typeof window._openHiflyDigitalHumanView === 'function') window._openHiflyDigitalHumanView();
+      if (typeof window._openShanjianDigitalHumanView === 'function') window._openShanjianDigitalHumanView();
     });
   });
 }

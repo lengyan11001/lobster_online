@@ -1961,7 +1961,7 @@ function updateChatModeUi(mode) {
     }
     if (chipHifly) {
       _renderChatSuggestionChip(chipHifly, '数字人口播');
-      _setChatSuggestionAction(chipHifly, 'data-open-hidden-view', 'hifly-digital-human');
+      _setChatSuggestionAction(chipHifly, 'data-open-hidden-view', 'shanjian-digital-human');
       _setChatSuggestionGate(chipHifly, 'hifly_digital_human_skill');
     }
     if (chipDouyinLeads) {
@@ -4544,7 +4544,9 @@ function openHiddenWorkspaceFallback(view) {
   document.querySelectorAll('.content-block').forEach(function(p) { p.classList.remove('visible'); });
   var contentEl = document.getElementById('content-' + target);
   if (contentEl) contentEl.classList.add('visible');
-  if (target === 'hifly-digital-human' && typeof window.initHiflyDigitalHumanView === 'function') {
+  if (target === 'shanjian-digital-human' && typeof window.initShanjianDigitalHumanView === 'function') {
+    window.initShanjianDigitalHumanView();
+  } else if (target === 'hifly-digital-human' && typeof window.initHiflyDigitalHumanView === 'function') {
     window.initHiflyDigitalHumanView();
   } else if (target === 'viral-video-remix' && typeof window.initViralVideoRemixView === 'function') {
     window.initViralVideoRemixView();

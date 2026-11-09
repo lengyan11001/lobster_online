@@ -3076,8 +3076,9 @@ function openCreditLimitModal() {
     if (hash === 'cutcli-template-studio' && typeof window._openCutcliTemplateStudioView === 'function') {
       window._openCutcliTemplateStudioView();
     }
-    if (hash === 'hifly-digital-human' && typeof window._openHiflyDigitalHumanView === 'function') {
-      window._openHiflyDigitalHumanView();
+    if (hash === 'hifly-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
+      // 2026-11-09 统一到 2.0：旧链接 / 旧入口一律进闪剪数字人
+      window._openShanjianDigitalHumanView();
     }
     if (hash === 'shanjian-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
       window._openShanjianDigitalHumanView();
