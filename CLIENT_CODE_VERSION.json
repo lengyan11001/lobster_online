@@ -1,7 +1,7 @@
 {
-  "version": "2.0.254",
-  "build": 555,
-  "applied_at": "2026-11-09T16:47:49+08:00",
-  "note": "数字人3.0 三屏重构 + 预览下载走原生保存",
-  "bundle_sha256": "5cef200445ab45d421fde761db40a9d8d6bdd3700263f9a760a1933032813a93"
+  "version": "2.0.255",
+  "build": 556,
+  "applied_at": "2026-11-09T20:51:41+08:00",
+  "note": "微信4.x：UIA读不到时回退pywinauto；窄窗口左侧栏折叠时点…进朋友圈",
+  "bundle_sha256": "16ab7ed93d142b15c543deb4c6493620ffdbb63ba46163d2d5939df616069152"
 }
