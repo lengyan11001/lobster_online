@@ -290,6 +290,32 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
         except Exception as e:
             summary["files"].append({"path": "seedance_runs_files.txt", "error": str(e)})
 
+        # 微信 UIA 健康状况：每次诊断都带一份，避免只能靠发布失败后才定位
+        try:
+            from ..services import native_wechat_engine as _nwe
+
+            probe_windows = []
+            for item in (_nwe._scan_local_wechat_windows(max_age_seconds=0) or [])[:3]:
+                hwnd = int(item.get("hwnd") or 0)
+                if not hwnd:
+                    continue
+                probe_windows.append(
+                    {
+                        "hwnd": hwnd,
+                        "process_name": item.get("process_name") or "",
+                        "version": item.get("version") or "",
+                        "probe": _nwe._probe_tree_backends(hwnd),
+                    }
+                )
+            probe_payload = {"created_at": created_at, "windows": probe_windows}
+            zf.writestr(
+                "wechat_uia_probe.json",
+                _redact_text(json.dumps(probe_payload, ensure_ascii=False, indent=2, default=str)),
+            )
+            summary["files"].append({"path": "wechat_uia_probe.json", "windows": len(probe_windows)})
+        except Exception as e:  # noqa: BLE001 - 诊断包永远要能打出来
+            summary["files"].append({"path": "wechat_uia_probe.json", "error": str(e)[:200]})
+
         job_store = (_BASE / "_lobster_runtime" / "seedance_tvc_job_store.json").resolve()
         if job_store.is_file():
             try:
