@@ -1,7 +1,7 @@
 {
-  "version": "2.0.257",
-  "build": 558,
-  "applied_at": "2026-11-09T22:37:41+08:00",
-  "note": "诊断包带微信UIA探针；微信多策略读树与空树提示",
-  "bundle_sha256": "2113d68bbb16796ce790202d49539e4daaed1789ae37652dcebc9f1b4fd44a75"
+  "version": "2.0.258",
+  "build": 559,
+  "applied_at": "2026-11-10T13:37:17+08:00",
+  "note": "微信工具窗拒绝/主窗口优先；跟进服务端定时任务终态修复",
+  "bundle_sha256": "c9380558b201bda38551e95fa8f3d2f602a29c4f50a2e948d8c89dfe717e2c9b"
 }
