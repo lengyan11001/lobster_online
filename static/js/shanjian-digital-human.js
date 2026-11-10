@@ -2310,10 +2310,12 @@
     state.materialPicker.loading = true;
     renderMaterialPicker();
     // 和素材库用同一个数据源：优先本机 /api/assets（素材库就是读它），H5 没有本机时退回云端。
+    // origin=all 很关键：/api/assets 默认 origin=generated，会把「素材库」里用户自己
+    // 上传的图（asset_origin=user_upload）全部过滤掉，看起来像上传的图不见了。
     var localBase = baseUrl();
     var apiBase = localBase || cloudBaseUrl();
     var fromCloud = !localBase;
-    return fetch(apiBase + '/api/assets?limit=120', {
+    return fetch(apiBase + '/api/assets?origin=all&limit=200', {
       headers: authHeadersSafe()
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
