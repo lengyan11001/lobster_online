@@ -1730,7 +1730,7 @@
           + (card.type === 'result'
             ? ' data-imglab-boost-index="' + escapeHtml(card.index) + '"'
             : ' data-imglab-boost-job="' + escapeHtml(card.jobId || '') + '"')
-          + ' title="提亮 / 加饱和" aria-label="提亮 / 加饱和">增</button>')
+          + ' title="提亮 / 加饱和" aria-label="提亮 / 加饱和">✦ 增强</button>')
         : '';
       return [
         '<div class="imglab-task-card' + (isActive ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + ' role="button" tabindex="0" title="' + escapeHtml(card.title || '图片任务') + '">',
@@ -2116,8 +2116,6 @@
       '.imglab-enhance-controls label{display:flex;align-items:center;gap:8px;}',
       '.imglab-enhance-controls input[type=range]{width:180px;}',
       '.imglab-enhance-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}',
-      '.imglab-task-card-boost{position:absolute;right:34px;top:6px;width:22px;height:22px;border-radius:50%;border:none;background:rgba(15,23,42,.6);color:#fff;font-size:11px;line-height:22px;cursor:pointer;padding:0;}',
-      '.imglab-task-card-boost:hover{background:#0f766e;}'
     ].join('');
     document.head.appendChild(style);
   }

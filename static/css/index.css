@@ -13523,6 +13523,37 @@ body.online-mastra-chat-compose .online-mastra-chat {
       #content-chat .chat-home-capabilities strong { font-size: 0.96rem; }
       #content-chat .chat-suggestion-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
+    /* 创作图片工作台：数量输入与「增强」按钮，与卡片删除按钮同一套视觉 */
+    #imglabCountInput {
+      width:100%; box-sizing:border-box; padding:0.62rem 0.72rem; border-radius:16px;
+      border:1px solid rgba(113,130,159,0.22); background:linear-gradient(180deg, #fff, rgba(246,249,255,0.98));
+      color:#243755; font-size:0.84rem; outline:none; text-align:center;
+      transition:border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    #imglabCountInput:focus { border-color:rgba(37,99,235,0.55); box-shadow:0 0 0 3px rgba(37,99,235,0.10); }
+    .imglab-task-card-boost {
+      position:absolute;
+      top:0.42rem;
+      right:2.15rem;
+      height:22px;
+      padding:0 9px;
+      display:inline-flex;
+      align-items:center;
+      gap:3px;
+      border:1px solid rgba(116,134,168,0.28);
+      border-radius:999px;
+      background:rgba(255,255,255,0.94);
+      color:#0f766e;
+      font-size:0.72rem;
+      line-height:1;
+      cursor:pointer;
+      opacity:0.86;
+      transition:opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+      z-index:2;
+      white-space:nowrap;
+    }
+    .imglab-task-card-boost:hover { opacity:1; background:#0f766e; color:#fff; }
+
     /* 记录删除按钮：创作图片工作台的任务 / 结果卡片 */
     .imglab-task-card { position:relative; }
     .imglab-task-card-delete {
