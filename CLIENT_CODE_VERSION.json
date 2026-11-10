@@ -1,7 +1,7 @@
 {
-  "version": "2.0.259",
-  "build": 560,
-  "applied_at": "2026-11-10T14:56:09+08:00",
-  "note": "无边框窗口边缘缩放修复（慢启动机器补装 frameless chrome）；顶部拖动带 10px->22px",
-  "bundle_sha256": "d60f5f0dbf3c1716b1ba112fb35c20b2b92aad80eb6fd43f8fd5bc4b10266f5f"
+  "version": "2.0.260",
+  "build": 561,
+  "applied_at": "2026-11-10T17:28:51+08:00",
+  "note": "数字人2.0：音频驱动按语速真实变速；选素材能看到素材库里自己上传的图",
+  "bundle_sha256": "3e3432c4c49797ebd5ab8c208cbe106b32885b7950578fc400396295d842be11"
 }
