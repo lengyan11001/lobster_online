@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+import importlib
 import os
 import re
 import shutil
@@ -1684,12 +1685,33 @@ def _safe_dialog_directory(initial: str = "") -> str:
     return ""
 
 
+_CHROME_HOOKS = {"apply": None, "applied": None}
+
+
 class DesktopApi:
     def __init__(self, recover_services=None):
         self._recover_services = recover_services
 
     def startup_status(self) -> dict:
         return get_startup_status_snapshot()
+
+    def window_chrome_apply(self) -> dict:
+        """页面加载完后补一次无边框/边缘缩放安装。
+
+        启动慢的机器（user_142 启动要 35s）上 `shown` 事件和 15s 兜底线程都会
+        错过窗口创建时机，结果是 frameless 窗口四边完全不能缩放。页面 ready 时
+        再触发一次，handle 一定已经存在。
+        """
+        try:
+            fn = _CHROME_HOOKS.get("apply")
+            if fn is None:
+                return {"ok": True, "applied": False, "skipped": "not-frameless"}
+            fn()
+            applied = bool((_CHROME_HOOKS.get("applied") or (lambda: False))())
+            return {"ok": True, "applied": applied}
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: chrome apply failed: {type(exc).__name__}: {exc}")
+            return {"ok": False, "applied": False, "error": str(exc)}
 
     def window_minimize(self) -> dict:
         """自定义标题栏：最小化。"""
@@ -1748,6 +1770,12 @@ class DesktopApi:
         """自定义标题栏下，用 JS 拖边/角触发系统缩放（WM_NCLBUTTONDOWN）。"""
         try:
             import ctypes
+
+            # frameless_chrome 的全局鼠标监听已经在跑时不要再走系统缩放循环，
+            # 否则两套逻辑同时改窗口大小，拖起来会跳。
+            _applied = _CHROME_HOOKS.get("applied")
+            if _applied is not None and _applied():
+                return {"ok": True, "skipped": "watcher-active"}
 
             import webview  # type: ignore
 
@@ -2630,10 +2658,35 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             with _chrome_lock:
                 if _chrome_state["applied"]:
                     return
-                try:
-                    from desktop.frameless_chrome import apply as _apply_chrome
-                except ModuleNotFoundError:
-                    from frameless_chrome import apply as _apply_chrome
+                _apply_chrome = None
+                _chrome_mod = None
+                errors = []
+                for mod_name in ("desktop.frameless_chrome", "frameless_chrome"):
+                    try:
+                        _chrome_mod = importlib.import_module(mod_name)
+                        _apply_chrome = _chrome_mod.apply
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"{mod_name}: {type(exc).__name__}: {exc}")
+                if _apply_chrome is None:
+                    # sys.path 在打包/绿色版启动时经常不含仓库根目录，老代码因此
+                    # 直接 ModuleNotFoundError，整个无边框/边缘缩放都装不上
+                    # （user_142 就是这样）。这里按绝对路径直接加载。
+                    try:
+                        import importlib.util
+
+                        chrome_path = Path(__file__).resolve().parent / "frameless_chrome.py"
+                        spec = importlib.util.spec_from_file_location("_lobster_frameless_chrome", chrome_path)
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)  # type: ignore[union-attr]
+                        _chrome_mod = module
+                        _apply_chrome = module.apply
+                        log(f"frameless chrome: loaded by path {chrome_path}")
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"path-loader: {type(exc).__name__}: {exc}")
+                if _apply_chrome is None:
+                    log("frameless chrome: import failed | " + " | ".join(errors))
+                    return
                 hwnd = 0
                 try:
                     hwnd = int(window.native.Handle.ToInt64())
@@ -2644,11 +2697,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     # 有些机器 pywebview 永远拿不到 native handle，直接枚举本进程窗口兜底，
                     # 否则无边框/边缘缩放整块都不会生效。
                     try:
-                        from desktop.frameless_chrome import find_app_window as _find_app_window
-                    except ModuleNotFoundError:
-                        from frameless_chrome import find_app_window as _find_app_window
+                        _find_app_window = getattr(_chrome_mod, "find_app_window")
+                    except Exception:
+                        _find_app_window = None
                     try:
-                        hwnd = int(_find_app_window(title) or 0)
+                        hwnd = int(_find_app_window(title) or 0) if _find_app_window else 0
                     except Exception as exc2:
                         log(f"frameless chrome: enum window failed ({exc2})")
                         hwnd = 0
@@ -2658,11 +2711,14 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     log("frameless chrome: no window handle available")
                     return
                 try:
-                    _apply_chrome(hwnd)
-                    _chrome_state["applied"] = True
-                    log(f"frameless chrome applied hwnd={hwnd} mode=manual-drag")
+                    ok = bool(_apply_chrome(hwnd, log=log))
+                    if ok:
+                        _chrome_state["applied"] = True
+                        log(f"frameless chrome applied hwnd={hwnd} mode=manual-drag")
+                    else:
+                        log(f"frameless chrome: apply returned False hwnd={hwnd}")
                 except Exception as exc:
-                    log(f"frameless chrome failed: {exc}")
+                    log(f"frameless chrome failed: {type(exc).__name__}: {exc}")
 
         def _apply_frameless_chrome_when_ready() -> None:
             """Some EdgeChromium/pywebview builds do not emit shown reliably."""
@@ -2682,8 +2738,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     if not err_logged:
                         log(f"frameless chrome: apply attempt failed: {type(exc).__name__}: {exc}")
                         err_logged = True
-                threading.Event().wait(0.05)
-            log("frameless chrome: fallback timed out waiting for native handle")
+                threading.Event().wait(1.0)
+            log("frameless chrome: fallback timed out waiting for native handle (300s)")
 
         # 只有必火品牌用无边框标题栏（其他 OEM 品牌保持系统原生标题栏）
         _brand_mark = str((_ACTIVE_DESKTOP_BRANDING or {}).get("mark") or "").strip().lower()
@@ -2715,6 +2771,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             easy_drag=False,
         )
         if _use_frameless:
+            _CHROME_HOOKS["apply"] = _apply_frameless_chrome
+            _CHROME_HOOKS["applied"] = lambda: bool(_chrome_state["applied"])
             window.events.shown += _apply_frameless_chrome
             threading.Thread(
                 target=_apply_frameless_chrome_when_ready,

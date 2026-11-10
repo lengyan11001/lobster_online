@@ -1363,7 +1363,9 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
 .window-controls button:hover { background: rgba(15, 23, 42, 0.12); color: #0f172a; }
 .window-controls .win-close:hover { background: #e5484d; color: #ffffff; }
 
-/* 2026-10-21：无边框窗口只允许顶部这条 10px 拖动，避免整页 mousedown 拖窗口 */
+/* 2026-10-21：无边框窗口只允许顶部这条拖动带，避免整页 mousedown 拖窗口。
+   2026-11-10：10px 太难点中（用户反馈），html.is-frameless-shell 下改成
+   22px 全宽；header 顶部留 26px 空白，保证拖动带永远压不到按钮/搜索框。 */
 .window-drag-strip {
   position: fixed;
   top: 0;
@@ -1372,6 +1374,11 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
   height: 10px;
   z-index: 80;
   cursor: move;
+}
+html.is-frameless-shell .header { padding-top: 26px; }
+html.is-frameless-shell .window-drag-strip {
+  right: 0;
+  height: 22px;
 }
 
 

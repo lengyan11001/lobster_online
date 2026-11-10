@@ -112,6 +112,59 @@ _user32.SetWindowPos.restype = wintypes.BOOL
 _user32.IsZoomed.argtypes = [wintypes.HWND]
 _user32.IsZoomed.restype = wintypes.BOOL
 
+_user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+_user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+_user32.GetWindowTextLengthW.restype = ctypes.c_int
+_user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+_user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+_user32.IsIconic.argtypes = [wintypes.HWND]
+_user32.IsIconic.restype = wintypes.BOOL
+try:
+    _user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+    _user32.GetDpiForWindow.restype = wintypes.UINT
+except Exception:  # pragma: no cover - very old Windows
+    pass
+
+
+def _win_pid(hwnd: int) -> int:
+    if not hwnd:
+        return 0
+    try:
+        pid = wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(pid.value)
+    except Exception:
+        return 0
+
+
+def describe_window(hwnd: int) -> str:
+    """One-line window identity, used by every chrome/resize log line."""
+    if not hwnd:
+        return "hwnd=0"
+    try:
+        cls = ctypes.create_unicode_buffer(256)
+        _user32.GetClassNameW(hwnd, cls, 256)
+        n = _user32.GetWindowTextLengthW(hwnd)
+        title = ctypes.create_unicode_buffer(n + 1)
+        if n:
+            _user32.GetWindowTextW(hwnd, title, n + 1)
+        rc = wintypes.RECT()
+        _user32.GetWindowRect(hwnd, ctypes.byref(rc))
+        dpi = 0
+        try:
+            dpi = int(_user32.GetDpiForWindow(hwnd))
+        except Exception:
+            pass
+        return (
+            f"hwnd={hwnd} class={cls.value!r} title={title.value!r} "
+            f"rect=({rc.left},{rc.top},{rc.right - rc.left}x{rc.bottom - rc.top}) "
+            f"dpi={dpi} zoomed={int(bool(_user32.IsZoomed(hwnd)))} "
+            f"iconic={int(bool(_user32.IsIconic(hwnd)))} pid={_win_pid(hwnd)}"
+        )
+    except Exception as exc:
+        return f"hwnd={hwnd} describe-failed={exc}"
+
 
 def _enum_best_window(title_hint: str, pid: int, strict_owner: bool) -> int:
     target_pid = int(pid or os.getpid())
@@ -257,9 +310,26 @@ def _resize_watch_loop(
     stop: threading.Event,
     min_width: int,
     min_height: int,
+    log=None,
 ) -> None:
     """WebView2 consumes WM_NCHITTEST, so resize the top-level window directly
     from the global mouse state instead of relying on the native resize loop."""
+    last = {}
+
+    def note(kind: str, text: str, min_interval: float = 2.0) -> None:
+        if log is None:
+            return
+        now = time.time()
+        if now - last.get(kind, 0.0) < min_interval:
+            return
+        last[kind] = now
+        try:
+            log(f"resize: {text}")
+        except Exception:
+            pass
+
+    my_pid = _win_pid(hwnd)
+    note("start", f"watch start {describe_window(hwnd)} edge={edge}", 0.0)
     was_down = False
     while not stop.is_set() and _user32.IsWindow(hwnd):
         down = bool(_user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
@@ -267,43 +337,81 @@ def _resize_watch_loop(
             try:
                 point = wintypes.POINT()
                 _user32.GetCursorPos(ctypes.byref(point))
-                # WindowFromPoint 在 WebView2 / 多显示器 / 有浮动窗口遮挡时会把点击判给
-                # 其它进程的窗口，导致永远匹配不上本窗口、边缘拖动失效。这里改为：
-                # 本窗口在前台 + 光标落在本窗口矩形内即视为命中，再按矩形计算缩放边。
-                in_foreground = _user32.GetForegroundWindow() == hwnd
-                if not in_foreground:
-                    parent = _user32.GetParent(hwnd)
-                    in_foreground = bool(parent) and _user32.GetForegroundWindow() == parent
-                if in_foreground:
-                    win = wintypes.RECT()
-                    _user32.GetWindowRect(hwnd, ctypes.byref(win))
-                    if not (win.left <= point.x < win.right and win.top <= point.y < win.bottom):
-                        was_down = down
-                        time.sleep(0.012)
-                        continue
-                    code = _resize_code(
-                        point.x - win.left,
-                        point.y - win.top,
-                        win.right - win.left,
-                        win.bottom - win.top,
-                        edge,
+                win = wintypes.RECT()
+                _user32.GetWindowRect(hwnd, ctypes.byref(win))
+                inside = win.left <= point.x < win.right and win.top <= point.y < win.bottom
+                if not inside:
+                    was_down = down
+                    time.sleep(0.012)
+                    continue
+                if _user32.IsIconic(hwnd):
+                    note("iconic", f"skip minimized {describe_window(hwnd)}", 5.0)
+                    was_down = down
+                    time.sleep(0.012)
+                    continue
+                cw, ch = win.right - win.left, win.bottom - win.top
+                cx, cy = point.x - win.left, point.y - win.top
+                # 前台判断放宽：本窗口、它的 owner/popup、或同进程任意窗口在前台都算。
+                # 老逻辑只认 GetForegroundWindow()==hwnd，只要 owner/popup 抢了前台，
+                # 边缘拖动就永远不命中。
+                fg = _user32.GetForegroundWindow()
+                fg_ok = bool(fg) and (
+                    fg == hwnd
+                    or _user32.GetAncestor(fg, GA_ROOT) == hwnd
+                    or (_win_pid(fg) == my_pid and my_pid != 0)
+                )
+                code = _resize_code(cx, cy, cw, ch, edge)
+                near = cx < edge * 3 or cx >= cw - edge * 3 or cy < edge * 3 or cy >= ch - edge * 3
+                if not fg_ok:
+                    if near:
+                        note(
+                            "nofore",
+                            f"skip not-foreground fg={fg} fg_pid={_win_pid(fg)} "
+                            f"point=({point.x},{point.y}) {describe_window(hwnd)}",
+                            3.0,
+                        )
+                    was_down = down
+                    time.sleep(0.012)
+                    continue
+                if code:
+                    note(
+                        "begin",
+                        f"begin code={code} at=({cx},{cy}) size={cw}x{ch} edge={edge}",
+                        0.0,
                     )
-                    if code:
-                        _drag_resize(hwnd, point, code, min_width, min_height)
-                        was_down = False
-                        continue
-            except Exception:
-                pass
+                    _drag_resize(hwnd, point, code, min_width, min_height)
+                    note("end", f"end code={code} {describe_window(hwnd)}", 0.0)
+                    was_down = True
+                    continue
+                if near:
+                    note(
+                        "miss",
+                        f"near-edge but code=0 at=({cx},{cy}) size={cw}x{ch} edge={edge} "
+                        f"fg={fg} fg_pid={_win_pid(fg)}",
+                        3.0,
+                    )
+            except Exception as exc:
+                note("error", f"loop error: {type(exc).__name__}: {exc}", 5.0)
         was_down = down
         time.sleep(0.012)
 
 
-def apply(hwnd: int, *, drag_height: int = 14, border: int = 6, min_width: int = 900, min_height: int = 640) -> bool:
+def apply(hwnd: int, *, drag_height: int = 26, border: int = 8, min_width: int = 900, min_height: int = 640, log=None) -> bool:
     """给已创建的窗口加无边框样式 + 拖动/缩放支持。失败返回 False。"""
     if not hwnd:
         return False
     if hwnd in _state:
+        if log is not None:
+            try:
+                log(f"frameless chrome: already applied {describe_window(hwnd)}")
+            except Exception:
+                pass
         return True
+    if log is not None:
+        try:
+            log(f"frameless chrome: applying drag={drag_height} border={border} {describe_window(hwnd)}")
+        except Exception:
+            pass
     style = _user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
     exstyle = _user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
     _user32.SetWindowLongPtrW(
@@ -380,7 +488,7 @@ def apply(hwnd: int, *, drag_height: int = 14, border: int = 6, min_width: int =
     stop = threading.Event()
     watcher = threading.Thread(
         target=_resize_watch_loop,
-        args=(hwnd, edge, stop, min_width, min_height),
+        args=(hwnd, edge, stop, min_width, min_height, log),
         name=f"lobster-resize-{hwnd}",
         daemon=True,
     )

@@ -37,8 +37,13 @@
             if (event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            // Native resize is driven by frameless_chrome.py using the global
-            // mouse state, because WebView2 swallows child hit-test messages.
+            // 正常路径：frameless_chrome.py 的全局鼠标监听直接 SetWindowPos 缩放。
+            // 它没装上（启动慢 / 导入失败）时四边会完全不能拖，这里用原生
+            // WM_NCLBUTTONDOWN 兜底，保证任何机器上都能缩放。
+            if (window.__lobsterChromeApplied === false) {
+              var a = (window.pywebview && window.pywebview.api) || null;
+              try { if (a && typeof a.window_start_resize === 'function') a.window_start_resize(item[0]); } catch (e) {}
+            }
           });
           layer.appendChild(el);
         });
@@ -65,7 +70,7 @@
   <title>__LOBSTER_DOCUMENT_TITLE__</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
-  <link rel="stylesheet" href="/static/css/common.css?v=20261019-header-logo-40-v1">
+  <link rel="stylesheet" href="/static/css/common.css?v=20261110-drag-band-22">
     <link rel="stylesheet" href="/static/css/index.css?v=20261107-demo-preview-2">
   <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20261020-nav-64-centered-v2">
   <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
@@ -73,7 +78,7 @@
 <body>
   <div class="page">
             <header class="header auth-guest pywebview-drag-region" id="appHeader">
-    <div class="window-drag-strip pywebview-drag-region" id="windowDragStrip" hidden aria-hidden="true"></div>
+    <div class="window-drag-strip" id="windowDragStrip" hidden aria-hidden="true"></div>
       <div class="header-left">
         <div class="logo">
           <img class="logo-mark" id="brandLogoMark" src="__LOBSTER_LOGO_MARK__" width="32" height="32" alt="">
@@ -3136,6 +3141,19 @@
     if (a && typeof a.window_close === 'function' && mark === 'bihuo') box.hidden = false;
     var strip = document.getElementById('windowDragStrip');
     if (strip && mark === 'bihuo') strip.hidden = false;
+    if (!a || mark !== 'bihuo') return;
+    // 页面 ready 时窗口 handle 一定已存在：再补一次无边框/边缘缩放安装。
+    // 老逻辑只靠 shown 事件 + 15s 兜底线程，启动慢的机器会整层错过。
+    if (typeof a.window_chrome_apply === 'function') {
+      try {
+        Promise.resolve(a.window_chrome_apply()).then(function (res) {
+          window.__lobsterChromeApplied = !!(res && res.applied && !res.skipped);
+          if (window.__lobsterChromeApplied) {
+            document.documentElement.classList.add('is-frameless-shell');
+          }
+        }).catch(function () { window.__lobsterChromeApplied = false; });
+      } catch (e) { window.__lobsterChromeApplied = false; }
+    }
   }
   window.addEventListener('pywebviewready', show);
   setTimeout(show, 800);
