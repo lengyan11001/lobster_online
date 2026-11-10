@@ -2970,33 +2970,17 @@
     });
   }
 
-  function normalizeHiflyAvatarItem(item) {
-    item = item || {};
-    var avatarId = String(item.avatar || item.hifly_avatar_id || '').trim();
-    var status = String(item.status || '').trim().toLowerCase();
-    return Object.assign({}, item, {
-      id: 'hifly_' + String(item.id || avatarId || ''),
-      provider: 'hifly',
-      avatar: avatarId || ('hifly_' + String(item.id || '')),
-      hifly_avatar_id: avatarId,
-      title: item.title || '海螺数字人',
-      is_mine: true,
-      section_label: '我的数字人 · 海螺',
-      train_ready: status === 'success',
-      status_text: item.status_text || (status === 'success' ? '训练成功' : (status === 'failed' ? '训练失败' : '训练中'))
-    });
-  }
-
   function loadAvatarLibrary(silent) {
     if (!silent) showMessage('正在加载数字人列表...', false);
     state.avatarLibrary.public_loading = false;
+    // 2.0 列表只放闪剪（数字人2.0）自己的形象。海螺形象在「数字人口播」页
+    // 管理：混到这里既不能生成（生成前会提示去数字人口播），删除按钮又打到
+    // 2.0 的 profiles 接口上，必然删不掉，用户只会觉得“删不掉”。
     return Promise.all([
-      requestGet('/api/shanjian-digital-human/profiles').catch(function() { return { items: [] }; }),
-      requestCloudGet('/api/hifly/my/avatar/list?page=1&size=100').catch(function() { return { items: [] }; })
+      requestGet('/api/shanjian-digital-human/profiles').catch(function() { return { items: [] }; })
     ]).then(function(results) {
       var shanjianItems = (results[0] && results[0].items) ? results[0].items : [];
-      var hiflyItems = (results[1] && results[1].items) ? results[1].items : [];
-      var rows = shanjianItems.map(normalizeProfileItem).concat(hiflyItems.map(normalizeHiflyAvatarItem));
+      var rows = shanjianItems.map(normalizeProfileItem);
       state.avatarLibrary = {
         mine: rows,
         public: [],
@@ -4915,7 +4899,7 @@
                   <div class="shanjian-section-head">
                     <div>
                       <h4>我的数字人</h4>
-                      <p>这里优先放你自己创建或克隆出来的数字人。</p>
+                      <p>这里只放数字人2.0（闪剪）自己创建的数字人；海螺数字人请到「数字人口播」页使用和删除。</p>
                     </div>
                     <span class="shanjian-section-count"><span id="shanjianMineCount">0</span> 个</span>
                   </div>
