@@ -1484,8 +1484,31 @@
 .personal-settings-view .ps-multi-select > summary strong { min-width: 0; overflow: hidden; color: #344054; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .personal-settings-view .ps-multi-select > summary i { color: #4383ec; font-style: normal; }
 .personal-settings-view .ps-multi-select[open] > summary { border-color: #9bbcf5; box-shadow: 0 0 0 3px rgba(67,131,236,.1); }
-.personal-settings-view .ps-multi-select-menu { display: grid; gap: 8px; margin-top: 6px; padding: 8px; border: 1px solid #dfe6ef; border-radius: 12px; background: #fff; box-shadow: 0 14px 28px rgba(16,24,40,.12); }
-.personal-settings-view .ps-multi-select-options { display: grid; gap: 5px; max-height: 250px; overflow: auto; }
+/* 2026-11-11：多选下拉原来是文档流里的 <details>，一展开就把它下面的内容
+   整体顶下去，点一次页面跳一次（个人设置反馈）。改成浮层，展开/收起不再
+   改变页面高度。 */
+.personal-settings-view .ps-multi-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  max-height: min(340px, 55vh);
+  overflow: auto;
+  z-index: 40;
+  border: 1px solid #dfe6ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 28px rgba(16,24,40,.12);
+}
+.personal-settings-view .ps-multi-select[open] { z-index: 30; }
+.personal-settings-view .ps-field input,
+.personal-settings-view .ps-field textarea,
+.personal-settings-view .ps-field select { scroll-margin-top: 96px; }
+.personal-settings-view .ps-multi-select-options { display: grid; gap: 5px; max-height: none; overflow: visible; }
 .personal-settings-view .ps-multi-select-option { padding: 8px 9px; border-radius: 9px; background: #f8fafc; }
 .personal-settings-view .ps-multi-select-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-settings-view .ps-multi-select-footer,
