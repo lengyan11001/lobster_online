@@ -2907,7 +2907,7 @@
 
   function runGenerate(btn, endpoint, extraId, count, successTab, opts) {
     setBusy(btn, true, '生成中...');
-    setMsg('正在同步数据并生成，请稍候...');
+    setMsg((opts && opts.syncBefore) ? '正在同步最新数据并生成，请稍候...' : '正在生成，请稍候...');
     generationPayload(extraId, count, opts)
       .then(function(payload) {
         return cloudJson(endpoint, { method: 'POST', body: payload });
