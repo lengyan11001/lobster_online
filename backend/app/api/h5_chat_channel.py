@@ -11452,19 +11452,22 @@ async def _generate_shanjian_workflow_script(
         script_seconds = max(5, min(script_seconds, 600))
         cn_chars = max(20, int(round(script_seconds * 4)))
         cn_low = max(10, int(round(cn_chars * 0.9)))
-        cn_high = max(cn_low + 5, int(round(cn_chars * 1.1)))
+        cn_high = cn_chars
         en_words = max(8, int(round(script_seconds * 2.2)))
         en_low = max(5, int(round(en_words * 0.9)))
-        en_high = max(en_low + 3, int(round(en_words * 1.1)))
+        en_high = en_words
         duration_rule = (
-            f"目标口播时长约 {script_seconds} 秒；中文约 {cn_low} 到 {cn_high} 字且不得超过 {cn_high} 字，"
-            f"英文约 {en_low} 到 {en_high} 词且不得超过 {en_high} 词，其他语种按同等时长控制。"
+            f"【硬性字数限制·最高优先级】目标口播时长 {script_seconds} 秒；"
+            f"中文必须控制在 {cn_low} 到 {cn_high} 字，超过 {cn_high} 字直接视为不合格；"
+            f"英文必须控制在 {en_low} 到 {en_high} 词，超过 {en_high} 词视为不合格；其他语种按同等时长控制。"
+            "写之前先规划要讲几个点，写完后逐条数字数（含标点），超了就删减到范围内再输出；宁可少写，也不要超一个字。"
         )
-        max_units = en_high if str(language or "").lower().startswith("en") else cn_high
         logger.info("[H5-WORKFLOW] 口播文案按预估时长生成 seconds=%s chars=%s-%s", script_seconds, cn_low, cn_high)
     else:
-        duration_rule = "目标口播时长 20 到 25 秒；中文控制在 90 到 120 字且不得超过 120 字，英文控制在 45 到 60 词且不得超过 60 词，其他语种按同等时长控制。"
-        max_units = 60 if str(language or "").lower().startswith("en") else 120
+        duration_rule = (
+            "【硬性字数限制·最高优先级】目标口播时长 20 到 25 秒；中文必须控制在 90 到 120 字，"
+            "英文必须控制在 45 到 60 词；超过上限直接视为不合格，写完后逐条数字数再输出。"
+        )
     persona_json = json.dumps(requirements, ensure_ascii=False, separators=(",", ":"))
     extra_requirements = "\n".join(
         [
@@ -11528,17 +11531,6 @@ async def _generate_shanjian_workflow_script(
             break
     if not script:
         raise RuntimeError("日更未返回有效的" + oral["label"] + "，数字人任务未继续执行")
-    before_units = _script_unit_count(script, language)
-    script = _trim_script_to_budget(script, language=language, max_units=max_units)
-    after_units = _script_unit_count(script, language)
-    if after_units < before_units:
-        logger.info(
-            "[H5-WORKFLOW] 口播文案超出预估时长已截断 units=%s->%s max=%s seconds=%s",
-            before_units,
-            after_units,
-            max_units,
-            script_seconds,
-        )
     await _workflow_event(cloud, base, headers, run_id, oral["done_event"])
     return {
         "title": _workflow_text(selected.get("title") or title or "数字人口播", 80),
@@ -11551,47 +11543,6 @@ async def _generate_shanjian_workflow_script(
         "ip_daily_task": oral["task"],
         "oral_source": oral_source,
     }
-
-
-def _script_unit_count(text: str, language: str) -> int:
-    raw = str(text or "")
-    if str(language or "").lower().startswith("en"):
-        return len(raw.split())
-    return len("".join(raw.split()))
-
-
-def _trim_script_to_budget(text: str, *, language: str, max_units: int) -> str:
-    """把 AI 生成的口播文案压到预估时长对应的字数内。
-
-    提示词里写「不得超过」模型经常不听（线上 124~144 字、甚至 1000+ 字），
-    这里在句末/停顿标点处截断，保证成片时长和用户填的预估一致。
-    """
-    raw = str(text or "").strip()
-    if not raw or max_units <= 0:
-        return raw
-    is_en = str(language or "").lower().startswith("en")
-    if is_en:
-        words = raw.split()
-        if len(words) <= max_units:
-            return raw
-        head = " ".join(words[:max_units])
-    else:
-        if len("".join(raw.split())) <= max_units:
-            return raw
-        units = 0
-        cut = len(raw)
-        for idx, ch in enumerate(raw):
-            if not ch.isspace():
-                units += 1
-            if units >= max_units:
-                cut = idx + 1
-                break
-        head = raw[:cut]
-    for mark in ("。", "！", "？", "；", ".", "!", "?", ";", "，", ","):
-        pos = head.rfind(mark)
-        if pos >= max(8, int(len(head) * 0.55)):
-            return head[: pos + 1].strip()
-    return head.strip()
 
 
 def _normalize_virtualman_candidates(value: Any) -> List[Dict[str, Any]]:
