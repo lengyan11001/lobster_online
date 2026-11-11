@@ -1606,34 +1606,25 @@ def _notice_button_is_submit(text: str) -> bool:
 
 
 async def _apply_video_label(page: Any, text: str) -> bool:
-    """在发表动态页选中「视频标注」（wujie shadow DOM 内）。"""
+    """在发表动态页选中「视频标注」。
+
+    实测（2026-11-11）：wujie shadow DOM 里的选项用 JS el.click() 不会生效，
+    必须走真实鼠标点击（Playwright 的 click 会派发真实事件）。
+    """
     label = str(text or "").strip()
     if not label:
         return True
     try:
-        return bool(await page.evaluate(r"""async (text) => {
-          const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
-          const find = (root, pred, d) => {
-            if (!root || d > 8) return null;
-            for (const el of root.querySelectorAll('*')) {
-              if (pred(el)) return el;
-              if (el.shadowRoot) { const hit = find(el.shadowRoot, pred, d + 1); if (hit) return hit; }
-            }
-            return null;
-          };
-          let sel = find(document, el => norm(el.innerText) === '选择视频标注', 0)
-                 || find(document, el => norm(el.innerText).indexOf('选择视频标注') === 0, 0);
-          if (!sel) return false;
-          sel.scrollIntoView({ block: 'center' });
-          sel.click();
-          await new Promise(r => setTimeout(r, 900));
-          const opt = find(document, el => norm(el.innerText) === text, 0);
-          if (!opt) return false;
-          opt.click();
-          await new Promise(r => setTimeout(r, 500));
-          return true;
-        }""", label))
-    except Exception:
+        trigger = page.get_by_text("选择视频标注", exact=True).first
+        await trigger.scroll_into_view_if_needed(timeout=6000)
+        await trigger.click(timeout=10000)
+        await asyncio.sleep(1.0)
+        option = page.get_by_text(label, exact=True).first
+        await option.click(timeout=10000)
+        await asyncio.sleep(0.6)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[WECHAT-CHANNELS] 视频标注点击失败 %s: %s", label, str(exc)[:160])
         return False
 
 
