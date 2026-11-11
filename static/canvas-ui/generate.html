@@ -365,15 +365,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     ["image", "video", "audio"].forEach(function (t) { state.refs[t] = state.refs[t].filter(function (r) { return r.key !== key; }); });
     renderRefs("image"); renderRefs("video");
   });
-  function authHeaders() {
+  function lobsterBrandMark() {
     try {
-      var t = localStorage.getItem("token") || "";
+      var m = String(window.__LOBSTER_BRAND_MARK || localStorage.getItem("lobster_active_brand_mark") || "bihuo").trim().toLowerCase();
+      return /^[a-z][a-z0-9_-]{0,62}$/.test(m) ? m : "bihuo";
+    } catch (e) { return "bihuo"; }
+  }
+  function lobsterAuthToken() {
+    try {
+      var m = lobsterBrandMark();
+      var t = localStorage.getItem("token:" + m) || "";
+      if (!t && m === "bihuo") t = localStorage.getItem("token") || "";
       if (!t) {
         var raw = localStorage.getItem("user_info") || "{}";
-        try { t = JSON.parse(raw).token || ""; } catch (e) {}
+        try { t = JSON.parse(raw).token || ""; } catch (e2) {}
       }
-      return t ? { Authorization: "Bearer " + t } : {};
-    } catch (e) { return {}; }
+      return t || "";
+    } catch (e) { return ""; }
+  }
+  function authHeaders() {
+    var t = lobsterAuthToken();
+    var h = {};
+    if (t) h.Authorization = "Bearer " + t;
+    h["X-Lobster-Brand"] = lobsterBrandMark();
+    return h;
   }
   function upload(file, type, mode) {
     var fd = new FormData(); fd.append("file", file);

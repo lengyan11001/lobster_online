@@ -382,7 +382,25 @@
 
 <script>
 (function () {
-  function token() { try { return localStorage.getItem('token') || ''; } catch (e) { return ''; } }
+  function lobsterBrandMark() {
+    try {
+      var m = String(window.__LOBSTER_BRAND_MARK || localStorage.getItem("lobster_active_brand_mark") || "bihuo").trim().toLowerCase();
+      return /^[a-z][a-z0-9_-]{0,62}$/.test(m) ? m : "bihuo";
+    } catch (e) { return "bihuo"; }
+  }
+  function lobsterAuthToken() {
+    try {
+      var m = lobsterBrandMark();
+      var t = localStorage.getItem("token:" + m) || "";
+      if (!t && m === "bihuo") t = localStorage.getItem("token") || "";
+      if (!t) {
+        var raw = localStorage.getItem("user_info") || "{}";
+        try { t = JSON.parse(raw).token || ""; } catch (e2) {}
+      }
+      return t || "";
+    } catch (e) { return ""; }
+  }
+  function token() { return lobsterAuthToken(); }
   async function api(path, options) {
     var opts = options || {};
     var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
