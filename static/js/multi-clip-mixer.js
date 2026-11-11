@@ -2255,6 +2255,7 @@
       return post('/api/shanjian-smart-clip/submit', {
       title: title,
       scene: currentMixerTemplateScene(),
+      video_url: videoUrl,
       style_id: state.selectedTemplate.id,
       materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: keepAudio }],
       material_sound_switch: keepAudio,
