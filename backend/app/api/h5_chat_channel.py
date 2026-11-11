@@ -11438,12 +11438,37 @@ async def _generate_shanjian_workflow_script(
     if missing:
         raise RuntimeError("数字人生成缺少：" + "、".join(missing) + "。请先到 IP人设定位 补足后再启动工作流。")
 
+    script_seconds = 0
+    for key in ("digital_human_script_seconds", "script_seconds", "voiceover_seconds"):
+        try:
+            script_seconds = int(float(source.get(key) or 0))
+        except (TypeError, ValueError):
+            script_seconds = 0
+        if script_seconds:
+            break
+    if not script_seconds:
+        script_seconds = await _fetch_personal_digital_human_script_seconds(cloud, base, headers)
+    if script_seconds:
+        script_seconds = max(5, min(script_seconds, 600))
+        cn_chars = max(20, int(round(script_seconds * 4)))
+        cn_low = max(10, int(round(cn_chars * 0.9)))
+        cn_high = max(cn_low + 5, int(round(cn_chars * 1.1)))
+        en_words = max(8, int(round(script_seconds * 2.2)))
+        en_low = max(5, int(round(en_words * 0.9)))
+        en_high = max(en_low + 3, int(round(en_words * 1.1)))
+        duration_rule = (
+            f"目标口播时长约 {script_seconds} 秒；中文约 {cn_low} 到 {cn_high} 字且不得超过 {cn_high} 字，"
+            f"英文约 {en_low} 到 {en_high} 词且不得超过 {en_high} 词，其他语种按同等时长控制。"
+        )
+        logger.info("[H5-WORKFLOW] 口播文案按预估时长生成 seconds=%s chars=%s-%s", script_seconds, cn_low, cn_high)
+    else:
+        duration_rule = "目标口播时长 20 到 25 秒；中文控制在 90 到 120 字且不得超过 120 字，英文控制在 45 到 60 词且不得超过 60 词，其他语种按同等时长控制。"
     persona_json = json.dumps(requirements, ensure_ascii=False, separators=(",", ":"))
     extra_requirements = "\n".join(
         [
             f"本次只生成 1 条{oral['label']}，并直接作为数字人视频的完整口播脚本。",
             f"输出语种必须是：{_workflow_language_label(language)}。",
-            "目标口播时长 20 到 25 秒；中文控制在 90 到 120 字且不得超过 120 字，英文控制在 45 到 60 词且不得超过 60 词，其他语种按同等时长控制。",
+            duration_rule,
             "文案必须自然、完整、可直接口播，不写镜头指令、括号说明或虚构数据，不要为了凑长度重复表达。",
             f"IP人设资料：{persona_json[:2200]}",
         ]
@@ -11963,6 +11988,82 @@ async def _fetch_active_personal_template_groups(
         best.get("groups"),
     )
     return list(best.get("groups") or [])
+
+async def _fetch_personal_digital_human_script_seconds(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+) -> int:
+    """读 IP 设置里「口播预估时长」配置（meta.digital_human_script_seconds）。
+
+    优先个人默认模板行；没有就按 current_template_id 找真正带 meta 的那一行。
+    返回 0 表示没配置，调用方沿用旧的 20~25 秒口径。
+    """
+    if cloud is None or not base:
+        return 0
+    timeout = httpx.Timeout(20.0, connect=8.0, read=20.0, write=10.0, pool=10.0)
+
+    def _payload_item(payload: Any) -> Dict[str, Any]:
+        if isinstance(payload, dict) and isinstance(payload.get("item"), dict):
+            return payload.get("item") or {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _seconds_of(item: Any) -> int:
+        if not isinstance(item, dict):
+            return 0
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        try:
+            seconds = int(float(meta.get("digital_human_script_seconds") or 0))
+        except (TypeError, ValueError):
+            seconds = 0
+        if 5 <= seconds <= 600:
+            return seconds
+        return 0
+
+    def _current_template_id(item: Any) -> int:
+        if not isinstance(item, dict):
+            return 0
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        try:
+            return int(meta.get("current_template_id") or meta.get("template_id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    personal: Dict[str, Any] = {}
+    try:
+        resp = await cloud.get(f"{base}/api/ip-content/personal-default", headers=headers, timeout=timeout)
+        personal = _payload_item(resp.json() if resp.content else {})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[H5-WORKFLOW] read personal default script seconds failed err=%s",
+            f"{type(exc).__name__}: {exc}"[:200],
+        )
+        return 0
+    seconds = _seconds_of(personal)
+    if seconds:
+        return seconds
+    current_id = _current_template_id(personal)
+    if not current_id:
+        return 0
+    try:
+        resp = await cloud.get(f"{base}/api/ip-content/schedule-templates", headers=headers, timeout=timeout)
+        listed = resp.json() if resp.content else {}
+    except Exception:
+        return 0
+    items = listed.get("items") if isinstance(listed, dict) else None
+    if not isinstance(items, list):
+        return 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            item_id = int(item.get("id") or 0)
+        except (TypeError, ValueError):
+            item_id = 0
+        if item_id == current_id:
+            return _seconds_of(item)
+    return 0
+
 
 async def _prepare_shanjian_template_materials(
     source: Dict[str, Any],

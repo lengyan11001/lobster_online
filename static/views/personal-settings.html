@@ -848,6 +848,11 @@
             <div class="ps-resource-heading-actions"><span>已选 <b id="psDigitalHumanAvatarCount">0</b></span><button type="button" id="psDigitalHumanAvatarChooseBtn" class="btn btn-ghost btn-sm">选择</button></div>
           </div>
           <div id="psDigitalHumanAvatarList" class="ps-list ps-resource-summary-list"></div>
+          <div class="ps-field ps-dh-duration-field">
+            <label for="psDigitalHumanScriptSeconds">口播预估时长（秒）</label>
+            <input id="psDigitalHumanScriptSeconds" type="number" min="5" max="600" step="5" inputmode="numeric" placeholder="25">
+            <small style="color:#98a2b2;font-size:12px;line-height:1.5;">工作流生成数字人口播文案时按这个时长控制字数（约 4 字/秒）；留空按 25 秒。</small>
+          </div>
           <div class="ps-resource-heading">
             <div class="ps-card-title">关联声音</div>
             <div class="ps-resource-heading-actions"><span>已选 <b id="psDigitalHumanVoiceCount">0</b></span><button type="button" id="psDigitalHumanVoiceChooseBtn" class="btn btn-ghost btn-sm">选择</button></div>

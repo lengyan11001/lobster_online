@@ -47,6 +47,7 @@
     personalDigitalHumanTemplatePage: 1,
     personalDigitalHumanTemplateDraft: null,
     personalSelectedDigitalHumanTemplate: null,
+    personalDigitalHumanScriptSeconds: 25,
     personalDigitalHumanResources: { avatars: [], voices: [] },
     personalDigitalHumanAvatarOptions: [],
     personalDigitalHumanVoiceOptions: [],
@@ -1566,6 +1567,17 @@
     return String((item && (item.name || item.style_id)) || '').trim() || '未选择';
   }
 
+  function normalizePersonalScriptSeconds(value) {
+    var n = Number(value);
+    if (!isFinite(n) || n <= 0) return 25;
+    return Math.max(5, Math.min(Math.round(n), 600));
+  }
+
+  function readPersonalScriptSecondsInput() {
+    var el = $('psDigitalHumanScriptSeconds');
+    return normalizePersonalScriptSeconds(el ? el.value : state.personalDigitalHumanScriptSeconds);
+  }
+
   function renderPersonalDigitalHumanTemplateSummary() {
     var box = $('psDigitalHumanTemplateSummary');
     if (!box) return;
@@ -2486,6 +2498,8 @@
     mergeTemplateResourcesIntoState(state.defaultItem);
     setPersonalTemplateLanguage(templateLanguageFromParts(state.defaultItem.requirements, state.defaultItem.meta, state.personalTemplateLanguage));
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((state.defaultItem.meta || {}).digital_human_template);
+    state.personalDigitalHumanScriptSeconds = normalizePersonalScriptSeconds((state.defaultItem.meta || {}).digital_human_script_seconds);
+    if ($('psDigitalHumanScriptSeconds')) $('psDigitalHumanScriptSeconds').value = String(state.personalDigitalHumanScriptSeconds);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((state.defaultItem.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     state.selectedKeywords = {};
@@ -2718,6 +2732,8 @@
       var digitalHumanTemplate = state.personalDigitalHumanTemplateExplicitlyCleared
         ? null
         : clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate);
+      var scriptSeconds = readPersonalScriptSecondsInput();
+      state.personalDigitalHumanScriptSeconds = scriptSeconds;
       var body = {
         name: name,
         keyword_ids: cleanExistingIntIds(cleanIntIds(state.selectedKeywords), state.keywords),
@@ -2732,7 +2748,7 @@
         requirements: templateRequirementsWithLanguage({}, language),
         meta: (function() {
           var currentMeta = state.defaultItem && state.defaultItem.meta && typeof state.defaultItem.meta === 'object' ? state.defaultItem.meta : {};
-          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_template_configured: true, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources), digital_human_resources_configured: true, digital_human_asset_groups: currentPersonalDigitalHumanAssetGroups() };
+          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_template_configured: true, digital_human_script_seconds: scriptSeconds, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources), digital_human_resources_configured: true, digital_human_asset_groups: currentPersonalDigitalHumanAssetGroups() };
           if (currentMeta.current_template_id) meta.current_template_id = currentMeta.current_template_id;
           return meta;
         })()
@@ -2846,6 +2862,8 @@
     mergeTemplateResourcesIntoState(row);
     state.editingTemplateId = editing && row.id ? String(row.id) : '';
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+    state.personalDigitalHumanScriptSeconds = normalizePersonalScriptSeconds((row.meta || {}).digital_human_script_seconds);
+    if ($('psDigitalHumanScriptSeconds')) $('psDigitalHumanScriptSeconds').value = String(state.personalDigitalHumanScriptSeconds);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((row.meta || {}).digital_human_asset_groups);
@@ -2874,6 +2892,8 @@
     state.selectedCompetitors = {};
     state.selectedMemories = {};
     state.personalSelectedDigitalHumanTemplate = clonePersonalDigitalHumanTemplate((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_template);
+    state.personalDigitalHumanScriptSeconds = normalizePersonalScriptSeconds((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_script_seconds);
+    if ($('psDigitalHumanScriptSeconds')) $('psDigitalHumanScriptSeconds').value = String(state.personalDigitalHumanScriptSeconds);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_resources);
     state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_asset_groups);
     renderPersonalDigitalHumanAssetGroups();
