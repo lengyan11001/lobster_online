@@ -11493,6 +11493,9 @@ async def _generate_shanjian_workflow_script(
                     "memory_docs": memory_docs,
                     "extra_requirements": extra_requirements,
                     "count": 1,
+                    # 云端口播 prompt 默认「不限字数」，这里显式把预估时长传过去，
+                    # 让服务端把长度规则写进系统提示（比只写在 extra_requirements 里硬）。
+                    "target_seconds": script_seconds or 0,
                     "sync_before": bool(source.get(oral["sync_flag"], False)),
                     "group_id": run_id,
                 },
