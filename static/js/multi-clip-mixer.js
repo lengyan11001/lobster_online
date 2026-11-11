@@ -159,7 +159,7 @@
     var select = $('mcmClipModeSelect');
     var mode = select ? String(select.value || '') : '';
     if (mode === 'fixed' || mode === 'random' || mode === 'cut_only' || mode === 'single' || mode === 'original') return mode;
-    return 'original';
+    return 'fixed';
   }
 
   function isRandomLikeMode() {
