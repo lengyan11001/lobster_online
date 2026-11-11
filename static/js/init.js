@@ -2848,8 +2848,15 @@ function loadSutuiBalance() {
     }
     fetch(API_BASE + '/auth/me', { headers: authHeaders() })
       .then(function(r) { return r.json(); })
-      .then(function(d) { textEl.textContent = '算力：' + (d && d.credits != null ? d.credits : '--'); })
-      .catch(function() { textEl.textContent = '算力：--'; });
+      .then(function(d) {
+        textEl.textContent = '算力：' + (d && d.credits != null ? d.credits : '--');
+        if (d && d.credits != null) window._lobsterMe = Object.assign({}, window._lobsterMe || {}, { credits: d.credits });
+        if (typeof _balanceRefreshTune === 'function') _balanceRefreshTune(true);
+      })
+      .catch(function() {
+        textEl.textContent = '算力：--';
+        if (typeof _balanceRefreshTune === 'function') _balanceRefreshTune(false);
+      });
     return;
   }
   textEl.textContent = '余额：加载中…';
@@ -2867,8 +2874,67 @@ function loadSutuiBalance() {
       }
       var yuan = (d.balance_yuan != null) ? String(d.balance_yuan) : (d.balance != null ? (d.balance / 1000).toFixed(2) : '--');
       textEl.textContent = '余额：' + yuan + ' 元';
+      if (typeof _balanceRefreshTune === 'function') _balanceRefreshTune(true);
     })
-    .catch(function() { textEl.textContent = '余额：--'; });
+    .catch(function() {
+      textEl.textContent = '余额：--';
+      if (typeof _balanceRefreshTune === 'function') _balanceRefreshTune(false);
+    });
+}
+
+/* 首页算力余额刷新策略（2026-11-11）
+   目标：余额别一直是旧的，又不能给服务器压力。
+   - 页面可见时每 60 秒刷一次，带 0~8 秒随机抖动，避免同一时刻一起打
+   - 切回页面（visibility/focus）立刻刷一次，15 秒内不重复
+   - 连续失败自动退避：60s -> 120s -> 240s -> 最多 300s，成功立刻恢复 60s
+   - 页面隐藏时完全停止轮询
+*/
+var _balanceRefreshTimer = null;
+var _balanceRefreshInterval = 60000;
+var _balanceRefreshLastAt = 0;
+var _balanceRefreshFails = 0;
+
+function _balanceRefreshTune(ok) {
+  if (ok) {
+    _balanceRefreshFails = 0;
+    _balanceRefreshInterval = 60000;
+    return;
+  }
+  _balanceRefreshFails += 1;
+  _balanceRefreshInterval = Math.min(300000, 60000 * Math.pow(2, Math.min(_balanceRefreshFails, 3)));
+}
+
+function _balanceRefreshSchedule(delay) {
+  if (_balanceRefreshTimer) clearTimeout(_balanceRefreshTimer);
+  if (typeof document !== 'undefined' && document.hidden) return;
+  var wait = (delay == null ? _balanceRefreshInterval : delay) + Math.floor(Math.random() * 8000);
+  _balanceRefreshTimer = setTimeout(function() {
+    _balanceRefreshTimer = null;
+    try { loadSutuiBalance(); } catch (e) {}
+    _balanceRefreshSchedule();
+  }, wait);
+}
+
+function refreshHeaderBalance(force) {
+  var now = Date.now();
+  if (!force && now - _balanceRefreshLastAt < 15000) return;
+  _balanceRefreshLastAt = now;
+  try { loadSutuiBalance(); } catch (e) {}
+  _balanceRefreshSchedule();
+}
+
+window.refreshHeaderBalance = refreshHeaderBalance;
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      if (_balanceRefreshTimer) { clearTimeout(_balanceRefreshTimer); _balanceRefreshTimer = null; }
+      return;
+    }
+    refreshHeaderBalance(true);
+  });
+  window.addEventListener('focus', function() { refreshHeaderBalance(false); });
+  _balanceRefreshSchedule();
 }
 
 function _creditLocalApiBase() {
