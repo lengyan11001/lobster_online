@@ -11,7 +11,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
 .main-title{font-weight:500!important;letter-spacing:-0.02em}
 .no-scrollbar::-webkit-scrollbar{display:none}.no-scrollbar{scrollbar-width:none}
 .ref-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;font-size:11px;color:#6b7280}
-.ref-chip img{width:32px;height:32px;object-fit:cover;border-radius:6px}
+.ref-chip img{width:48px;height:32px;object-fit:cover;border-radius:6px;background:#f3f4f6}
 .hist-actions button{border:1px solid #bfdbfe;color:#2563eb;background:#fff;border-radius:8px;font-size:11px;padding:6px 12px;display:inline-flex;align-items:center;gap:4px}
 .hist-actions button:hover{background:#2563eb;color:#fff}
 </style>
@@ -351,7 +351,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     var host = el(mode + "-refs");
     var all = state.refs.image.concat(state.refs.video, state.refs.audio).filter(function (r) { return r.mode === mode; });
     host.innerHTML = all.map(function (r) {
-      var thumb = r.type === "image" ? '<img src="' + r.url + '">' : '<i class="fa-solid fa-' + (r.type === "video" ? "video" : "music") + ' text-gray-400"></i>';
+      var thumb;
+      if (r.type === "image") thumb = '<img src="' + r.url + '" alt="">';
+      else if (r.thumb) thumb = '<img src="' + r.thumb + '" alt="">';
+      else thumb = '<i class="fa-solid fa-' + (r.type === "video" ? "video" : "music") + ' text-gray-400"></i>';
       return '<span class="ref-chip">' + thumb + '<a href="#" data-remove="' + r.key + '" class="text-gray-400 hover:text-red-500">×</a></span>';
     }).join("");
     var c = el(mode + "-ref-count");
@@ -390,6 +393,42 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     h["X-Lobster-Brand"] = lobsterBrandMark();
     return h;
   }
+  // 本机直接从选中的文件抽一帧当缩略图：不依赖素材公网地址、不受跨域/登录态影响
+  function videoThumb(file) {
+    return new Promise(function (resolve) {
+      var objectUrl = "";
+      var settled = false;
+      function done(val) {
+        if (settled) return;
+        settled = true;
+        try { if (objectUrl) URL.revokeObjectURL(objectUrl); } catch (e) {}
+        resolve(val || "");
+      }
+      try {
+        objectUrl = URL.createObjectURL(file);
+        var v = document.createElement("video");
+        v.preload = "metadata";
+        v.muted = true;
+        v.playsInline = true;
+        v.src = objectUrl;
+        v.addEventListener("loadeddata", function () {
+          try { v.currentTime = 0.1; } catch (e) { done(""); }
+        });
+        v.addEventListener("seeked", function () {
+          try {
+            var w = 96;
+            var h = Math.max(1, Math.round(w * (v.videoHeight || 9) / (v.videoWidth || 16)));
+            var c = document.createElement("canvas");
+            c.width = w; c.height = h;
+            c.getContext("2d").drawImage(v, 0, 0, w, h);
+            done(c.toDataURL("image/jpeg", 0.72));
+          } catch (e) { done(""); }
+        });
+        v.addEventListener("error", function () { done(""); });
+        setTimeout(function () { done(""); }, 5000);
+      } catch (e) { done(""); }
+    });
+  }
   function upload(file, type, mode) {
     var fd = new FormData(); fd.append("file", file);
     return fetch("/api/assets/upload", { method: "POST", body: fd, headers: authHeaders(), credentials: "same-origin" })
@@ -413,8 +452,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
           : Promise.resolve();
         return ensure.then(function () {
           if (!url) throw new Error("上传接口未返回可用地址");
-          state.refs[type].push({ key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, source_url: url, asset_id: a.asset_id || "", type: type, mode: mode });
+          var ref = { key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, source_url: url, asset_id: a.asset_id || "", type: type, mode: mode };
+          state.refs[type].push(ref);
           renderRefs(mode);
+          if (type === "video") {
+            videoThumb(file).then(function (dataUrl) {
+              if (!dataUrl) return;
+              ref.thumb = dataUrl;
+              renderRefs(mode);
+            });
+          }
         });
       })
       .catch(function (e) { alert("上传失败：" + e.message); });
