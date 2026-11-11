@@ -272,17 +272,8 @@
     return Math.max(0.5, Math.min(value, 600));
   }
 
-  function singleTargetSeconds() {
-    var value = Number((($('mcmSingleTargetDuration') || {}).value || 0));
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  }
-
   function singleSegmentCount() {
-    var seconds = singleSegmentSeconds();
-    var target = singleTargetSeconds();
-    var count;
-    if (target > 0) count = Math.round(target / seconds);
-    else count = parseInt((($('mcmSingleSegmentCount') || {}).value || 5), 10);
+    var count = parseInt((($('mcmSingleSegmentCount') || {}).value || 5), 10);
     if (!Number.isFinite(count) || count < 1) count = 1;
     return Math.min(count, 20);
   }
