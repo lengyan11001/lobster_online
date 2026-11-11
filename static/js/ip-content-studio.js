@@ -536,6 +536,13 @@
       });
   }
 
+  function readOralTargetChars() {
+    var el = $('ipOralTargetChars');
+    var n = parseInt((el && el.value) || '', 10);
+    if (!isFinite(n) || n <= 0) return 0;
+    return Math.min(n, 3000);
+  }
+
   function generationSettingSnapshot() {
     var language = currentTemplateLanguage();
     return {
@@ -545,6 +552,7 @@
       language: language,
       target_language: ipTemplateLanguageLabel(language),
       task1_extra: (($('ipTask1Extra') && $('ipTask1Extra').value) || '').trim(),
+      oral_target_chars: readOralTargetChars(),
       task2_extra: (($('ipTask2Extra') && $('ipTask2Extra').value) || '').trim(),
       image_extra: (($('ipImageExtra') && $('ipImageExtra').value) || '').trim()
     };
@@ -942,6 +950,7 @@
       if (id) state.selectedDocs[String(id)] = true;
     });
     if ($('ipTask1Extra') && typeof saved.task1_extra === 'string') $('ipTask1Extra').value = saved.task1_extra;
+    if ($('ipOralTargetChars') && saved.oral_target_chars) $('ipOralTargetChars').value = String(saved.oral_target_chars);
     if ($('ipTask2Extra') && typeof saved.task2_extra === 'string') $('ipTask2Extra').value = saved.task2_extra;
     if ($('ipImageExtra') && typeof saved.image_extra === 'string') $('ipImageExtra').value = saved.image_extra;
     state.templateKeywordIds = cleanTemplateIds(saved.keyword_ids, false);
@@ -2666,6 +2675,7 @@
             common: ipTemplateLanguageInstruction(language)
           },
           extra_requirements: textWithTemplateLanguage(((extraNode && extraNode.value) || '').trim(), language),
+          target_chars: readOralTargetChars(),
           count: count || 5,
           sync_before: false
         };
