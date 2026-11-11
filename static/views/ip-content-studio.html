@@ -1013,7 +1013,7 @@
 
     <style>
       .ip-oral-target-chars { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: #475467; }
-      .ip-oral-target-chars input { width: 84px; height: 32px; padding: 0 0.5rem; border: 1px solid #d0d5dd; border-radius: 8px; font-size: 0.82rem; }
+      .ip-oral-target-chars input { width: 88px; height: 32px; padding: 0 0.5rem; border: 1px solid #d0d5dd; border-radius: 8px; font-size: 0.82rem; }
     </style>
     <header class="ip-content-head">
       <div>
@@ -1022,9 +1022,9 @@
         <div class="ip-content-subtitle">关键词榜单、同行作品、记忆文件、文案生成记录</div>
       </div>
       <div class="ip-content-actions">
-        <label class="ip-oral-target-chars" title="每条口播文案的目标字数；留空表示不限制">
-          <span>字数</span>
-          <input id="ipOralTargetChars" type="number" min="0" max="3000" step="10" inputmode="numeric" placeholder="不限">
+        <label class="ip-oral-target-chars" title="每条口播文案的预估时长（秒），系统按约 4 字/秒换算字数；留空表示不限制">
+          <span>时长(秒)</span>
+          <input id="ipOralTargetSeconds" type="number" min="0" max="600" step="5" inputmode="numeric" placeholder="不限">
         </label>
         <button type="button" id="ipGenerateIndustryBtn" class="btn btn-primary btn-sm">行业热门口播</button>
         <button type="button" id="ipGenerateIpBtn" class="btn btn-primary btn-sm">专业 IP 口播</button>
