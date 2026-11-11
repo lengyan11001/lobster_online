@@ -10,8 +10,12 @@
 body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;background:#f8fafc;color:#475569;font-weight:400}
 .main-title{font-weight:500!important;letter-spacing:-0.02em}
 .no-scrollbar::-webkit-scrollbar{display:none}.no-scrollbar{scrollbar-width:none}
-.ref-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;font-size:11px;color:#6b7280}
-.ref-chip img{width:48px;height:32px;object-fit:cover;border-radius:6px;background:#f3f4f6}
+.ref-chip{display:inline-flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;font-size:11px;color:#6b7280;max-width:230px}
+.ref-chip .ref-thumb{position:relative;flex:0 0 auto;width:72px;height:48px;border-radius:8px;overflow:hidden;background:#f3f4f6;display:flex;align-items:center;justify-content:center}
+.ref-chip .ref-thumb img,.ref-chip .ref-thumb video{width:100%;height:100%;object-fit:cover;display:block}
+.ref-chip .ref-thumb .ref-badge{position:absolute;left:3px;bottom:3px;background:rgba(17,24,39,.62);color:#fff;font-size:9px;line-height:1;padding:2px 3px;border-radius:4px}
+.ref-chip .ref-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ref-chip .ref-remove{text-decoration:none}
 .hist-actions button{border:1px solid #bfdbfe;color:#2563eb;background:#fff;border-radius:8px;font-size:11px;padding:6px 12px;display:inline-flex;align-items:center;gap:4px}
 .hist-actions button:hover{background:#2563eb;color:#fff}
 </style>
@@ -347,25 +351,49 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     return params;
   }
 
+  function refAttr(v) {
+    return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function refThumbHtml(r) {
+    var badge = r.type === "video" ? '<span class="ref-badge">视频</span>' : "";
+    var preview = r.thumb || r.preview || "";
+    if (preview && (r.type === "image" || r.thumb)) {
+      return '<span class="ref-thumb"><img src="' + refAttr(preview) + '" alt="">' + badge + '</span>';
+    }
+    if (r.type === "video" && (r.preview || r.url)) {
+      return '<span class="ref-thumb"><video src="' + refAttr(r.preview || r.url) + '#t=0.1" muted playsinline preload="metadata"></video>' + badge + '</span>';
+    }
+    return '<span class="ref-thumb"><i class="fa-solid fa-' + (r.type === "video" ? "video" : "music") + ' text-gray-400"></i>' + badge + '</span>';
+  }
   function renderRefs(mode) {
     var host = el(mode + "-refs");
     var all = state.refs.image.concat(state.refs.video, state.refs.audio).filter(function (r) { return r.mode === mode; });
     host.innerHTML = all.map(function (r) {
-      var thumb;
-      if (r.type === "image") thumb = '<img src="' + r.url + '" alt="">';
-      else if (r.thumb) thumb = '<img src="' + r.thumb + '" alt="">';
-      else thumb = '<i class="fa-solid fa-' + (r.type === "video" ? "video" : "music") + ' text-gray-400"></i>';
-      return '<span class="ref-chip">' + thumb + '<a href="#" data-remove="' + r.key + '" class="text-gray-400 hover:text-red-500">×</a></span>';
+      var label = r.name || (r.uploading ? "上传中…" : "");
+      return '<span class="ref-chip">' + refThumbHtml(r) +
+        '<span class="ref-name" title="' + refAttr(r.name || "") + '">' + refAttr(label) + '</span>' +
+        '<a href="#" data-remove="' + r.key + '" class="ref-remove text-gray-400 hover:text-red-500">×</a></span>';
     }).join("");
     var c = el(mode + "-ref-count");
     if (c) c.textContent = all.length + " 项";
+  }
+  function releaseRefPreview(ref) {
+    if (ref && ref.preview && String(ref.preview).indexOf("blob:") === 0) {
+      try { URL.revokeObjectURL(ref.preview); } catch (e2) {}
+    }
   }
   document.addEventListener("click", function (e) {
     var a = e.target.closest && e.target.closest("[data-remove]");
     if (!a) return;
     e.preventDefault();
     var key = a.getAttribute("data-remove");
-    ["image", "video", "audio"].forEach(function (t) { state.refs[t] = state.refs[t].filter(function (r) { return r.key !== key; }); });
+    ["image", "video", "audio"].forEach(function (t) {
+      state.refs[t] = state.refs[t].filter(function (r) {
+        if (r.key !== key) return true;
+        releaseRefPreview(r);
+        return false;
+      });
+    });
     renderRefs("image"); renderRefs("video");
   });
   function lobsterBrandMark() {
@@ -430,6 +458,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     });
   }
   function upload(file, type, mode) {
+    var ref = {
+      key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+      url: "", source_url: "", asset_id: "", type: type, mode: mode,
+      name: (file && file.name) || "", thumb: "", preview: "", uploading: true
+    };
+    if (type === "image" || type === "video") {
+      try { ref.preview = URL.createObjectURL(file); } catch (e0) { ref.preview = ""; }
+    }
+    if (type === "image") ref.thumb = ref.preview;
+    // 先出缩略图再上传，避免只显示一个看不清的 icon
+    state.refs[type].push(ref);
+    renderRefs(mode);
+    if (type === "video" && typeof videoThumb === "function") {
+      videoThumb(file).then(function (dataUrl) {
+        if (!dataUrl) return;
+        ref.thumb = dataUrl;
+        renderRefs(mode);
+      });
+    }
+    function dropRef() {
+      state.refs[type] = state.refs[type].filter(function (x) { return x !== ref; });
+      releaseRefPreview(ref);
+      renderRefs(mode);
+    }
     var fd = new FormData(); fd.append("file", file);
     return fetch("/api/assets/upload", { method: "POST", body: fd, headers: authHeaders(), credentials: "same-origin" })
       .then(function (r) {
@@ -452,19 +504,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
           : Promise.resolve();
         return ensure.then(function () {
           if (!url) throw new Error("上传接口未返回可用地址");
-          var ref = { key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, source_url: url, asset_id: a.asset_id || "", type: type, mode: mode };
-          state.refs[type].push(ref);
+          ref.url = url;
+          ref.source_url = url;
+          ref.asset_id = a.asset_id || "";
+          ref.uploading = false;
           renderRefs(mode);
-          if (type === "video") {
-            videoThumb(file).then(function (dataUrl) {
-              if (!dataUrl) return;
-              ref.thumb = dataUrl;
-              renderRefs(mode);
-            });
-          }
         });
       })
-      .catch(function (e) { alert("上传失败：" + e.message); });
+      .catch(function (e) {
+        dropRef();
+        alert("上传失败：" + e.message);
+      });
   }
   [["upload-image-only", "image", "image"], ["upload-image", "image", "video"], ["upload-video", "video", "video"], ["upload-audio", "audio", "video"]].forEach(function (cfg) {
     var input = el(cfg[0]);
