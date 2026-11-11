@@ -4,6 +4,7 @@ import concurrent.futures
 import base64
 import mimetypes
 import json
+import os
 import logging
 import shutil
 import subprocess
@@ -882,13 +883,28 @@ def _resolve_tool_binary(tool_name: str, configured_path: str = "") -> str:
 
 
 def _ffprobe_binary_for(ffmpeg_path: str) -> str:
+    """找 ffprobe：优先 ffmpeg 同目录，其次仓库 deps/ffmpeg，最后 PATH。
+
+    之前只认 PATH，客户端多段合并时探测不到音轨，会把整条成片的音轨砍掉。
+    """
     ffprobe_binary = _resolve_tool_binary("ffprobe", "")
-    if (not ffprobe_binary or ffprobe_binary == "ffprobe") and ffmpeg_path and ffmpeg_path != "ffmpeg":
-        ffmpeg_candidate = Path(ffmpeg_path)
-        sidecar_name = "ffprobe.exe" if ffmpeg_candidate.suffix.lower() == ".exe" else "ffprobe"
-        candidate = ffmpeg_candidate.with_name(sidecar_name)
-        if candidate.exists():
-            ffprobe_binary = str(candidate)
+    if ffprobe_binary and ffprobe_binary != "ffprobe":
+        return ffprobe_binary
+    sidecar_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    candidates = []
+    if ffmpeg_path and ffmpeg_path != "ffmpeg":
+        candidates.append(Path(ffmpeg_path).with_name(sidecar_name))
+    try:
+        candidates.append(Path(__file__).resolve().parents[3] / "deps" / "ffmpeg" / sidecar_name)
+    except Exception:
+        pass
+    candidates.append(Path.cwd() / "deps" / "ffmpeg" / sidecar_name)
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except Exception:
+            continue
     return ffprobe_binary
 
 
@@ -1025,6 +1041,23 @@ def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
     return [str(s.get("codec_type", "")).strip().lower() for s in payload.get("streams", []) if isinstance(s, dict)]
 
 
+def _probe_duration_seconds(media_path: str, ffmpeg_path: str) -> float:
+    ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
+    if not ffprobe_binary:
+        return 0.0
+    try:
+        proc = subprocess.run(
+            [ffprobe_binary, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", media_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return max(0.0, float((proc.stdout or "").strip()))
+    except Exception:
+        return 0.0
+
+
 def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, segments: List[Dict[str, Any]]) -> Dict[str, Any]:
     ffmpeg_binary = _resolve_tool_binary("ffmpeg", config.ffmpeg_path)
     if not ffmpeg_binary:
@@ -1115,41 +1148,89 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
             "audio_preserved": "audio" in streams,
         }
 
-    cmd: List[str] = [ffmpeg_binary, "-y"]
-    video_inputs: List[str] = []
-    audio_inputs: List[str] = []
-    all_have_audio = True
-    for item in downloaded:
-        cmd.extend(["-i", item["path"]])
-        input_index = len(video_inputs)
-        video_inputs.append(f"[{input_index}:v:0]")
-        stream_types = _probe_stream_types(item["path"], ffmpeg_binary)
-        if "audio" in stream_types:
-            audio_inputs.append(f"[{input_index}:a:0]")
-        else:
-            all_have_audio = False
+    duration_hint = int(getattr(config, "segment_duration_seconds", 0) or 0)
+    input_paths = [str(item["path"]) for item in downloaded]
+    stream_types_list = [_probe_stream_types(path, ffmpeg_binary) for path in input_paths]
+    probe_ok = any(stream_types_list)
     output_arg = merged_path.resolve().as_posix()
-    if all_have_audio and len(audio_inputs) == len(downloaded):
+
+    def _audio_concat_cmd(*, fill_silence: bool, assume_audio: bool) -> Optional[List[str]]:
+        cmd: List[str] = [ffmpeg_binary, "-y"]
+        for path in input_paths:
+            cmd.extend(["-i", path])
+        video_streams = [f"[{index}:v:0]" for index in range(len(input_paths))]
+        audio_streams: List[str] = []
+        silence_cursor = len(input_paths)
+        for index, types in enumerate(stream_types_list):
+            has_audio = True if (assume_audio and not types) else ("audio" in types)
+            if has_audio:
+                audio_streams.append(f"[{index}:a:0]")
+                continue
+            if not fill_silence:
+                return None
+            seconds = _probe_duration_seconds(input_paths[index], ffmpeg_binary) or duration_hint or 10
+            cmd.extend(["-f", "lavfi", "-t", str(max(1, int(round(seconds)))), "-i", "anullsrc=r=44100:cl=stereo"])
+            audio_streams.append(f"[{silence_cursor}:a:0]")
+            silence_cursor += 1
         interleaved: List[str] = []
-        for v, a in zip(video_inputs, audio_inputs):
-            interleaved.extend([v, a])
-        filter_complex = "".join(interleaved) + f"concat=n={len(downloaded)}:v=1:a=1[v][a]"
-        cmd.extend(["-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_arg])
-        audio_preserved = True
+        for video_stream, audio_stream in zip(video_streams, audio_streams):
+            interleaved.extend([video_stream, audio_stream])
+        filter_complex = "".join(interleaved) + f"concat=n={len(input_paths)}:v=1:a=1[v][a]"
+        cmd.extend([
+            "-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", output_arg,
+        ])
+        return cmd
+
+    def _video_only_cmd() -> List[str]:
+        cmd: List[str] = [ffmpeg_binary, "-y"]
+        for path in input_paths:
+            cmd.extend(["-i", path])
+        filter_complex = "".join(f"[{index}:v:0]" for index in range(len(input_paths))) + f"concat=n={len(input_paths)}:v=1:a=0[v]"
+        cmd.extend([
+            "-filter_complex", filter_complex, "-map", "[v]", "-c:v", "libx264",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_arg,
+        ])
+        return cmd
+
+    # 多段合并必须保留音轨：之前只要有一段探测不到 audio 就整条 a=0，20s（2 段）
+    # 成片直接没声音，10s 单段因为原样 copy 反而有声音。
+    if probe_ok:
+        candidates: List[tuple[List[str], bool]] = []
+        audio_cmd = _audio_concat_cmd(fill_silence=True, assume_audio=False)
+        if audio_cmd:
+            candidates.append((audio_cmd, True))
+        candidates.append((_video_only_cmd(), False))
     else:
-        filter_complex = "".join(video_inputs) + f"concat=n={len(downloaded)}:v=1:a=0[v]"
-        cmd.extend(["-filter_complex", filter_complex, "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_arg])
-        audio_preserved = False
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    except (FileNotFoundError, OSError) as exc:
-        details = _exception_diagnostics(exc, cmd)
-        logger_obj.error("merge_ffmpeg", _exception_summary(exc, cmd))
-        raise PipelineError(f"ffmpeg execution failed: {_exception_summary(exc, cmd)}") from exc
-    if proc.returncode != 0 or not merged_path.exists():
-        output_error = proc.stderr.strip() or proc.stdout.strip() or f"ffmpeg exited with {proc.returncode}"
-        logger_obj.error("merge_ffmpeg", json.dumps({"message": output_error, "command": cmd, "ffmpeg_path": ffmpeg_binary, "returncode": proc.returncode, "stderr": proc.stderr[-4000:], "stdout": proc.stdout[-4000:]}, ensure_ascii=False))
-        raise PipelineError(output_error)
+        # ffprobe 不可用（客户端没进 PATH）：先按“每段都有音轨”合并，失败再退回纯视频。
+        candidates = [
+            (_audio_concat_cmd(fill_silence=False, assume_audio=True) or _video_only_cmd(), True),
+            (_video_only_cmd(), False),
+        ]
+
+    audio_preserved = False
+    proc = None
+    cmd: List[str] = []
+    last_error = ""
+    for candidate_cmd, preserved in candidates:
+        cmd = candidate_cmd
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        except (FileNotFoundError, OSError) as exc:
+            logger_obj.error("merge_ffmpeg", _exception_summary(exc, cmd))
+            raise PipelineError(f"ffmpeg execution failed: {_exception_summary(exc, cmd)}") from exc
+        if proc.returncode == 0 and merged_path.exists() and merged_path.stat().st_size > 0:
+            audio_preserved = preserved
+            break
+        last_error = proc.stderr.strip() or proc.stdout.strip() or f"ffmpeg exited with {proc.returncode}"
+        try:
+            merged_path.unlink()
+        except Exception:
+            pass
+    else:
+        logger_obj.error("merge_ffmpeg", json.dumps({"message": last_error, "command": cmd, "ffmpeg_path": ffmpeg_binary, "stderr": (proc.stderr if proc else "")[-4000:], "stdout": (proc.stdout if proc else "")[-4000:]}, ensure_ascii=False))
+        raise PipelineError(last_error)
     return {
         "status": "success",
         "merged_video_path": str(merged_path),
