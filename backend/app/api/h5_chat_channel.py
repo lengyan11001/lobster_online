@@ -11452,15 +11452,15 @@ async def _generate_shanjian_workflow_script(
         script_seconds = max(5, min(script_seconds, 600))
         cn_chars = max(20, int(round(script_seconds * 4)))
         cn_low = max(10, int(round(cn_chars * 0.9)))
-        cn_high = cn_chars
+        cn_high = max(cn_low + 5, int(round(cn_chars * 1.15)))
         en_words = max(8, int(round(script_seconds * 2.2)))
         en_low = max(5, int(round(en_words * 0.9)))
-        en_high = en_words
+        en_high = max(en_low + 3, int(round(en_words * 1.15)))
         duration_rule = (
             f"【硬性字数限制·最高优先级】目标口播时长 {script_seconds} 秒；"
-            f"中文必须控制在 {cn_low} 到 {cn_high} 字，超过 {cn_high} 字直接视为不合格；"
-            f"英文必须控制在 {en_low} 到 {en_high} 词，超过 {en_high} 词视为不合格；其他语种按同等时长控制。"
-            "写之前先规划要讲几个点，写完后逐条数字数（含标点），超了就删减到范围内再输出；宁可少写，也不要超一个字。"
+            f"中文控制在 {cn_low} 到 {cn_high} 字（约 {cn_chars} 字，允许上下浮动，超过 {cn_high} 字视为不合格）；"
+            f"英文控制在 {en_low} 到 {en_high} 词，超过 {en_high} 词视为不合格；其他语种按同等时长控制。"
+            "写之前先规划要讲几个点，写完后逐条数字数（含标点），超了就删减到范围内再输出；宁可少写一点，也别超太多。"
         )
         logger.info("[H5-WORKFLOW] 口播文案按预估时长生成 seconds=%s chars=%s-%s", script_seconds, cn_low, cn_high)
     else:
