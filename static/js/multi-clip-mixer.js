@@ -2414,8 +2414,8 @@
       : post('/api/multi-clip-mixer/render', {
       title: templateTitleValue() || (totalRuns > 1 ? ('剪辑大师 ' + runIndex) : '剪辑大师'),
       clips: clipPlan,
-      // 套本地字幕模板时保留原声，闪剪不需要
-      keep_original_audio: !!(options.useTemplate && currentTemplateProvider() === 'local'),
+      // 本地模板、以及闪剪真人模板都需要保留原声（真人模板会校验输入视频的讲话发音）
+      keep_original_audio: !!(options.useTemplate && (currentTemplateProvider() === 'local' || currentMixerTemplateScene() === 'realMan')),
       audio_asset_id: audioClip ? audioClip.assetId : '',
       // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
       target_duration: currentClipMode() === 'single' ? null : (targetSeconds > 0 ? targetSeconds : (audioClip ? Number(audioClip.duration || 0) : null)),
