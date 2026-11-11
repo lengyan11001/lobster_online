@@ -1803,8 +1803,7 @@
 
   var MIXER_TEMPLATE_SCENES = [
     ['newsMixCutting', '\u8d44\u8baf\u6df7\u526a'],
-    ['realMan', '\u771f\u4eba\u6a21\u677f'],
-    ['virtualman', '\u6570\u5b57\u4eba\u6a21\u677f']
+    ['realMan', '\u771f\u4eba\u6a21\u677f']
   ];
 
   function currentMixerTemplateScene() {
@@ -2046,7 +2045,7 @@
             return false;
           });
           if (currentOutputRatio() === '16:9') {
-            throw new Error('闪剪在「' + (sceneLabel || currentMixerTemplateScene()) + '」场景下没有 16:9 模板：把「成片比例」改回竖屏 9:16，或把「场景」切到真人模板 / 数字人模板。');
+            throw new Error('闪剪在「' + (sceneLabel || currentMixerTemplateScene()) + '」场景下没有 16:9 模板：把「成片比例」改回竖屏 9:16，或把「场景」切到真人模板。');
           }
           throw new Error('闪剪暂时没有返回可用模板。');
         }
