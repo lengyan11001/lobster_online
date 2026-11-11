@@ -11531,6 +11531,27 @@ async def _generate_shanjian_workflow_script(
             break
     if not script:
         raise RuntimeError("日更未返回有效的" + oral["label"] + "，数字人任务未继续执行")
+    # 只做校验和记录，不裁剪：云端已按目标时长重写，这里确认最终是否达标。
+    if script_seconds:
+        is_en = str(language or "").lower().startswith("en")
+        units = len(script.split()) if is_en else len("".join(script.split()))
+        per_second = 2.2 if is_en else 4
+        limit = max(10, int(round(script_seconds * per_second * 1.15)))
+        if units > limit:
+            logger.warning(
+                "[H5-WORKFLOW] 口播文案仍超字数 units=%s limit=%s seconds=%s task=%s",
+                units,
+                limit,
+                script_seconds,
+                oral["task"],
+            )
+        else:
+            logger.info(
+                "[H5-WORKFLOW] 口播文案字数达标 units=%s limit=%s seconds=%s",
+                units,
+                limit,
+                script_seconds,
+            )
     await _workflow_event(cloud, base, headers, run_id, oral["done_event"])
     return {
         "title": _workflow_text(selected.get("title") or title or "数字人口播", 80),
