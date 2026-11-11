@@ -186,7 +186,12 @@ async def generate_publish_copy(
     if (hint_desc or "").strip():
         user_parts.append("【用户希望的正文要点（可改写合并）】\n" + hint_desc.strip()[:2000])
     if (hint_tags or "").strip():
-        user_parts.append("【用户希望的话题参考（过滤技术词后采用）】\n" + hint_tags.strip()[:500])
+        user_parts.append(
+            "【用户指定标签｜必须使用】\n"
+            + hint_tags.strip()[:500]
+            + "\n要求：把上面每一个标签都原样写进文案正文（建议放结尾，形如 #标签），"
+            "不要改写、不要遗漏；正文仍要通顺自然，不要只堆标签。"
+        )
     user = "\n\n".join(user_parts)
     user += (
         "\n\n请输出 JSON：{\"title\":\"...\",\"description\":\"...\",\"tags\":\"话题1,话题2\"} "

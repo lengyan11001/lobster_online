@@ -44,6 +44,7 @@ class PublishScheduleReq(BaseModel):
     times: Optional[List[str]] = None
     start_date: Optional[str] = None
     tags: Optional[str] = None
+    declare: Optional[str] = None
     ai_copy: bool = True
     options: Optional[Dict[str, Any]] = None
     page: int = 1
@@ -192,6 +193,14 @@ async def commit_publish_schedule(
     # 到点由平台发布，不靠本机 runner 到点再点发布。
     plan_options = dict(body.options or {})
     plan_options["_batch_committed"] = True
+    _declare = str(body.declare or "").strip()
+    if _declare:
+        plan_options["declare"] = _declare
+        if str(platform or "") == "douyin":
+            plan_options["douyin_declaration_text"] = _declare
+        elif str(platform or "") == "wechat_channels":
+            plan_options["wechat_channels_label"] = _declare
+            plan_options["wechat_channels_original"] = _declare.startswith("内容为自行拍摄")
     plan = PublishPlan(
         user_id=current_user.id,
         name=(str(body.name or "").strip() or f"批量计划 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
@@ -1045,6 +1054,21 @@ def update_publish_plan(
         plan.account_nickname = acct.nickname or ""
     if body.options is not None:
         plan.options = dict(body.options or {})
+    if body.declare is not None:
+        opts = dict(plan.options or {})
+        _declare = str(body.declare or "").strip()
+        if _declare:
+            opts["declare"] = _declare
+            if str(plan.platform or "") == "douyin":
+                opts["douyin_declaration_text"] = _declare
+            elif str(plan.platform or "") == "wechat_channels":
+                opts["wechat_channels_label"] = _declare
+                opts["wechat_channels_original"] = _declare.startswith("内容为自行拍摄")
+        else:
+            opts.pop("declare", None)
+            opts.pop("douyin_declaration_text", None)
+            opts.pop("wechat_channels_label", None)
+        plan.options = opts
     if plan.enabled:
         stopped = _pause_other_plans(db, current_user.id, keep_id=int(plan.id))
         if stopped:

@@ -1605,6 +1605,38 @@ def _notice_button_is_submit(text: str) -> bool:
     return any(word in str(text or "") for word in _NOTICE_SUBMIT_WORDS)
 
 
+async def _apply_video_label(page: Any, text: str) -> bool:
+    """在发表动态页选中「视频标注」（wujie shadow DOM 内）。"""
+    label = str(text or "").strip()
+    if not label:
+        return True
+    try:
+        return bool(await page.evaluate(r"""async (text) => {
+          const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
+          const find = (root, pred, d) => {
+            if (!root || d > 8) return null;
+            for (const el of root.querySelectorAll('*')) {
+              if (pred(el)) return el;
+              if (el.shadowRoot) { const hit = find(el.shadowRoot, pred, d + 1); if (hit) return hit; }
+            }
+            return null;
+          };
+          let sel = find(document, el => norm(el.innerText) === '选择视频标注', 0)
+                 || find(document, el => norm(el.innerText).indexOf('选择视频标注') === 0, 0);
+          if (!sel) return false;
+          sel.scrollIntoView({ block: 'center' });
+          sel.click();
+          await new Promise(r => setTimeout(r, 900));
+          const opt = find(document, el => norm(el.innerText) === text, 0);
+          if (!opt) return false;
+          opt.click();
+          await new Promise(r => setTimeout(r, 500));
+          return true;
+        }""", label))
+    except Exception:
+        return False
+
+
 async def _handle_original_notice(page: Any, enabled: bool, _step, *, declare_original: bool = True) -> str:
     """Handle the post-submit original-rights reminder without blocking publish.
 
@@ -1813,6 +1845,12 @@ class WechatChannelsDriver(BaseDriver):
             options_ok = await _apply_optional_publish_options(page, media_kind, options, cover_path, _step)
             if not options_ok:
                 return {"ok": False, "error": "视频号可选发布参数未能全部生效，请查看步骤记录", "applied": applied}
+            video_label = str(options.get("wechat_channels_label") or "").strip()
+            if video_label:
+                label_ok = await _apply_video_label(page, video_label)
+                _step("视频标注", bool(label_ok), text=video_label)
+                if not label_ok:
+                    logger.warning("[WECHAT-CHANNELS] 视频标注未选中: %s", video_label)
 
             wait_seconds = _upload_wait_seconds(file_size)
             _step("上传等待上限(秒)", True, wait_seconds=wait_seconds)

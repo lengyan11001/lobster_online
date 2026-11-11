@@ -6659,6 +6659,25 @@ function _pubPlanOpenById(planId) {
   });
 }
 
+var _PUB_DECLARE_OPTIONS = {
+  douyin: ['无需添加自主声明', '内容由AI生成', '内容为个人观点或见解', '内容为转载信息', '内容含营销推广信息', '虚构演绎，仅供娱乐'],
+  wechat_channels: ['无需标注', '含AI生成内容', '内容为虚构剧情，仅供娱乐', '个人观点，仅供参考', '内容包含营销广告', '内容为自行拍摄（添加拍摄时间和地点）', '内容为转载（需填转载来源）']
+};
+
+function _pubPlanDeclareOptions(platform) {
+  return _PUB_DECLARE_OPTIONS[String(platform || 'douyin')] || _PUB_DECLARE_OPTIONS.douyin;
+}
+
+function _pubPlanFillDeclare(platform, selected) {
+  var sel = document.getElementById('pubPlanDeclare');
+  if (!sel) return;
+  var options = _pubPlanDeclareOptions(platform);
+  var want = String(selected || '').trim();
+  sel.innerHTML = '<option value="">不声明（保持原逻辑）</option>' + options.map(function(text) {
+    return '<option value="' + escapeHtml(text) + '"' + (text === want ? ' selected' : '') + '>' + escapeHtml(text) + '</option>';
+  }).join('');
+}
+
 function openPublishPlanDialog(plan) {
   var modal = document.getElementById('pubPlanModal');
   if (!modal) return;
@@ -6686,7 +6705,17 @@ function openPublishPlanDialog(plan) {
   if (folder) { folder.value = editing ? (editing.source_folder || '') : ''; folder.disabled = _pubPlanEditingCommitted; }
   var tags = document.getElementById('pubPlanTags');
   if (tags) tags.value = editing ? (editing.tags || '') : '';
+  _pubPlanFillDeclare(
+    editing ? (editing.platform || 'douyin') : 'douyin',
+    editing && editing.options ? (editing.options.declare || '') : ''
+  );
   var platformSelect = document.getElementById('pubPlanPlatform');
+  if (platformSelect && !platformSelect.__pubDeclareBound) {
+    platformSelect.__pubDeclareBound = true;
+    platformSelect.addEventListener('change', function() {
+      _pubPlanFillDeclare(platformSelect.value || 'douyin', '');
+    });
+  }
   if (platformSelect) { platformSelect.value = editing ? (editing.platform || 'douyin') : 'douyin'; platformSelect.disabled = _pubPlanEditingCommitted; }
   var browseBtn = document.getElementById('pubPlanBrowseBtn');
   if (browseBtn) browseBtn.disabled = _pubPlanEditingCommitted;
@@ -6761,6 +6790,7 @@ function _pubPlanCollectPayload() {
       daily_count: times.length,
       times: times,
       tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
+      declare: String((document.getElementById('pubPlanDeclare') || {}).value || '').trim(),
       ai_copy: true
     }
   };
@@ -6809,6 +6839,7 @@ function submitPublishPlan() {
     payload = {
       name: String((document.getElementById('pubPlanName') || {}).value || '').trim(),
       tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
+      declare: String((document.getElementById('pubPlanDeclare') || {}).value || '').trim(),
       platform: editingPlan.platform || 'douyin',
       ai_copy: !!editingPlan.ai_copy
     };
