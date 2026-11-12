@@ -1278,26 +1278,18 @@ async def _wait_editor_ready(page: Any, timeout_seconds: int = 60) -> bool:
 async def _wait_media_attached(page: Any, media_kind: str, timeout_seconds: int = 40) -> bool:
     """素材是否真的挂到了编辑器里。
 
-    2026-11-12 线上（diag_20261112043323_79fbefb6）：视频号的描述/短标题/位置
-    在「还没选素材」时就已经渲染，_wait_editor_ready 会立刻返回 True，于是把
-    "选本地素材" 误判成功，最后点发表时页面仍提示「请上传视频」。
-    这里用页面文案判断：视频/图文入口仍然提示上传，就说明没挂上。
+    2026-11-12 本机实测（视频号 军争713）：
+      - 空态：编辑表单（描述/短标题/位置）已经渲染，但页面上「删除」按钮数量为 0
+      - 挂上素材后：「删除」按钮出现（实测 2 个）
+    页面文案在 wujie shadow DOM 里，_deep_text 读不到「支持上传/请上传视频」，
+    所以只用元素判断：出现「删除」即视为挂载成功。
     """
     for _ in range(max(1, int(timeout_seconds))):
         try:
-            text = await _deep_text(page)
+            if await page.get_by_text("删除", exact=True).count() > 0:
+                return True
         except Exception:
-            text = ""
-        if media_kind == _MEDIA_VIDEO:
-            if "请上传视频" not in text and "上传视频" not in text:
-                return True
-            if "重新上传" in text or "更换封面" in text:
-                return True
-        else:
-            if "请上传图片" not in text and "上传图片" not in text:
-                return True
-            if "重新上传" in text or "更换封面" in text:
-                return True
+            pass
         await asyncio.sleep(1)
     return False
 
