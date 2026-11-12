@@ -906,6 +906,9 @@ function persistOpenclawChannelFallback(tok, claimSlot) {
     return r.json().catch(function() { return { ok: true }; });
   }).catch(function(e) {
     if (typeof console !== 'undefined' && console.warn) console.warn('[openclaw-channel-fallback]', e);
+    // 失败不要把结果缓存 60 秒，否则一次网络抖动会压掉后续重试。
+    var state = window.__lobsterChannelFallbackSync;
+    if (state && state.promise === pending) window.__lobsterChannelFallbackSync = null;
     return { ok: false, error: String((e && e.message) || e || '') };
   });
   window.__lobsterChannelFallbackSync = { key: dedupeKey, at: nowMs, promise: pending };
