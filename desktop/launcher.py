@@ -1607,9 +1607,9 @@ def start_services_blocking(
         ensure_desktop_runtime(env)
     set_startup_status("mcp", "正在启动能力服务", detail=f"端口 {mcp_port}", percent=46)
     mcp_proc = start_bat("MCP", "run_mcp.bat", env)
-    time.sleep(1.2)
     backend_proc = None
-    if not wait_for_own_backend(port, 2):
+    # 端口空闲就直接起后端；原来固定 sleep 1.2s + 2s 探测，每次启动白等 3.2s。
+    if not port_owned_by_this_root(port):
         set_startup_status("backend", "正在启动本地服务", detail=f"端口 {port}", percent=58)
         backend_proc = start_bat("Backend", "run_backend.bat", env)
     else:

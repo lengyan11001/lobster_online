@@ -41,6 +41,44 @@ from ..services.asset_storage_paths import get_asset_export_dir_for_media
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _shared_http_client() -> httpx.AsyncClient:
+    """复用同一个 AsyncClient。
+
+    每轮轮询都 new 一个客户端会重新加载 SSL 根证书（Windows 上约 20~50ms），
+    轮询常驻时这部分会持续占掉约 8% 的单核 CPU。
+    """
+    global _HTTP_CLIENT
+    client = _HTTP_CLIENT
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=60.0),
+        )
+        _HTTP_CLIENT = client
+    return client
+
+
+class _ReusableHttpClient:
+    """`async with` 包装器：退出时不关闭共享客户端。"""
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: httpx.AsyncClient) -> None:
+        self._client = client
+
+    async def __aenter__(self) -> httpx.AsyncClient:
+        return self._client
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+def _reusable_http_client() -> _ReusableHttpClient:
+    return _ReusableHttpClient(_shared_http_client())
+
 
 def _wecom_body_display(content: Optional[str], msg_type: Optional[str]) -> str:
     """Content 为空时按消息类型给出可读占位（图片/语音等无文字正文）。"""
@@ -983,7 +1021,7 @@ async def _do_poll_and_reply(user_id: int, db: Session) -> Dict[str, Any]:
         poll_targets = [""]
     items = []
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with _reusable_http_client() as client:
             for callback_path in poll_targets:
                 params = {"limit": 20}
                 if callback_path:

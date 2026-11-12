@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import asyncio
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
@@ -80,7 +82,7 @@ async def extract_audio_asset(
             raise HTTPException(400, detail="file or asset_id is required")
 
         ffmpeg = find_ffmpeg()
-        if not _has_audio_stream(ffmpeg, src):
+        if not await asyncio.to_thread(_has_audio_stream, ffmpeg, src):
             raise HTTPException(400, detail="这个文件里没有音轨（可能是图片或无声视频），提取不了配音")
         proc = subprocess.run(
             [

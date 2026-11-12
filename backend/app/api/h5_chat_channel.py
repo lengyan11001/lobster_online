@@ -66,6 +66,41 @@ from .goal_video_pipeline import (
 )
 from .openclaw_chat_gateway import openclaw_fallback_model, try_openclaw
 
+_POLL_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _poll_http_client() -> httpx.AsyncClient:
+    """轮询专用共享客户端：避免每轮重复加载 SSL 根证书。"""
+    global _POLL_HTTP_CLIENT
+    client = _POLL_HTTP_CLIENT
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0),
+            trust_env=False,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=60.0),
+        )
+        _POLL_HTTP_CLIENT = client
+    return client
+
+
+class _ReusablePollClient:
+    """`async with` 包装器：退出时不关闭共享客户端。"""
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: httpx.AsyncClient) -> None:
+        self._client = client
+
+    async def __aenter__(self) -> httpx.AsyncClient:
+        return self._client
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+def _reusable_poll_client() -> _ReusablePollClient:
+    return _ReusablePollClient(_poll_http_client())
+
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -15222,7 +15257,7 @@ async def h5_chat_poll_loop() -> None:
         headers = _headers(jwt_token, installation_id)
         try:
             timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            async with _reusable_poll_client() as client:
                 # 上一轮里失败的控制面请求（事件/心跳/完成上报）在这里补投，
                 # 避免一次 502 就让服务端认为任务停摆。
                 await _flush_task_control_outbox(client, headers)

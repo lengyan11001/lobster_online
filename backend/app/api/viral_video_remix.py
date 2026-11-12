@@ -1086,7 +1086,7 @@ async def estimate_viral_video_remix_billing(
     tmp_path = tmp_dir / f"{current_user.id}_{int(time.time() * 1000)}.mp4"
     try:
         await _download_to_file(source_url, tmp_path, timeout_seconds=300.0)
-        duration = _probe_video_duration_seconds(tmp_path)
+        duration = await asyncio.to_thread(_probe_video_duration_seconds, tmp_path)
         estimate = await _viral_remix_estimated_user_credits(
             request,
             duration,
@@ -2165,7 +2165,7 @@ async def start_viral_video_remix(
     estimate_tmp_path = estimate_tmp_dir / f"start_{current_user.id}_{int(time.time() * 1000)}.mp4"
     await _download_to_file(_quote_public_url(body.original_video_url), estimate_tmp_path, timeout_seconds=300.0)
     try:
-        source_duration = _probe_video_duration_seconds(estimate_tmp_path)
+        source_duration = await asyncio.to_thread(_probe_video_duration_seconds, estimate_tmp_path)
     finally:
         try:
             if estimate_tmp_path.exists():

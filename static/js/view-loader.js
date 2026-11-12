@@ -11,6 +11,36 @@
   state.inited = state.inited || {};
 
   var RESOURCE_RETRY_DELAYS = [0, 280, 900, 1800];
+  // 后端被长任务堵住时，界面 HTML 请求可能永远不返回，用户只看到白屏。
+  var VIEW_FETCH_TIMEOUT_MS = 20000;
+
+  function fetchWithTimeout(url, requestOptions, timeoutMs) {
+    if (typeof AbortController !== 'function') return fetch(url, requestOptions);
+    return new Promise(function(resolve, reject) {
+      var controller = new AbortController();
+      var settled = false;
+      var timer = window.setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        try { controller.abort(); } catch (e0) {}
+        var error = new Error('timed out loading view: ' + url);
+        error.lobsterNetworkError = true;
+        reject(error);
+      }, timeoutMs);
+      var options = Object.assign({}, requestOptions, { signal: controller.signal });
+      fetch(url, options).then(function(value) {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      }, function(error) {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }
 
   function isTransientResourceError(error) {
     var name = String(error && error.name || '');
@@ -37,7 +67,7 @@
     function run() {
       var requestOptions = Object.assign({}, options);
       requestOptions.cache = attempt ? 'no-store' : (options.cache || 'default');
-      return fetch(retryUrl(url, attempt), requestOptions).then(function(response) {
+      return fetchWithTimeout(retryUrl(url, attempt), requestOptions, VIEW_FETCH_TIMEOUT_MS).then(function(response) {
         if (response.ok || ![408, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt >= RESOURCE_RETRY_DELAYS.length - 1) {
           return response;
         }

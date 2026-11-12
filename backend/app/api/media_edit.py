@@ -1,4 +1,5 @@
 """本地素材剪辑 API（media.edit），供 MCP upstream=local 调用。"""
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -33,7 +34,9 @@ async def media_edit_run(
         pl.get("asset_id"),
     )
     try:
-        out = run_operation(db, current_user.id, body.payload)
+        # run_operation 里是同步 ffmpeg（timeout 3600s）。直接在 async 端点里调用
+        # 会把整个单进程事件循环堵死，所有界面一起卡住。
+        out = await asyncio.to_thread(run_operation, db, current_user.id, body.payload)
         logger.info(
             "[media_edit] ok user_id=%s output_asset_id=%s",
             current_user.id,

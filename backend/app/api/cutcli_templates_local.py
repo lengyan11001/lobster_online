@@ -7,6 +7,7 @@ import math
 import os
 import re
 import shutil
+import asyncio
 import subprocess
 import threading
 import time
@@ -3775,8 +3776,8 @@ async def extract_local_template_preview_frame(
     ext = _safe_ext(file.filename or "source.mp4")
     temp_path = _JOBS_DIR / f"preview_source_{uuid.uuid4().hex}{ext}"
     try:
-        temp_path.write_bytes(data)
-        frame = _extract_preview_frame_bytes(find_ffmpeg(), temp_path)
+        await asyncio.to_thread(temp_path.write_bytes, data)
+        frame = await asyncio.to_thread(_extract_preview_frame_bytes, find_ffmpeg(), temp_path)
         return Response(content=frame, media_type="image/jpeg")
     except Exception as exc:
         logger.warning("[cutcli-template] preview frame extract failed filename=%s error=%s", file.filename, exc)

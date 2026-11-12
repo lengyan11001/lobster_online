@@ -445,10 +445,32 @@
     } finally { applying = false; }
   }
 
-  function scheduleApply() {
-    if (applying || scheduled) return;
+  var pendingRoots = [];
+
+  function scheduleApply(root) {
+    if (!root || language === DEFAULT_LANGUAGE || applying) return;
+    pendingRoots.push(root);
+    if (scheduled) return;
     scheduled = true;
-    requestAnimationFrame(function() { scheduled = false; apply(document.body); });
+    requestAnimationFrame(function() {
+      scheduled = false;
+      var roots = pendingRoots;
+      pendingRoots = [];
+      if (!roots.length) return;
+      // 一次变动涉及很多节点时，退回整页一次，避免逐个根的重复开销。
+      if (roots.length > 200) { apply(document.body); return; }
+      var picked = [];
+      for (var i = 0; i < roots.length; i += 1) {
+        var node = roots[i];
+        if (!node || !node.isConnected) continue;
+        var covered = false;
+        for (var j = 0; j < picked.length; j += 1) {
+          if (picked[j] === node || (picked[j].contains && picked[j].contains(node))) { covered = true; break; }
+        }
+        if (!covered) picked.push(node);
+      }
+      for (var k = 0; k < picked.length; k += 1) apply(picked[k]);
+    });
   }
 
   function saveLocal(next) {
@@ -497,9 +519,18 @@
   };
 
   var observer = new MutationObserver(function(records) {
-    if (applying) return;
+    if (applying || language === DEFAULT_LANGUAGE) return;
     for (var i = 0; i < records.length; i += 1) {
-      if (records[i].type === 'characterData' || records[i].addedNodes.length) { scheduleApply(); break; }
+      var record = records[i];
+      if (record.type === 'characterData') {
+        if (record.target && record.target.parentElement) scheduleApply(record.target.parentElement);
+        continue;
+      }
+      for (var j = 0; j < record.addedNodes.length; j += 1) {
+        var node = record.addedNodes[j];
+        if (node.nodeType === 1) scheduleApply(node);
+        else if (node.nodeType === 3 && node.parentElement) scheduleApply(node.parentElement);
+      }
     }
   });
   function start() {
