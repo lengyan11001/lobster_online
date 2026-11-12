@@ -410,8 +410,10 @@
         var sampleText = previewScriptText();
         var previewPromise;
         var canPreviewByTts = voiceId && !isConsumerPreviewVoice(voiceId);
-        if (sampleText && canPreviewByTts) {
-          previewPromise = requestCloud('/api/hifly/my/voice/preview-tts', previewTtsPayload(voiceId, sampleText, params, provider)).then(function(data) {
+        if (canPreviewByTts) {
+          // 试听一律按「当前语速 / 音量 / 语调」实时合成，避免放旧 demo 听不到参数变化
+          var previewText = sampleText || '你好，这是当前语速、音量和语调的试听，请听听效果是否合适。';
+          previewPromise = requestCloud('/api/hifly/my/voice/preview-tts', previewTtsPayload(voiceId, previewText, params, provider)).then(function(data) {
             return data.audio_url || '';
           });
         } else if (url) {
