@@ -1109,6 +1109,49 @@ def _proxy_http_client() -> httpx.AsyncClient:
     return client
 
 
+_PROXY_GET_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_PROXY_GET_FRESH_SECONDS = 15.0
+_PROXY_GET_MAX_STALE_SECONDS = 60.0
+_PROXY_GET_CACHEABLE_PATHS = frozenset({"/api/scheduled-tasks/runs", "/api/scheduled-tasks/tasks"})
+_PROXY_REFRESH_INFLIGHT: set[str] = set()
+
+
+def _proxy_cache_key(request: Request, path: str, params: Optional[Dict[str, Any]]) -> str:
+    token = (request.headers.get("Authorization") or "")[-32:]
+    iid = request.headers.get("X-Installation-Id") or ""
+    brand = request.headers.get("X-Lobster-Brand") or ""
+    raw = json.dumps([path, params or {}, token, iid, brand], sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _schedule_proxy_refresh(cache_key: str, base: str, path: str, params: Optional[Dict[str, Any]],
+                            headers: Dict[str, str], timeout_sec: float) -> None:
+    """缓存过期后先返回旧结果，再在后台拉一次新数据（stale-while-revalidate）。"""
+    if cache_key in _PROXY_REFRESH_INFLIGHT:
+        return
+    _PROXY_REFRESH_INFLIGHT.add(cache_key)
+
+    async def _refresh() -> None:
+        try:
+            client = _proxy_http_client()
+            resp = await request_with_auth_retry(
+                client, "GET", f"{base}{path}", params=params, headers=headers, timeout=timeout_sec
+            )
+            if resp.status_code < 400:
+                data = resp.json()
+                if isinstance(data, dict):
+                    _PROXY_GET_CACHE[cache_key] = (time.monotonic(), data)
+        except Exception:
+            pass
+        finally:
+            _PROXY_REFRESH_INFLIGHT.discard(cache_key)
+
+    try:
+        asyncio.create_task(_refresh())
+    except RuntimeError:
+        _PROXY_REFRESH_INFLIGHT.discard(cache_key)
+
+
 async def _proxy_cloud_json(
     request: Request,
     method: str,
@@ -1122,6 +1165,18 @@ async def _proxy_cloud_json(
     if not base:
         raise HTTPException(status_code=503, detail="AUTH_SERVER_BASE is not configured")
     headers = _cloud_headers_from_request(request)
+    cache_key: Optional[str] = None
+    if method.upper() == "GET" and path in _PROXY_GET_CACHEABLE_PATHS:
+        cache_key = _proxy_cache_key(request, path, params)
+        cached = _PROXY_GET_CACHE.get(cache_key)
+        if cached is not None:
+            age = time.monotonic() - cached[0]
+            if age < _PROXY_GET_FRESH_SECONDS:
+                return cached[1]
+            if age < _PROXY_GET_MAX_STALE_SECONDS:
+                # 先返回上一次结果，后台刷新，下一次请求拿到新数据。
+                _schedule_proxy_refresh(cache_key, base, path, params, headers, timeout_sec)
+                return cached[1]
     try:
         client = _proxy_http_client()
         # 401 统一走续签+重试一次，避免 token 过期后界面静默停轮询
@@ -1148,6 +1203,11 @@ async def _proxy_cloud_json(
             raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
         raise HTTPException(status_code=resp.status_code, detail=detail or resp.text[:500] or f"HTTP {resp.status_code}")
     if isinstance(data, dict):
+        if cache_key is not None:
+            _PROXY_GET_CACHE[cache_key] = (time.monotonic(), data)
+            if len(_PROXY_GET_CACHE) > 60:
+                for stale_key, _ in sorted(_PROXY_GET_CACHE.items(), key=lambda kv: kv[1][0])[:10]:
+                    _PROXY_GET_CACHE.pop(stale_key, None)
         return data
     return {"ok": True, "data": data}
 
