@@ -161,7 +161,11 @@ _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = 0.0
 # Per-peer UI recovery circuit breaker: one broken/ghost chat must not block
 # every other conversation in the same watch round.
 _AUTO_REPLY_RECOVER_FAIL_LIMIT = 3
+# 熔断半开窗口：失败次数达到上限后，隔这么久允许再试一次，
+# 否则一个坏联系人能把整台机器锁死（2026-11-12 事故：锁了 19 小时）。
+_AUTO_REPLY_RECOVER_HALF_OPEN_SECONDS = 300.0
 _AUTO_REPLY_RECOVER_FAILURES: Dict[str, Dict[str, int]] = {}
+_AUTO_REPLY_RECOVER_LAST_FAILURE: Dict[str, Dict[str, float]] = {}
 _AUTO_REPLY_RECOVER_FAILURES_LOCK = threading.Lock()
 # Coarse "driver busy" marker.  The auto-reply scan may skip this round instead
 # of queueing behind a long contact-sync/group-send operation and timing out.
@@ -3190,6 +3194,7 @@ def _note_auto_reply_recover_failure(account_id: str, peer_id: str, reason: str 
         per_account = _AUTO_REPLY_RECOVER_FAILURES.setdefault(account_key, {})
         count = int(per_account.get(peer_key) or 0) + 1
         per_account[peer_key] = count
+        _AUTO_REPLY_RECOVER_LAST_FAILURE.setdefault(account_key, {})[peer_key] = time.time()
         return count
 
 
@@ -3205,10 +3210,29 @@ def _clear_auto_reply_recover_failure(account_id: str, peer_id: str) -> None:
         per_account.pop(peer_key, None)
         if not per_account:
             _AUTO_REPLY_RECOVER_FAILURES.pop(account_key, None)
+        last_per_account = _AUTO_REPLY_RECOVER_LAST_FAILURE.get(account_key)
+        if last_per_account:
+            last_per_account.pop(peer_key, None)
+            if not last_per_account:
+                _AUTO_REPLY_RECOVER_LAST_FAILURE.pop(account_key, None)
 
 
 def _auto_reply_recover_circuit_open(account_id: str, peer_id: str) -> bool:
-    return _auto_reply_recover_failure_count(account_id, peer_id) >= _AUTO_REPLY_RECOVER_FAIL_LIMIT
+    account_key = str(account_id or "").strip()
+    peer_key = str(peer_id or "").strip()
+    if not account_key or not peer_key:
+        return False
+    with _AUTO_REPLY_RECOVER_FAILURES_LOCK:
+        count = int((_AUTO_REPLY_RECOVER_FAILURES.get(account_key) or {}).get(peer_key) or 0)
+        if count < _AUTO_REPLY_RECOVER_FAIL_LIMIT:
+            return False
+        last = float((_AUTO_REPLY_RECOVER_LAST_FAILURE.get(account_key) or {}).get(peer_key) or 0.0)
+        if last and (time.time() - last) >= _AUTO_REPLY_RECOVER_HALF_OPEN_SECONDS:
+            # 半开：清掉计数，允许整轮里再试一次
+            (_AUTO_REPLY_RECOVER_FAILURES.get(account_key) or {}).pop(peer_key, None)
+            (_AUTO_REPLY_RECOVER_LAST_FAILURE.get(account_key) or {}).pop(peer_key, None)
+            return False
+        return True
 
 
 def _set_ui_executor_busy(operation: str, account_id: str = "") -> None:
@@ -15425,6 +15449,7 @@ def _uia_set_local_search_query(
     text: str,
     *,
     force_paste: bool = False,
+    hwnd: int = 0,
 ) -> Dict[str, Any]:
     """Enter a local-contact query through the same event path as a user.
 
@@ -15435,15 +15460,35 @@ def _uia_set_local_search_query(
     value = str(text or "").strip()
     if not value:
         raise RuntimeError("local WeChat search query is empty")
-    try:
-        node.SetFocus()
-    except Exception:
-        pass
-    try:
-        node.Click(simulateMove=True)
-    except Exception:
-        pass
-    time.sleep(0.15)
+    # 微信 4.x：SetFocus/Click 经常不真正落焦，后面的 Ctrl+A / Ctrl+V 就丢到别处，
+    # 搜索框一直是空的。这里优先用真实鼠标点一下输入框中心。
+    clicked_by_mouse = False
+    if hwnd:
+        try:
+            rect = _uia_rect_tuple(node)
+            if rect:
+                x = int((rect[0] + rect[2]) / 2)
+                y = int((rect[1] + rect[3]) / 2)
+                _focus_local_wechat(int(hwnd))
+                import win32api  # type: ignore
+                import win32con  # type: ignore
+                win32api.SetCursorPos((x, y))
+                time.sleep(0.08)
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                clicked_by_mouse = True
+        except Exception:
+            clicked_by_mouse = False
+    if not clicked_by_mouse:
+        try:
+            node.SetFocus()
+        except Exception:
+            pass
+        try:
+            node.Click(simulateMove=True)
+        except Exception:
+            pass
+    time.sleep(0.18)
     _send_hotkey("a", ctrl=True, pause=0.05)
     _send_hotkey("backspace", pause=0.05)
 
@@ -15461,9 +15506,10 @@ def _uia_set_local_search_query(
 
     _paste_text(value)
     return {
-        "method": "clipboard_paste",
+        "method": "mouse_click_paste" if clicked_by_mouse else "clipboard_paste",
         "value": value,
         "fallback_error": fallback_error,
+        "clicked_by_mouse": clicked_by_mouse,
     }
 
 
@@ -17815,7 +17861,7 @@ def _find_local_contact_search_result(
             continue
         top, bottom = int(rect[1]), int(rect[3])
         header_text = text.splitlines()[0].strip() if text else ""
-        if header_text in {"联系人", "聯絡人", "群聊", "群組", "搜索网络结果", "搜一搜"}:
+        if header_text in {"联系人", "聯絡人", "群聊", "群組", "搜索网络结果", "搜一搜", "聊天记录", "聊天記錄", "功能"}:
             headers.append((header_text, top, bottom))
     contact_headers = [
         item for item in headers
@@ -17836,8 +17882,9 @@ def _find_local_contact_search_result(
             # Some WeChat builds hide an empty 群聊 section. The network
             # header is still a safe upper boundary for contact rows.
             network_top = min(item[1] for item in network_headers)
-    # The category header is our safety anchor. If it is absent, do not infer
-    # a contact from arbitrary XTableCell rows.
+    # 没有「联系人」分组标题时一律 fail-closed：
+    # 微信 4.1.7 里「搜索网络结果」下面第一行就是网页搜索结果（点开是「搜一搜」），
+    # 用它当上边界会点错，所以只认真正的「联系人」分组。
     if category_bottom is None or (group_top is None and network_top is None):
         return None
     lower_bound = category_bottom
@@ -17864,7 +17911,10 @@ def _find_local_contact_search_result(
         # row. WeChat renders the first contact as a nickname-only cell and
         # puts the searched wx id in a later/hidden child; filtering by query
         # would skip the first contact and click a later row.
-        if row_text in {"联系人", "聯絡人", "搜索网络结果", "搜一搜", "群聊"}:
+        if row_text in {"联系人", "聯絡人", "搜索网络结果", "搜一搜", "群聊", "聊天记录", "聊天記錄", "功能"}:
+            continue
+        # 按显示名搜索时必须能对上名字；按微信号搜索时行里通常只显示昵称，不做文本约束。
+        if not _looks_like_wechat_id(target) and target.casefold() not in lowered:
             continue
         candidates.append((int(rect[1]), node))
     # Do not fall back to an unscoped XTableCell. A missing/changed 联系人
@@ -18170,10 +18220,12 @@ def _open_local_contact_profile_via_search(
             search = _find_local_top_search_field(_uia_main_root(hwnd)) or search
             time.sleep(0.2)
         try:
+            _focus_local_wechat(hwnd)
             input_meta = _uia_set_local_search_query(
                 search,
                 expected_wx_no,
                 force_paste=attempt > 0,
+                hwnd=hwnd,
             )
         except Exception as exc:
             input_meta = {"method": "input_error", "error": str(exc)[:240]}
@@ -18183,18 +18235,28 @@ def _open_local_contact_profile_via_search(
             if query_value.casefold() == expected_wx_no.casefold():
                 break
             time.sleep(0.1)
-        input_meta = {**input_meta, "attempt": attempt + 1, "query_value": query_value}
+        # 微信 4.x（Weixin.exe）的搜索框不暴露 ValuePattern，读回来是空串。
+        # 空串只能说明「读不到」，不能说明「没输入」；这里继续走搜索结果精确匹配，
+        # 否则每一轮都会被误判成 contact search result not found。
+        query_readable = bool(str(query_value or "").strip())
+        query_matched = query_value.casefold() == expected_wx_no.casefold()
+        input_meta = {
+            **input_meta,
+            "attempt": attempt + 1,
+            "query_value": query_value,
+            "query_readable": query_readable,
+        }
         input_attempts.append(input_meta)
         steps.append(
             {
                 "step": "search_contact_by_wx_no",
-                "ok": query_value.casefold() == expected_wx_no.casefold(),
+                "ok": query_matched or not query_readable,
                 "target": original_target,
                 "wx_no": expected_wx_no,
                 **input_meta,
             }
         )
-        if query_value.casefold() != expected_wx_no.casefold():
+        if query_readable and not query_matched:
             continue
         deadline = time.monotonic() + 4.0
         while time.monotonic() < deadline:
@@ -18226,8 +18288,9 @@ def _open_local_contact_profile_via_search(
         for attempt in range(2):
             search = _find_local_top_search_field(_uia_main_root(hwnd)) or search
             try:
+                _focus_local_wechat(hwnd)
                 input_meta = _uia_set_local_search_query(
-                    search, fallback_name, force_paste=attempt > 0
+                    search, fallback_name, force_paste=attempt > 0, hwnd=hwnd
                 )
             except Exception as exc:
                 input_meta = {"method": "input_error", "error": str(exc)[:240]}
@@ -18237,23 +18300,26 @@ def _open_local_contact_profile_via_search(
                 if fallback_query_value.casefold() == fallback_name.casefold():
                     break
                 time.sleep(0.1)
+            fallback_readable = bool(str(fallback_query_value or "").strip())
+            fallback_matched = fallback_query_value.casefold() == fallback_name.casefold()
             input_meta = {
                 **input_meta,
                 "attempt": attempt + 1,
                 "query_value": fallback_query_value,
+                "query_readable": fallback_readable,
             }
             fallback_attempts.append(input_meta)
             steps.append(
                 {
                     "step": "search_contact_by_display_name_fallback",
-                    "ok": fallback_query_value.casefold() == fallback_name.casefold(),
+                    "ok": fallback_matched or not fallback_readable,
                     "target": original_target,
                     "wx_no": expected_wx_no,
                     "fallback_display_name": fallback_name,
                     **input_meta,
                 }
             )
-            if fallback_query_value.casefold() != fallback_name.casefold():
+            if fallback_readable and not fallback_matched:
                 continue
             fallback_deadline = time.monotonic() + 4.0
             while time.monotonic() < fallback_deadline:
