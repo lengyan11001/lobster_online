@@ -121,7 +121,7 @@ def test_same_user_signed_switch_is_honored(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
     monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
     first = mod.write_installation_identity("u260-" + "a" * 32, "a" * 32)
-    switched = mod.write_installation_identity("u260-" + "b" * 32, "b" * 32)
+    switched = mod.write_installation_identity("u260-" + "b" * 32, "b" * 32, force=True)
 
     assert first["installation_id"] == "u260-" + "a" * 32
     assert switched["installation_id"] == "u260-" + "b" * 32
@@ -156,3 +156,17 @@ def test_placeholder_file_is_regenerated_once(tmp_path, monkeypatch):
 
     again = mod.ensure_installation_identity("hikong")
     assert again["installation_id"] == created["installation_id"]
+
+
+def test_signed_switch_without_force_is_ignored(tmp_path, monkeypatch):
+    """没有 force 的 signed 变更一律不落盘，防止 bind 响应把槽位翻来翻去。"""
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+
+    mod.write_installation_identity("u260-" + "a" * 32, "a" * 32)
+    kept = mod.write_installation_identity("u260-" + "b" * 32, "b" * 32)
+
+    assert kept["ignored"] is True
+    assert kept["installation_id"] == "u260-" + "a" * 32
+    assert mod.read_installation_identity()["installation_id"] == "u260-" + "a" * 32

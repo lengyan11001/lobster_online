@@ -357,7 +357,7 @@ function randomizeInstallationSlotId() {
     .then(function(data) {
       var next = String(data && data.installation_id || '').trim();
       if (!next) throw new Error('服务器未返回新槽位');
-      if (typeof setLobsterInstallationId === 'function') setLobsterInstallationId(next, { reason: 'manual_randomize' });
+      if (typeof setLobsterInstallationId === 'function') setLobsterInstallationId(next, { reason: 'manual_randomize', force: true });
       else localStorage.setItem('lobster_installation_id', next);
       renderInstallationSlotId({ ok: true, duplicate: !!(data && data.duplicate) });
       return syncLocalInstallationSlotId(next).catch(function(err) {

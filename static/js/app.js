@@ -1023,6 +1023,7 @@ if (typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_FILE_PRESENT_
   }, 1500);
 }
 var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';
+var LOBSTER_LEGACY_MACHINE_STORAGE_KEY = 'lobster_legacy_machine_instance_id';
 
 function rawInstallationId(value) {
   var text = String(value || '').trim();
@@ -1063,6 +1064,33 @@ function currentStoredLobsterMachineInstanceId() {
   try { return localStorage.getItem(LOBSTER_MACHINE_INSTANCE_STORAGE_KEY) || ''; } catch (e) { return ''; }
 }
 
+function currentStoredLobsterLegacyMachineInstanceId() {
+  var parts = [];
+  try { if (window.__LOBSTER_LEGACY_MACHINE_ID__) parts.push(window.__LOBSTER_LEGACY_MACHINE_ID__); } catch (e0) {}
+  try { var stored = localStorage.getItem(LOBSTER_LEGACY_MACHINE_STORAGE_KEY) || ''; if (stored) parts.push(stored); } catch (e1) {}
+  var seen = {}; var out = [];
+  parts.join(',').split(/[,;\s]+/).forEach(function (item) {
+    var value = String(item || '').trim();
+    if (!value || !isValidLobsterInstallationId(value) || seen[value]) return;
+    seen[value] = true; out.push(value);
+  });
+  return out.join(',');
+}
+
+function setLobsterLegacyMachineInstanceId(value) {
+  var parts = [currentStoredLobsterLegacyMachineInstanceId(), String(value || '').trim()];
+  var seen = {}; var out = [];
+  parts.join(',').split(/[,;\s]+/).forEach(function (item) {
+    var next = String(item || '').trim();
+    if (!next || !isValidLobsterInstallationId(next) || seen[next]) return;
+    seen[next] = true; out.push(next);
+  });
+  var merged = out.join(',');
+  try { localStorage.setItem(LOBSTER_LEGACY_MACHINE_STORAGE_KEY, merged); } catch (e2) {}
+  try { window.__LOBSTER_LEGACY_MACHINE_ID__ = merged; } catch (e3) {}
+  return merged;
+}
+
 function setLobsterMachineInstanceId(value, meta) {
   var next = String(value || '').trim();
   if (!isValidLobsterInstallationId(next)) throw new Error('invalid machine instance id');
@@ -1094,7 +1122,11 @@ function loadLobsterMachineInstanceId() {
   }).then(function(resp) {
     return resp.json().catch(function() { return {}; }).then(function(data) {
       var next = String(data && data.machine_instance_id || '').trim();
+      var legacy = String(data && data.legacy_machine_instance_id || '').trim();
       if (resp.ok && isValidLobsterInstallationId(next)) {
+        if (legacy && typeof setLobsterLegacyMachineInstanceId === 'function') {
+          try { setLobsterLegacyMachineInstanceId(legacy); } catch (eLegacy) {}
+        }
         return setLobsterMachineInstanceId(next, { reason: 'local_machine_identity' });
       }
       return cached || '';
@@ -1307,7 +1339,9 @@ function bindLobsterInstallationId(options) {
       installation_id: bindCurrent,
       device_id: deviceId,
       machine_instance_id: machineInstanceId || null,
-      legacy_machine_instance_id: (typeof window !== 'undefined' ? (window.__LOBSTER_LEGACY_MACHINE_ID__ || '') : ''),
+      legacy_machine_instance_id: (typeof currentStoredLobsterLegacyMachineInstanceId === 'function'
+        ? currentStoredLobsterLegacyMachineInstanceId()
+        : ((typeof window !== 'undefined') ? (window.__LOBSTER_LEGACY_MACHINE_ID__ || '') : '')),
       force_new: !!options.forceNew
     })
   }).then(function(resp) {
@@ -1321,11 +1355,19 @@ function bindLobsterInstallationId(options) {
       // 任何调用方发起 bind，只要服务端返回了不同槽位就立刻采用并落盘，
       // 不再依赖各页面自己处理返回值。
       var nextBindId = String(data.installation_id || '').trim();
+      var changeReason = String(data.signature_reason || '');
+      var allowedSlotChange = ['duplicate_machine', 'force_new', 'assigned_slot', 'alias_restore', 'machine_slot_pinned'].indexOf(changeReason) >= 0;
       if (nextBindId && nextBindId !== String(bindCurrent || '') && typeof setLobsterInstallationId === 'function') {
-        try {
-          setLobsterInstallationId(nextBindId, { reason: 'bind_response' });
-          if (typeof persistInstallationIdentityToFile === 'function') persistInstallationIdentityToFile();
-        } catch (eBindId) {}
+        if (!allowedSlotChange) {
+          reportInstallationIdentityEvent('bind_slot_change_ignored', {
+            current: bindCurrent || '', returned: nextBindId, reason: changeReason, signed: !!data.signed
+          });
+        } else {
+          try {
+            setLobsterInstallationId(nextBindId, { reason: 'bind_response', force: true });
+            if (typeof persistInstallationIdentityToFile === 'function') persistInstallationIdentityToFile();
+          } catch (eBindId) {}
+        }
       }
       return data;
     });

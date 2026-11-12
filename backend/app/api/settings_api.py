@@ -611,6 +611,7 @@ class InstallationIdSyncRequest(BaseModel):
 class MachineIdentityResponse(BaseModel):
     ok: bool = True
     machine_instance_id: str
+    legacy_machine_instance_id: Optional[str] = None
 
 
 class InstallationIdentityRequest(BaseModel):
@@ -841,11 +842,27 @@ def _reconcile_identity_file_machine(machine_id: str) -> None:
         logger.warning("[installation-identity] reconcile failed machine=%s err=%s", machine[:20], exc)
 
 
+def _machine_identity_legacy() -> str:
+    """Read legacy machine ids from the machine identity file (outside OTA)."""
+    for path in _machine_identity_candidates():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        legacy = str(data.get("legacy_machine_instance_id") or "").strip()
+        if legacy:
+            return legacy
+    return ""
+
+
 @router.get("/api/settings/machine-identity", response_model=MachineIdentityResponse)
 def get_machine_identity():
     machine = _get_or_create_machine_instance_id()
     _reconcile_identity_file_machine(machine)
-    return MachineIdentityResponse(machine_instance_id=machine)
+    return MachineIdentityResponse(
+        machine_instance_id=machine,
+        legacy_machine_instance_id=_machine_identity_legacy() or None,
+    )
 
 
 class IdentityEventRequest(BaseModel):

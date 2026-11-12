@@ -274,11 +274,21 @@ def write_installation_identity(
     existing = read_installation_identity()
     incoming_signed = bool(re.match(r"^u\d+-", iid))
     existing_iid = str(existing.get("installation_id") or "").strip()
+    existing_signed = bool(re.match(r"^u\d+-", existing_iid))
     existing_user = re.match(r"^u(\d+)-", existing_iid)
     incoming_user = re.match(r"^u(\d+)-", iid)
     keep_existing = False
     keep_reason = ""
-    if existing.get("present") and not incoming_signed:
+    if (
+        existing.get("present")
+        and existing_signed
+        and incoming_signed
+        and iid != existing_iid
+        and not force
+    ):
+        keep_existing = True
+        keep_reason = "signed_change_requires_force"
+    elif existing.get("present") and not incoming_signed:
         keep_existing = True
         keep_reason = "incoming_unsigned"
     elif (
