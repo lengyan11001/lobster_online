@@ -282,6 +282,48 @@ async def _douyin_find_video_file_input(page: Any) -> Any:
     return all_inputs[0] if all_inputs else None
 
 
+async def _douyin_cdp_set_file_input(page: Any, handle: Any, file_path: str) -> bool:
+    """用 CDP DOM.setFileInputFiles 直接注入文件。
+
+    2026-11-12 用户现场：ElementHandle.set_input_files 在 20MB 视频上 15s 超时，
+    页面本身没反应。ElementHandle 会等元素可操作，上传页在切换 tab 时会重建 input，
+    旧 handle 被 detach 后就一直重试到超时。这里给当前 input 打个临时标记，
+    再用 CDP 现查 nodeId 直接设文件，不经过 actionability 等待。
+    """
+    marker = "data-lobster-video-input"
+    try:
+        await handle.evaluate("(el, m) => el.setAttribute(m, '1')", marker)
+    except Exception as ex:
+        logger.debug("[DOUYIN-VIDEO] cdp mark input: %s", ex)
+        return False
+    cdp = None
+    try:
+        cdp = await page.context.new_cdp_session(page)
+        doc = await cdp.send("DOM.getDocument", {"depth": 1, "pierce": True})
+        res = await cdp.send(
+            "DOM.querySelector",
+            {"nodeId": doc["root"]["nodeId"], "selector": 'input[type="file"][' + marker + '="1"]'},
+        )
+        node_id = res.get("nodeId") or 0
+        if not node_id:
+            return False
+        await cdp.send("DOM.setFileInputFiles", {"files": [os.path.abspath(file_path)], "nodeId": node_id})
+        return True
+    except Exception as ex:
+        logger.warning("[DOUYIN-VIDEO] cdp set_input_files failed: %s", ex)
+        return False
+    finally:
+        try:
+            await handle.evaluate("(el, m) => el.removeAttribute(m)", marker)
+        except Exception:
+            pass
+        try:
+            if cdp is not None:
+                await cdp.detach()
+        except Exception:
+            pass
+
+
 async def _douyin_click_first_visible_exact_text(page: Any, text: str) -> bool:
     loc = page.get_by_text(text, exact=True)
     n = await loc.count()
@@ -3313,16 +3355,30 @@ class DouyinDriver(BaseDriver):
         # 超时后页面已切到编辑页，只剩封面用的 image input，导致误报“视频不合法”。
         file_input = await _douyin_find_video_file_input(page)
         if file_input:
+            # 策略 0：CDP 直接设文件。ElementHandle 在大文件/input 被重建时会卡到超时。
             try:
-                await file_input.set_input_files(file_path, timeout=_pw_ms(15000))
-                logger.info("[DOUYIN-VIDEO] strategy1 set_input_files on video input")
-                if await _douyin_upload_reacted(timeout_s=12.0):
-                    video_uploaded = True
-                    attempts.append("video-input=ok")
+                if await _douyin_cdp_set_file_input(page, file_input, file_path):
+                    logger.info("[DOUYIN-VIDEO] strategy0 CDP DOM.setFileInputFiles")
+                    if await _douyin_upload_reacted(timeout_s=12.0):
+                        video_uploaded = True
+                        attempts.append("cdp=ok")
+                    else:
+                        attempts.append("cdp=no-reaction")
                 else:
-                    attempts.append("video-input=no-reaction")
+                    attempts.append("cdp=not-found")
             except Exception as e:
-                attempts.append("video-input=" + str(e)[:80])
+                attempts.append("cdp=" + str(e)[:80])
+            if not video_uploaded:
+                try:
+                    await file_input.set_input_files(file_path, timeout=_pw_ms(30000))
+                    logger.info("[DOUYIN-VIDEO] strategy1 set_input_files on video input")
+                    if await _douyin_upload_reacted(timeout_s=12.0):
+                        video_uploaded = True
+                        attempts.append("video-input=ok")
+                    else:
+                        attempts.append("video-input=no-reaction")
+                except Exception as e:
+                    attempts.append("video-input=" + str(e)[:80])
         else:
             attempts.append("video-input=not-found")
 
