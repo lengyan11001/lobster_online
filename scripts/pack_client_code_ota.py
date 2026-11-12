@@ -334,6 +334,8 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
     "scripts/memory_document_runtime_wheels",
     "scripts/douyin_runtime_wheels",
     "static/uploads",
+    # 字体由 runtime_assets 启动时从 TOS 按需补拉（5 个 OTF ≈ 20.9MB），不进 OTA。
+    "static/fonts",
     "static/branding/cache",
     "tmp_templates",
     "chat_storage",

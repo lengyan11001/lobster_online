@@ -1,7 +1,7 @@
 {
-  "version": "2.0.268",
-  "build": 570,
-  "applied_at": "2026-11-12T12:43:48+08:00",
-  "note": "视频号发布：选完素材后校验是否真的挂载（删除按钮判断），未挂载自动重试一次，修「请上传视频」假成功",
-  "bundle_sha256": "54f36a32cc4c23216f2f3cd07973369dd6cc56a5e8723c104abd1e7d8c0756a9"
+  "version": "2.0.269",
+  "build": 572,
+  "applied_at": "2026-11-12T16:26:30+08:00",
+  "note": "抖音发布：视频文件改用 CDP DOM.setFileInputFiles 注入，修 20MB 素材 set_input_files 15s 超时",
+  "bundle_sha256": "8da7ea9f89d5ea6f1d3ad1f736c2093e3b2e2cfebc8bb3d1fdd9cac0d76529ca"
 }
