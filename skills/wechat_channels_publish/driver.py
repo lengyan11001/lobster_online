@@ -1275,6 +1275,33 @@ async def _wait_editor_ready(page: Any, timeout_seconds: int = 60) -> bool:
     return False
 
 
+async def _wait_media_attached(page: Any, media_kind: str, timeout_seconds: int = 40) -> bool:
+    """素材是否真的挂到了编辑器里。
+
+    2026-11-12 线上（diag_20261112043323_79fbefb6）：视频号的描述/短标题/位置
+    在「还没选素材」时就已经渲染，_wait_editor_ready 会立刻返回 True，于是把
+    "选本地素材" 误判成功，最后点发表时页面仍提示「请上传视频」。
+    这里用页面文案判断：视频/图文入口仍然提示上传，就说明没挂上。
+    """
+    for _ in range(max(1, int(timeout_seconds))):
+        try:
+            text = await _deep_text(page)
+        except Exception:
+            text = ""
+        if media_kind == _MEDIA_VIDEO:
+            if "请上传视频" not in text and "上传视频" not in text:
+                return True
+            if "重新上传" in text or "更换封面" in text:
+                return True
+        else:
+            if "请上传图片" not in text and "上传图片" not in text:
+                return True
+            if "重新上传" in text or "更换封面" in text:
+                return True
+        await asyncio.sleep(1)
+    return False
+
+
 async def _click_publish_entry(page: Any, media_kind: str) -> str:
     if media_kind == _MEDIA_IMAGE:
         labels = ("发表图文", "发布图文", "发表图片", "发布图片", "新建图文", "创建图文")
@@ -1808,6 +1835,23 @@ class WechatChannelsDriver(BaseDriver):
             upload_method = await _upload_media_file(page, file_input, file_path)
             _step("选择本地素材", True, method=upload_method, type="图文" if media_kind == _MEDIA_IMAGE else "视频")
             await _delay(1.0, 2.0)
+            attached = await _wait_media_attached(page, media_kind, 25)
+            if not attached:
+                _step("素材未挂载，重试上传", False)
+                try:
+                    retry_input = await _find_file_input(page, media_kind=media_kind) or file_input
+                    await _upload_media_file(page, retry_input, file_path)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[WECHAT-CHANNELS] 重试上传失败: %s", str(exc)[:160])
+                await _delay(1.0, 2.0)
+                attached = await _wait_media_attached(page, media_kind, 40)
+            if not attached:
+                return {
+                    "ok": False,
+                    "error": "视频号页面仍提示请上传视频：素材没有真正挂上去，请重试（不是文案或账号问题）",
+                    "applied": applied,
+                }
+            _step("素材已挂载", True)
             if not await _wait_editor_ready(page, 60):
                 _step("等待编辑表单", False)
                 return {"ok": False, "error": "视频号编辑表单未加载出来，请稍后重试", "applied": applied}
