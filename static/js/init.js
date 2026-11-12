@@ -888,13 +888,7 @@ function persistOpenclawChannelFallback(tok, claimSlot) {
     return Promise.resolve({ skipped: true });
   }
   var claimQuery = claimSlot ? '?claim_slot=1' : '';
-  // 启动阶段这个函数会被调用多次（token 恢复 / 槽位修复 / 登录回调）。同一个 token
-  // 60 秒内只打一次，否则每次都要等一次云端 claim-installation-slot（实测 0.4~1s）。
-  var dedupeKey = t.slice(-24) + '|' + (claimSlot ? '1' : '0');
-  var nowMs = Date.now();
-  var cached = window.__lobsterChannelFallbackSync;
-  if (cached && cached.key === dedupeKey && nowMs - cached.at < 60000) return cached.promise;
-  var pending = fetch(localBase + '/auth/persist-openclaw-channel-fallback' + claimQuery, {
+  return fetch(localBase + '/auth/persist-openclaw-channel-fallback' + claimQuery, {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + t,
@@ -906,13 +900,8 @@ function persistOpenclawChannelFallback(tok, claimSlot) {
     return r.json().catch(function() { return { ok: true }; });
   }).catch(function(e) {
     if (typeof console !== 'undefined' && console.warn) console.warn('[openclaw-channel-fallback]', e);
-    // 失败不要把结果缓存 60 秒，否则一次网络抖动会压掉后续重试。
-    var state = window.__lobsterChannelFallbackSync;
-    if (state && state.promise === pending) window.__lobsterChannelFallbackSync = null;
     return { ok: false, error: String((e && e.message) || e || '') };
   });
-  window.__lobsterChannelFallbackSync = { key: dedupeKey, at: nowMs, promise: pending };
-  return pending;
 }
 
 var __lobsterInstallationRepairPromise = null;
