@@ -48,7 +48,7 @@ def test_template_customization_uses_the_existing_local_cutcli_pipeline():
 
 def test_shanjian_submit_params_match_provider_contract():
     assert shanjian._normalize_submit_title("Hi") == "智能剪辑"
-    assert shanjian._normalize_submit_title("闪剪模板") == "闪剪模板"
+    assert shanjian._normalize_submit_title("数字人2.0模板") == "数字人2.0模板"
     assert shanjian._normalize_material_composition("sequential") == "order"
     assert shanjian._normalize_material_composition("order") == "order"
     assert shanjian._normalize_material_composition("bad-value") == "random"

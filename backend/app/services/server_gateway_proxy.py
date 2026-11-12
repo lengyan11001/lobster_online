@@ -1,6 +1,6 @@
 """把客户端生成类请求统一转发到认证中心（服务器）。
 
-客户端不允许直连上游（速推 / Comfly / 闪剪 / HiFly）。
+客户端不允许直连上游（速推 / Comfly / 数字人2.0 / HiFly）。
 生成、素材、任务查询都走 {AUTH_SERVER_BASE}，计费与预扣在服务器完成。
 """
 from __future__ import annotations

@@ -5,7 +5,7 @@
 已经存在且体积合理的二进制会跳过，缺哪个补哪个。
 
 背景（2026-10-04 diag_20261004083756_12ea0605）：以前这里只解压 ffmpeg.exe，客户机
-deps/ffmpeg 里只有 ffmpeg 没有 ffprobe，闪剪素材分辨率校验一直报
+deps/ffmpeg 里只有 ffmpeg 没有 ffprobe，数字人2.0素材分辨率校验一直报
 「本机缺少 ffprobe，无法校验素材分辨率」，数字人口播视频的素材准备全被跳过。
 """
 from __future__ import annotations

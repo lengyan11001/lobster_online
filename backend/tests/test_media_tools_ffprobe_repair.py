@@ -1,7 +1,7 @@
 """ffprobe 缺失这条链路的回归：安装脚本要同时装 ffprobe，素材探针要能只用 ffmpeg 兜底。
 
 背景（2026-10-04 diag_20261004083756_12ea0605）：客户机 deps/ffmpeg 里只有
-ffmpeg.exe、没有 ffprobe.exe，闪剪素材分辨率校验全部报
+ffmpeg.exe、没有 ffprobe.exe，数字人2.0素材分辨率校验全部报
 「本机缺少 ffprobe，无法校验素材分辨率」，数字人口播视频的素材准备被整批跳过。
 """
 from __future__ import annotations

@@ -216,7 +216,7 @@ async def _persist_audio_for_shanjian(
         )
     asset_id, filename_or_key, file_size, public_url = _save_bytes_or_tos(data, ext, media_type)
     if not public_url:
-        raise HTTPException(status_code=503, detail="数字人口播音频转存 TOS 失败，无法提交闪剪")
+        raise HTTPException(status_code=503, detail="数字人口播音频转存 TOS 失败，无法提交数字人2.0")
     asset = Asset(
         asset_id=asset_id,
         user_id=int(current_user.id),
@@ -301,7 +301,7 @@ def _clamp_speed_ratio(value: Any) -> float:
 def _apply_audio_speed(data: bytes, media_type: str, speed_ratio: Any) -> tuple[bytes, str]:
     """按语速倍率重采样驱动音频。
 
-    闪剪 /v1/virtualman/video 的 audioUrl 分支没有 speedRatio 参数，上传音频
+    数字人2.0 /v1/virtualman/video 的 audioUrl 分支没有 speedRatio 参数，上传音频
     后调语速会被上游忽略（数字人2.0 音频驱动“改了速度没效果”）。这里在转存
     TOS 之前用 ffmpeg atempo 把音频真正变速，时长随倍率变化，口型跟着音频走。
     """
@@ -508,7 +508,7 @@ def _resolve_profile_for_video(
             ShanjianDigitalHumanProfile.user_id == int(current_user.id),
         ).first()
         if not row:
-            raise HTTPException(status_code=404, detail="未找到对应的闪剪数字人档案")
+            raise HTTPException(status_code=404, detail="未找到对应的数字人档案")
         if row.status != "succeed" or not _clean_text(row.virtualman_id):
             # 训练失败时带出上游原因，避免用户只看到「还未训练完成」反复重试。
             reason = _clean_text(getattr(row, "error_message", None))
@@ -520,7 +520,7 @@ def _resolve_profile_for_video(
                         "（请换一段单人正脸、口型清晰、连续讲话且无背景音乐的视频重新训练）"
                     ),
                 )
-            raise HTTPException(status_code=400, detail="该闪剪数字人还未训练完成，暂时不能用于出片")
+            raise HTTPException(status_code=400, detail="该数字人2.0还未训练完成，暂时不能用于出片")
         return row, _clean_text(row.virtualman_id)
     if vmid:
         row = db.query(ShanjianDigitalHumanProfile).filter(
@@ -535,7 +535,7 @@ def _resolve_profile_for_video(
     ).order_by(ShanjianDigitalHumanProfile.updated_at.desc()).first()
     if row and _clean_text(row.virtualman_id):
         return row, _clean_text(row.virtualman_id)
-    raise HTTPException(status_code=400, detail="请先创建并训练一个自己的闪剪数字人，或显式传入 virtualman_id")
+    raise HTTPException(status_code=400, detail="请先创建并训练一个自己的数字人2.0形象，或显式传入 virtualman_id")
 
 
 def _profile_endpoint_and_payload(
@@ -668,7 +668,7 @@ async def create_profile(
     data = _data(upstream)
     task_id = _clean_text(data.get("taskId"))
     if not task_id:
-        raise HTTPException(status_code=502, detail="闪剪未返回 taskId")
+        raise HTTPException(status_code=502, detail="数字人2.0未返回 taskId")
     if body.make_default:
         _clear_default_profiles(db, int(current_user.id))
     row = ShanjianDigitalHumanProfile(
@@ -717,7 +717,7 @@ async def query_profile_task(
             ShanjianDigitalHumanProfile.user_id == int(current_user.id),
         ).first()
     if not row:
-        raise HTTPException(status_code=404, detail="未找到对应的闪剪数字人任务")
+        raise HTTPException(status_code=404, detail="未找到对应的数字人2.0任务")
 
     payload = await _get("/v1/task/info", body.token, {"taskId": row.task_id})
     data = _data(payload)
@@ -764,7 +764,7 @@ async def set_default_profile(
         ShanjianDigitalHumanProfile.user_id == int(current_user.id),
     ).first()
     if not row:
-        raise HTTPException(status_code=404, detail="未找到对应的闪剪数字人档案")
+        raise HTTPException(status_code=404, detail="未找到对应的数字人档案")
     _clear_default_profiles(db, int(current_user.id))
     row.is_default = True
     row.updated_at = datetime.utcnow()
@@ -829,7 +829,7 @@ async def create_video(
     data = _data(upstream)
     task_id = _clean_text(data.get("taskId"))
     if not task_id:
-        raise HTTPException(status_code=502, detail="闪剪未返回 taskId")
+        raise HTTPException(status_code=502, detail="数字人2.0未返回 taskId")
     row = ShanjianDigitalHumanVideoTask(
         user_id=int(current_user.id),
         profile_id=getattr(profile, "id", None),
@@ -874,7 +874,7 @@ async def query_video_task(
             ShanjianDigitalHumanVideoTask.user_id == int(current_user.id),
         ).first()
     if not row:
-        raise HTTPException(status_code=404, detail="未找到对应的闪剪视频任务")
+        raise HTTPException(status_code=404, detail="未找到对应的数字人2.0视频任务")
 
     payload = await _get("/v1/task/info", body.token, {"taskId": row.task_id})
     data = _data(payload)

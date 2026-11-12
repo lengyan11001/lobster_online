@@ -1,6 +1,6 @@
 """数字人2.0 音频驱动：语速必须真的作用到驱动音频上。
 
-闪剪 /v1/virtualman/video 的 audioUrl 分支没有 speedRatio 参数，之前前端传的
+数字人2.0 /v1/virtualman/video 的 audioUrl 分支没有 speedRatio 参数，之前前端传的
 speed_ratio 在音频分支被静默丢掉，用户调了语速结果一模一样。
 """
 from __future__ import annotations

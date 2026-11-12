@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""闪剪 AI 水印默认关闭：请求默认值 + 前端两处入口都要是关的。"""
+"""数字人2.0 AI 水印默认关闭：请求默认值 + 前端两处入口都要是关的。"""
 from __future__ import annotations
 
 import os

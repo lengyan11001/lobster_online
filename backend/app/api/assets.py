@@ -1393,7 +1393,7 @@ def _resize_image_if_needed(
 # ── Download from URL ─────────────────────────────────────────────
 
 class ShanJianMaterialPrepareReq(BaseModel):
-    """给闪剪成片准备合规素材：可按素材 ID，也可按素材分组名。"""
+    """给数字人2.0成片准备合规素材：可按素材 ID，也可按素材分组名。"""
 
     asset_ids: List[str] = []
     groups: List[str] = []
@@ -3556,7 +3556,7 @@ def list_creative_candidate_groups(
     return {"ok": True, "groups": _creative_candidate_group_summaries(rows)}
 
 
-@router.post("/api/assets/shanjian-prepare", summary="为闪剪成片准备合规素材副本（本地降分辨率）")
+@router.post("/api/assets/shanjian-prepare", summary="为数字人2.0成片准备合规素材副本（本地降分辨率）")
 async def prepare_shanjian_material_copies(
     body: ShanJianMaterialPrepareReq,
     request: Request,
@@ -3683,17 +3683,17 @@ _SPLIT_PROGRESS_LOCK = threading.Lock()
 _SPLIT_PROGRESS: Dict[str, Dict[str, Any]] = {}
 
 
-# ── 闪剪素材合规化（在本地把超分辨率素材压成合规副本） ────────────────────────
-# 闪剪成片对素材有硬限制：最长边不能超过 2000（上游返回 InvalidFile.Resolution
+# ── 数字人2.0素材合规化（在本地把超分辨率素材压成合规副本） ────────────────────────
+# 数字人2.0成片对素材有硬限制：最长边不能超过 2000（上游返回 InvalidFile.Resolution
 # 时就是这条）。历史素材（例如 1080x2400 的竖版导出、2048 长边图片）会整单失败，
-# 所以在客户端先探测再压缩，只把合规副本交给闪剪，原文件与原本地素材行都不动。
+# 所以在客户端先探测再压缩，只把合规副本交给数字人2.0，原文件与原本地素材行都不动。
 
 SHANJIAN_MATERIAL_MAX_EDGE = 2000
 _SHANJIAN_TOOL_CACHE: dict[str, str] = {}
 
 
 def _shanjian_tools() -> tuple[str, str]:
-    """Resolve (ffmpeg, ffprobe) for the 闪剪 material pass.
+    """Resolve (ffmpeg, ffprobe) for the 数字人2.0 material pass.
 
     Prefers the binaries shipped with the client, then PATH, so a thin install
     that relies on PATH still works.
@@ -3734,7 +3734,7 @@ def parse_ffmpeg_probe_output(text: str) -> tuple[int, int, float]:
     """从 `ffmpeg -i` 的输出里读 (宽, 高, 时长)。
 
     本机没有 ffprobe 时的兜底：ffmpeg -i 会把流信息打到 stderr（进程以非 0 退出），
-    信息量足够判断素材有没有超过闪剪的分辨率上限。
+    信息量足够判断素材有没有超过数字人2.0的分辨率上限。
     """
     width = 0
     height = 0
@@ -3882,7 +3882,7 @@ def _shanjian_transcode_image(source: Path, dest: Path, *, target_w: int, target
 
 
 def _transcode_shanjian_copy(source: Path, dest: Path, *, media_type: str, width: int, height: int) -> None:
-    """Shrink one material file so its longest edge fits the 闪剪 limit."""
+    """Shrink one material file so its longest edge fits the 数字人2.0 limit."""
     target_w, target_h = shanjian_scaled_dimensions(width, height)
     if str(media_type or "").strip().lower() == "image":
         if _shanjian_transcode_image(source, dest, target_w=target_w, target_h=target_h):
@@ -3963,7 +3963,7 @@ async def ensure_shanjian_compliant_copy(
     db: Session,
     max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
 ) -> Dict[str, Any]:
-    """Guarantee one library asset has a copy the 闪剪 render API accepts.
+    """Guarantee one library asset has a copy the 数字人2.0 render API accepts.
 
     The original row and file stay as they are; the shrunken copy is stored as
     a new asset, keeps the material group, and takes over that group so the next
@@ -4025,7 +4025,7 @@ async def ensure_shanjian_compliant_copy(
         )
         if max(int(verified_width or 0), int(verified_height or 0)) > limit:
             raise RuntimeError(
-                f"压缩后仍超过闪剪上限：{verified_width}x{verified_height} > {limit}"
+                f"压缩后仍超过数字人2.0上限：{verified_width}x{verified_height} > {limit}"
             )
         data = dest.read_bytes()
         new_id, filename, size = _save_bytes(data, _shanjian_media_ext(media_type))

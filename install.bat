@@ -526,7 +526,7 @@ if not exist "deps\ffmpeg\ffmpeg.exe" (
 )
 echo   [OK] deps\ffmpeg\ffmpeg.exe
 if not exist "deps\ffmpeg\ffprobe.exe" (
-    echo   [WARN] deps\ffmpeg\ffprobe.exe missing - 数字人/闪剪素材分辨率校验、视频信息读取会不可用
+    echo   [WARN] deps\ffmpeg\ffprobe.exe missing - 数字人素材分辨率校验、视频信息读取会不可用
     echo         可在「系统配置 - 修复运行依赖」里补齐，或手动跑 scripts\ensure_ffmpeg_windows.py
 ) else (
     echo   [OK] deps\ffmpeg\ffprobe.exe

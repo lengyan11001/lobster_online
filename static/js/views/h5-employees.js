@@ -125,7 +125,7 @@
   }
   [
     ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销'],
-    ['shanjian_material_mix','素材混剪','不提交数字人：按口播内容从素材库多段挑素材混剪，套闪剪模板并按所选秒数出片。','AI营销'],
+    ['shanjian_material_mix','素材混剪','不提交数字人：按口播内容从素材库多段挑素材混剪，套数字人2.0模板并按所选秒数出片。','AI营销'],
     ['comfly.seedance.tvc.pipeline','创意分镜头视频','按连续分镜规划视频，并生成完整成片。','AI营销'],
     ['local_bestseller','同城爆款视频','围绕同城热点和门店场景生成爆款视频方案。','AI营销'],
     ['comfly.daihuo.pipeline','爆款TVC','使用素材或产品图生成广告短片。','AI营销'],

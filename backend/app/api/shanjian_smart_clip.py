@@ -260,10 +260,10 @@ def _resolve_virtualman_for_submit(
             ShanjianDigitalHumanProfile.user_id == int(current_user.id),
         ).first()
         if not row:
-            raise HTTPException(status_code=404, detail="未找到对应的闪剪数字人档案")
+            raise HTTPException(status_code=404, detail="未找到对应的数字人档案")
         resolved = _clean_text(row.virtualman_id)
         if row.status != "succeed" or not resolved:
-            raise HTTPException(status_code=400, detail="该闪剪数字人还未训练完成，暂时不能用于智能剪辑")
+            raise HTTPException(status_code=400, detail="该数字人2.0还未训练完成，暂时不能用于智能剪辑")
         return resolved
     if vmid:
         return vmid
@@ -277,7 +277,7 @@ def _resolve_virtualman_for_submit(
     ).first()
     if row and _clean_text(row.virtualman_id):
         return _clean_text(row.virtualman_id)
-    raise HTTPException(status_code=400, detail="请先创建并训练一个自己的闪剪数字人，或显式传入 virtualman_id")
+    raise HTTPException(status_code=400, detail="请先创建并训练一个自己的数字人2.0形象，或显式传入 virtualman_id")
 
 
 @router.post("/api/shanjian-smart-clip/templates")
@@ -346,7 +346,7 @@ async def select_mix_materials(
     """分组内随机选素材（不按文案打分、不用 AI 判断）。
 
     - 个人IP设置里已选素材分组时，只在分组内随机挑；
-    - 上限 20 条（闪剪素材上限）；
+    - 上限 20 条（数字人2.0素材上限）；
     - 素材库标签再少也能出片，用户只管选成片时长。
     """
     from .assets import _asset_hidden_from_library, _creative_candidate_group, ensure_shanjian_compliant_copy

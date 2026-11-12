@@ -647,7 +647,7 @@
     return headers;
   }
 
-  // 数字人分身训练素材：和素材库/分组素材一样，在本机（设备端）先压一份合规副本再提交闪剪。
+  // 数字人分身训练素材：和素材库/分组素材一样，在本机（设备端）先压一份合规副本再提交数字人2.0。
   // 本机接口不可用时保持原样（不阻断提交）。
   function prepareShanjianCompliantAssetIds(assetIds) {
     var ids = (assetIds || []).filter(function(id) { return !!id; });
@@ -2976,7 +2976,7 @@
   function loadAvatarLibrary(silent) {
     if (!silent) showMessage('正在加载数字人列表...', false);
     state.avatarLibrary.public_loading = false;
-    // 2.0 列表只放闪剪（数字人2.0）自己的形象。海螺形象在「数字人口播」页
+    // 2.0 列表只放数字人2.0自己的形象。海螺形象在「数字人口播」页
     // 管理：混到这里既不能生成（生成前会提示去数字人口播），删除按钮又打到
     // 2.0 的 profiles 接口上，必然删不掉，用户只会觉得“删不掉”。
     return Promise.all([
@@ -4902,7 +4902,7 @@
                   <div class="shanjian-section-head">
                     <div>
                       <h4>我的数字人</h4>
-                      <p>这里只放数字人2.0（闪剪）自己创建的数字人；海螺数字人请到「数字人口播」页使用和删除。</p>
+                      <p>这里只放数字人2.0自己创建的数字人；海螺数字人请到「数字人口播」页使用和删除。</p>
                     </div>
                     <span class="shanjian-section-count"><span id="shanjianMineCount">0</span> 个</span>
                   </div>

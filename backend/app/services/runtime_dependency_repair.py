@@ -289,7 +289,7 @@ def _repair_media_tools(timeout: int) -> dict[str, Any]:
     """补齐 deps/ffmpeg 下的 ffmpeg / ffprobe。
 
     2026-10-04 diag_20261004083756_12ea0605：客户机只装了 ffmpeg、没有 ffprobe，
-    闪剪素材分辨率校验全部报「本机缺少 ffprobe，无法校验素材分辨率」，数字人口播
+    数字人2.0素材分辨率校验全部报「本机缺少 ffprobe，无法校验素材分辨率」，数字人口播
     视频的素材准备被跳过。install.bat 以前也只下载 ffmpeg.exe，所以这里统一交给
     scripts/ensure_ffmpeg_windows.py 把两个二进制都补上。
     """

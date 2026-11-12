@@ -1649,7 +1649,7 @@ window._openHiddenWorkspaceView = function(view) {
     }
   }
   if (target === 'hifly-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
-    // 2026-11-09 统一到 2.0：任何按旧 view 名打开数字人的入口都改走闪剪。
+    // 2026-11-09 统一到 2.0：任何按旧 view 名打开数字人的入口都改走数字人2.0。
     // 1.0 页面本身保留，只给 2.0 的「训练新形象」内部流程用。
     window._openShanjianDigitalHumanView();
     return;

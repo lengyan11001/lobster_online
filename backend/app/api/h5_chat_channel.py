@@ -11095,7 +11095,7 @@ def _extract_mainland_mobile_numbers(value: Any, *, limit: int = 100) -> List[st
 
 
 def _workflow_digital_human_title(raw_title: Any, script: Any) -> str:
-    """闪剪把 title 渲染成片头，必须用文案标题；没有标题时取文案首句，不用节点名。"""
+    """数字人2.0把 title 渲染成片头，必须用文案标题；没有标题时取文案首句，不用节点名。"""
     title = _workflow_text(raw_title, 80)
     if title:
         return title
@@ -12102,9 +12102,9 @@ async def _prepare_shanjian_template_materials(
     base: str,
     run_id: str = "",
 ) -> Dict[str, Any]:
-    """Shrink oversized template materials locally before 闪剪 renders them.
+    """Shrink oversized template materials locally before 数字人2.0 renders them.
 
-    闪剪 rejects material videos/images whose longest edge exceeds 2000, and the
+    数字人2.0 rejects material videos/images whose longest edge exceeds 2000, and the
     library/group path never validated that. The copy is created on this machine
     (no server-side transcode) and takes over the group membership.
     """
@@ -12414,7 +12414,7 @@ async def _run_shanjian_digital_human_workflow(
                 base,
                 headers,
                 run_id,
-                f"已在本机把 {prepared['converted']} 个超出分辨率上限的素材压缩成合规副本，再交给闪剪",
+                f"已在本机把 {prepared['converted']} 个超出分辨率上限的素材压缩成合规副本，再交给数字人2.0",
             )
     except Exception as exc:
         logger.warning(
@@ -12596,7 +12596,7 @@ async def _run_shanjian_digital_human_workflow(
 
 
 async def _rehost_audio_for_shanjian(audio_url: str, *, title: str) -> str:
-    """闪剪只能拉公网音频；短文案 TTS 返回的是 data: URI，必须转存 TOS。
+    """数字人2.0只能拉公网音频；短文案 TTS 返回的是 data: URI，必须转存 TOS。
 
     The online client does not have a local ``users`` row, so the cloud user id
     from the persisted login (JWT sub, then fallback file) is the source of
@@ -12634,10 +12634,10 @@ async def _run_shanjian_material_mix_workflow(
     base: str,
     current_item: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """素材混剪：口播音频 + 多段本地素材 + 闪剪模板。
+    """素材混剪：口播音频 + 多段本地素材 + 数字人2.0模板。
 
     与数字人节点分开：不解析、不提交任何数字人形象，只把口播音频和
-    宽口径挑出来的素材交给闪剪 oralMixCutting 混剪，再套模板成片。
+    宽口径挑出来的素材交给数字人2.0 oralMixCutting 混剪，再套模板成片。
     """
     _raise_if_server_template_invalid(source)
     if cloud is None or not base:
@@ -12749,7 +12749,7 @@ async def _run_shanjian_material_mix_workflow(
         if not audio_url:
             raise RuntimeError("口播音频合成成功，但没有返回音频地址")
 
-    await _workflow_event(cloud, base, headers, run_id, "正在把口播音频转存成闪剪可下载的公网地址")
+    await _workflow_event(cloud, base, headers, run_id, "正在把口播音频转存成数字人2.0可下载的公网地址")
     try:
         audio_url = await _rehost_audio_for_shanjian(audio_url, title=title)
     except Exception as exc:
@@ -12761,7 +12761,7 @@ async def _run_shanjian_material_mix_workflow(
 
     style_id = _workflow_text(source.get("style_id") or source.get("template_id") or source.get("templateId"), 128)
     if not style_id:
-        raise RuntimeError("素材混剪缺少闪剪模板：请先在『个人设置 → 数字人模板』选择一个模板后再启动工作流")
+        raise RuntimeError("素材混剪缺少数字人2.0模板：请先在『个人设置 → 数字人模板』选择一个模板后再启动工作流")
 
     groups = _shanjian_template_group_names(source)
     if not groups:
@@ -12822,7 +12822,7 @@ async def _run_shanjian_material_mix_workflow(
         base,
         headers,
         run_id,
-        f"已选中 {len(materials)} 段素材（候选 {int(selection.get('candidates') or len(materials))} 段），正在提交闪剪混剪",
+        f"已选中 {len(materials)} 段素材（候选 {int(selection.get('candidates') or len(materials))} 段），正在提交数字人2.0混剪",
     )
 
     submit_body: Dict[str, Any] = {
@@ -12859,7 +12859,7 @@ async def _run_shanjian_material_mix_workflow(
     interval = _clamp_int(source.get("poll_interval_seconds"), 10, 5, 60)
     waited = 0
     last: Dict[str, Any] = {"ok": True, "status": "processing", "task_id": task_id}
-    await _workflow_event(cloud, base, headers, run_id, "素材混剪已提交，正在等待闪剪出片")
+    await _workflow_event(cloud, base, headers, run_id, "素材混剪已提交，正在等待数字人2.0出片")
     while waited <= poll_timeout:
         try:
             last = await _post_local_api_json(
