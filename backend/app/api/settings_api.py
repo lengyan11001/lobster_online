@@ -62,6 +62,21 @@ from ..services.runtime_dependency_repair import (
 
 logger = logging.getLogger(__name__)
 
+_EDITION_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _edition_http_client() -> httpx.AsyncClient:
+    """复用同一个 AsyncClient：避免每次调用都重建 SSL 上下文。"""
+    global _EDITION_HTTP_CLIENT
+    client = _EDITION_HTTP_CLIENT
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(4.0, connect=2.0),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2, keepalive_expiry=5.0),
+        )
+        _EDITION_HTTP_CLIENT = client
+    return client
+
 router = APIRouter()
 
 _CUSTOM_CONFIGS_FILE = Path(__file__).resolve().parent.parent.parent.parent / "custom_configs.json"
@@ -543,8 +558,9 @@ async def get_edition():
     base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
     if base:
         try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
-                r = await client.get(f"{base}/api/edition")
+            # /api/edition 在每次页面载入时都会调用；新建 AsyncClient 要重新加载
+            # SSL 根证书（本机实测 ~300ms），改成复用同一个客户端。
+            r = await _edition_http_client().get(f"{base}/api/edition", timeout=4.0)
             if r.status_code == 200:
                 remote = r.json()
                 if isinstance(remote, dict):
