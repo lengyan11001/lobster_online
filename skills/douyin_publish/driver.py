@@ -3242,7 +3242,24 @@ class DouyinDriver(BaseDriver):
         wait_rounds = _douyin_video_wait_rounds(file_size)
         _step("视频上传等待轮次", True, rounds=wait_rounds, file_size=file_size)
 
+        # 2026-11-12 线上（diag_20261112032725_32478f1d）：页面停在编辑态/图文态，
+        # 只剩 image input（inputs=['image/png','image/jpeg']），视频注入超时、FileChooser
+        # 也没反应。先确保回到一个全新的上传页，再切「发布视频」。
+        cur_url = str(getattr(page, "url", "") or "")
+        if "content/post/" in cur_url or "content/upload" not in cur_url:
+            try:
+                await page.goto(UPLOAD_URL, wait_until="domcontentloaded", timeout=_pw_ms(60000))
+                await asyncio.sleep(1.5)
+                logger.info("[DOUYIN-VIDEO] reset to upload page from %s", cur_url[:120])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[DOUYIN-VIDEO] goto upload page failed: %s", str(e)[:160])
+
         await _douyin_switch_publish_tab(page, "video")
+        for _ in range(3):
+            if await _douyin_find_video_file_input(page):
+                break
+            await asyncio.sleep(1.0)
+            await _douyin_switch_publish_tab(page, "video")
         await _human_delay(1, 2)
         await _dismiss_overlays(page, "video_tab")
 
@@ -3323,7 +3340,7 @@ class DouyinDriver(BaseDriver):
                     entry = _mk_entry()
                     if (await entry.count()) == 0 or not await entry.is_visible():
                         continue
-                    async with page.expect_file_chooser(timeout=_pw_ms(6000)) as fc_info:
+                    async with page.expect_file_chooser(timeout=_pw_ms(12000)) as fc_info:
                         await entry.click(timeout=_pw_ms(4000))
                     fc = await fc_info.value
                     await fc.set_files(file_path)
