@@ -6,6 +6,7 @@ into OpenClaw workspace memory folders so memory_search can see it.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import io
 import hashlib
@@ -15,6 +16,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -694,6 +696,22 @@ def _delete_indexed_doc_files(user_id: int, record: dict[str, Any]) -> list[str]
     return removed
 
 
+_MEMORY_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _memory_http_client() -> httpx.AsyncClient:
+    """复用同一个客户端：避免每次同步都重建 SSL 上下文（~300ms）。"""
+    global _MEMORY_HTTP_CLIENT
+    client = _MEMORY_HTTP_CLIENT
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            trust_env=False,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5, keepalive_expiry=5.0),
+        )
+        _MEMORY_HTTP_CLIENT = client
+    return client
+
+
 async def sync_openclaw_memory_from_cloud(
     request: Request,
     current_user: _ServerUser,
@@ -706,8 +724,9 @@ async def sync_openclaw_memory_from_cloud(
     if not headers.get("Authorization") or not headers.get("X-Installation-Id"):
         return {"ok": False, "skipped": "missing Authorization or X-Installation-Id"}
     try:
-        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
-            resp = await client.get(f"{base}/api/openclaw-memory/sync", headers=headers)
+        resp = await _memory_http_client().get(
+            f"{base}/api/openclaw-memory/sync", headers=headers, timeout=30.0
+        )
         if resp.status_code >= 400:
             detail = (resp.text or "")[:800]
             if raise_errors:
@@ -846,12 +865,35 @@ async def get_openclaw_memory_content(
     return {"ok": True, "document": found, "content_text": text}
 
 
+_MEMORY_SYNC_TTL_SECONDS = 60.0
+_MEMORY_SYNC_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_MEMORY_SYNC_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 @router.post("/api/openclaw/memory/sync-cloud", summary="Sync cloud-distributed OpenClaw memory docs")
 async def sync_cloud_openclaw_memory(
     request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return await sync_openclaw_memory_from_cloud(request, current_user, raise_errors=True)
+    # 这个接口在 13 个前端位置被调用（打开界面/刷新时都会打），每次都走一次云端
+    # 往返（实测 ~600ms）。同一登录态 60 秒内复用上一次结果，界面打开立刻返回。
+    auth = (request.headers.get("Authorization") or "").strip()
+    iid = (request.headers.get("X-Installation-Id") or "").strip()
+    key = f"{current_user.id}|{hashlib.sha256((auth + '|' + iid).encode('utf-8')).hexdigest()[:16]}"
+    hit = _MEMORY_SYNC_CACHE.get(key)
+    if hit is not None and time.monotonic() - hit[0] < _MEMORY_SYNC_TTL_SECONDS:
+        return hit[1]
+    lock = _MEMORY_SYNC_LOCKS.setdefault(key, asyncio.Lock())
+    async with lock:
+        hit = _MEMORY_SYNC_CACHE.get(key)
+        if hit is not None and time.monotonic() - hit[0] < _MEMORY_SYNC_TTL_SECONDS:
+            return hit[1]
+        result = await sync_openclaw_memory_from_cloud(request, current_user, raise_errors=True)
+        _MEMORY_SYNC_CACHE[key] = (time.monotonic(), result)
+        if len(_MEMORY_SYNC_CACHE) > 32:
+            for stale_key, _ in sorted(_MEMORY_SYNC_CACHE.items(), key=lambda kv: kv[1][0])[:8]:
+                _MEMORY_SYNC_CACHE.pop(stale_key, None)
+        return result
 
 
 @router.post("/api/openclaw/memory/upload", summary="Upload a document into OpenClaw memory")

@@ -1093,6 +1093,22 @@ def _cloud_headers_from_request(request: Request) -> Dict[str, str]:
     return _headers(jwt_token, installation_id)
 
 
+_PROXY_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _proxy_http_client() -> httpx.AsyncClient:
+    """云端代理复用同一个客户端：避免每次请求重建 SSL 上下文（~300ms）。"""
+    global _PROXY_HTTP_CLIENT
+    client = _PROXY_HTTP_CLIENT
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            trust_env=False,
+            limits=httpx.Limits(max_connections=30, max_keepalive_connections=15, keepalive_expiry=5.0),
+        )
+        _PROXY_HTTP_CLIENT = client
+    return client
+
+
 async def _proxy_cloud_json(
     request: Request,
     method: str,
@@ -1107,16 +1123,17 @@ async def _proxy_cloud_json(
         raise HTTPException(status_code=503, detail="AUTH_SERVER_BASE is not configured")
     headers = _cloud_headers_from_request(request)
     try:
-        async with httpx.AsyncClient(timeout=timeout_sec, trust_env=False) as client:
-            # 401 统一走续签+重试一次，避免 token 过期后界面静默停轮询
-            resp = await request_with_auth_retry(
-                client,
-                method,
-                f"{base}{path}",
-                params=params,
-                json=json_body,
-                headers=headers,
-            )
+        client = _proxy_http_client()
+        # 401 统一走续签+重试一次，避免 token 过期后界面静默停轮询
+        resp = await request_with_auth_retry(
+            client,
+            method,
+            f"{base}{path}",
+            params=params,
+            json=json_body,
+            headers=headers,
+            timeout=timeout_sec,
+        )
     except httpx.RequestError as exc:
         logger.warning("[SCHEDULED-TASK] proxy request failed path=%s: %s: %r", path, type(exc).__name__, exc)
         raise HTTPException(status_code=503, detail="Cloud scheduled task service is unreachable") from exc

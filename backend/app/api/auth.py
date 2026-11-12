@@ -241,15 +241,30 @@ async def _proxy_auth_form(path: str, form: Dict[str, str], request: Request) ->
     return resp.json()
 
 
+_AUTH_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _auth_http_client() -> httpx.AsyncClient:
+    """复用同一个客户端：新建一次要重新加载 SSL 根证书（本机实测 ~300ms）。"""
+    global _AUTH_HTTP_CLIENT
+    client = _AUTH_HTTP_CLIENT
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=5.0),
+        )
+        _AUTH_HTTP_CLIENT = client
+    return client
+
+
 async def _proxy_auth_json(path: str, payload: Dict[str, Any], request: Request, *, include_auth: bool = False) -> Dict[str, Any]:
     base = _auth_server_base_required()
     headers = _forward_headers_to_auth_server(request, include_auth=include_auth)
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        try:
-            resp = await client.post(f"{base}{path}", json=payload, headers=headers)
-        except httpx.RequestError as e:
-            logger.warning("[auth-proxy] %s request failed: %s", path, e)
-            raise HTTPException(status_code=503, detail="认证中心不可达") from e
+    client = _auth_http_client()
+    try:
+        resp = await client.post(f"{base}{path}", json=payload, headers=headers, timeout=20.0)
+    except httpx.RequestError as e:
+        logger.warning("[auth-proxy] %s request failed: %s", path, e)
+        raise HTTPException(status_code=503, detail="认证中心不可达") from e
     if resp.status_code >= 400:
         _raise_auth_server_response(resp)
     return resp.json()
