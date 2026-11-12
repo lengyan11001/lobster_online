@@ -466,8 +466,11 @@
         var fallbackUrl = normalizeAssetUrl(url);
         var previewPromise;
         var canPreviewByTts = voiceId && !isConsumerPreviewVoice(voiceId);
-        if (sampleText && canPreviewByTts) {
-          previewPromise = requestVoicePreviewTts(voiceId, sampleText, params, provider, fallbackUrl);
+        if (canPreviewByTts) {
+          // 试听一律用「当前参数」实时合成：语速 / 音量 / 语调改了要立刻听得到，
+          // 不能放上次保存的 demo，否则听永远是旧参数。
+          var previewText = sampleText || '你好，这是当前语速、音量和语调的试听，请听听效果是否合适。';
+          previewPromise = requestVoicePreviewTts(voiceId, previewText, params, provider, fallbackUrl);
         } else if (fallbackUrl) {
           previewPromise = Promise.resolve(fallbackUrl);
         } else if ((provider === 'minimax' || provider === 'qwen') && canPreviewByTts) {
