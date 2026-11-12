@@ -526,6 +526,10 @@
         if (record.target && record.target.parentElement) scheduleApply(record.target.parentElement);
         continue;
       }
+      if (record.type === 'attributes') {
+        if (record.target) scheduleApply(record.target);
+        continue;
+      }
       for (var j = 0; j < record.addedNodes.length; j += 1) {
         var node = record.addedNodes[j];
         if (node.nodeType === 1) scheduleApply(node);
@@ -535,7 +539,7 @@
   });
   function start() {
     apply(document.body);
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();

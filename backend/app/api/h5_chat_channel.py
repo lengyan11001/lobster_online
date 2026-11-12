@@ -77,7 +77,7 @@ def _poll_http_client() -> httpx.AsyncClient:
         client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0),
             trust_env=False,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=60.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=5.0),
         )
         _POLL_HTTP_CLIENT = client
     return client

@@ -12,7 +12,7 @@
 
   var RESOURCE_RETRY_DELAYS = [0, 280, 900, 1800];
   // 后端被长任务堵住时，界面 HTML 请求可能永远不返回，用户只看到白屏。
-  var VIEW_FETCH_TIMEOUT_MS = 20000;
+  var VIEW_FETCH_TIMEOUT_MS = 30000;
 
   function fetchWithTimeout(url, requestOptions, timeoutMs) {
     if (typeof AbortController !== 'function') return fetch(url, requestOptions);
