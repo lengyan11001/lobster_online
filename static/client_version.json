@@ -1,7 +1,7 @@
 {
-  "version": "2.0.270",
-  "build": 574,
-  "applied_at": "2026-11-12T18:42:53+08:00",
-  "note": "锁定槽位：machine_id 变化保留 signed 槽位；legacy 机器上报；客户端只接受显式允许的 signed 变更",
-  "bundle_sha256": "aa47d229bec220df55eae6de6dd15cab08065c7f6c585b0093daefcdbe425538"
+  "version": "2.0.271",
+  "build": 576,
+  "applied_at": "2026-11-12T18:57:09+08:00",
+  "note": "性能优化：云端代理复用连接、任务列表秒开、启动更快",
+  "bundle_sha256": "706ea613710b813ef9a86fbc52c46f1273828af249fdaf34c40786d89cb49440"
 }
