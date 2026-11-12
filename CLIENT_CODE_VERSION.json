@@ -1,7 +1,7 @@
 {
   "version": "2.0.270",
-  "build": 573,
-  "applied_at": "2026-11-12T17:28:37+08:00",
-  "note": "性能优化：轮询复用 HTTP 客户端、i18n 只翻译新增节点、媒体任务移出事件循环、界面加载超时、启动更快",
-  "bundle_sha256": "626707baf8cf1cb626a4b05e6b37be39aee52f0bf6a88ad1ad6ddf546ec2d14c"
+  "build": 574,
+  "applied_at": "2026-11-12T18:42:53+08:00",
+  "note": "锁定槽位：machine_id 变化保留 signed 槽位；legacy 机器上报；客户端只接受显式允许的 signed 变更",
+  "bundle_sha256": "aa47d229bec220df55eae6de6dd15cab08065c7f6c585b0093daefcdbe425538"
 }
