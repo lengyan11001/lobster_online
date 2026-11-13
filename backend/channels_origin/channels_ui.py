@@ -307,7 +307,7 @@ def _extract_cards(root: Any) -> List[Dict[str, Any]]:
         rect = _rect(node)
         if not rect or rect[1] < 120:
             continue
-        row: Dict[str, Any] = {"rect": rect, "raw": _text(node)}
+        row: Dict[str, Any] = {"rect": rect, "raw": _text(node), "is_live": ("直播" in _text(node))}
         for child in eng._uia_walk(node, max_depth=8, max_nodes=120):
             cls = _cls(child)
             value = _desc_text(child, max_depth=4, max_nodes=30)
@@ -474,6 +474,8 @@ def _extract_comments(root: Any) -> List[Dict[str, Any]]:
     names: List[Tuple[int, str]] = []
     contents: List[Tuple[int, int, str]] = []
     likes: Dict[int, str] = {}
+    metas: List[Tuple[int, str]] = []
+    avatars: List[Tuple[int, str]] = []
     for node in eng._uia_walk(root, max_depth=36, max_nodes=22000):
         cls = _cls(node)
         rect = _rect(node)
@@ -491,6 +493,41 @@ def _extract_comments(root: Any) -> List[Dict[str, Any]]:
             value = _desc_text(node, max_depth=3, max_nodes=10)
             if value:
                 likes[rect[1]] = value
+        elif "comment-avatar" in cls:
+            value = _text(node)
+            if value:
+                avatars.append((rect[1], value))
+        elif _type(node) == "TextControl":
+            value = _text(node)
+            if value and rect[0] >= 1260:
+                metas.append((rect[1], value))
+
+    def nearest_avatar(y: int) -> str:
+        candidates = [(abs(ay - y), av) for ay, av in avatars if abs(ay - y) <= 70]
+        return min(candidates)[1] if candidates else ""
+
+    def row_meta(y: int) -> Dict[str, Any]:
+        nearby = [(abs(my - y), text) for my, text in metas if abs(my - y) <= 70]
+        nearby.sort()
+        region = ""
+        time_text = ""
+        reply_count = ""
+        is_author = False
+        for _dist, text in nearby:
+            if text == "作者":
+                is_author = True
+                continue
+            if re.search(r"(刚刚|分钟前|小时前|天前|昨天|前天|\d{1,2}月\d{1,2}日|\d{4}年)", text):
+                time_text = time_text or text
+                continue
+            match = re.search(r"(\d+)\s*条回复", text)
+            if match:
+                reply_count = match.group(1)
+                continue
+            if not region and re.fullmatch(r"[\u4e00-\u9fa5]{2,8}", text):
+                region = text
+        return {"region": region, "time": time_text, "reply_count": reply_count, "is_author": is_author}
+
     rows = []
     for cy, cx, content in contents:
         candidates = [(ny, nv) for ny, nv in names if ny <= cy and cy - ny <= 90]
@@ -502,7 +539,16 @@ def _extract_comments(root: Any) -> List[Dict[str, Any]]:
             if abs(ly - cy) <= 35:
                 like = lv
                 break
-        rows.append({"nickname": nickname, "content": content, "like": like, "y": cy})
+        meta = row_meta(ny)
+        avatar = nearest_avatar(ny)
+        rows.append({
+            "nickname": nickname,
+            "content": content,
+            "like": like,
+            "avatar": avatar,
+            **meta,
+            "y": cy,
+        })
     return rows
 
 
@@ -513,11 +559,7 @@ def collect_comments(*, max_comments: int = 100, max_scroll_rounds: int = 8) -> 
     if not _comment_panel(root):
         button = _comment_button(root)
         if not button:
-            open_first_video()
-            root = auto.ControlFromHandle(hwnd)
-            button = _comment_button(root)
-        if not button:
-            raise ChannelsUiError("视频详情未找到评论按钮")
+            raise ChannelsUiError("当前页面不是可评论的视频详情（可能是直播/主页），请回到搜索结果重试")
         _click(button, label="评论按钮")
     _wait(lambda: _comment_panel(auto.ControlFromHandle(hwnd)), timeout=5.0)
     root = auto.ControlFromHandle(hwnd)
@@ -618,7 +660,7 @@ def _extract_accounts(root: Any) -> List[Dict[str, Any]]:
         rect = _rect(node)
         if not rect or rect[1] < 120:
             continue
-        row: Dict[str, Any] = {"rect": rect, "raw": _text(node)}
+        row: Dict[str, Any] = {"rect": rect, "raw": _text(node), "is_live": ("直播" in _text(node))}
         for child in eng._uia_walk(node, max_depth=8, max_nodes=120):
             cls = _cls(child)
             value = _desc_text(child, max_depth=4, max_nodes=30)
@@ -709,21 +751,36 @@ def _find_card_node(root: Any, card_key: str) -> Optional[Any]:
     rows = _extract_cards(root)
     target = next((row for row in rows if row.get("key") == card_key), None)
     if not target:
+        def norm(value: Any) -> str:
+            text = str(value or "")
+            text = re.sub(r"\s+", "", text)
+            return text.replace("...", "").replace("…", "")
+
         parts = str(card_key or "").split("|")
-        title = parts[0] if parts else ""
-        author = parts[1] if len(parts) > 1 else ""
-        duration = parts[2] if len(parts) > 2 else ""
+        title = norm(parts[0] if parts else "")
+        author = norm(parts[1] if len(parts) > 1 else "")
+        duration = norm(parts[2] if len(parts) > 2 else "")
+        date = norm(parts[3] if len(parts) > 3 else "")
         candidates = []
         for row in rows:
-            row_title = str(row.get("title") or "")
-            row_author = str(row.get("author") or "")
-            row_duration = str(row.get("duration") or "")
+            if row.get("is_live"):
+                continue
+            row_title = norm(row.get("title") or "")
+            row_author = norm(row.get("author") or "")
+            row_duration = norm(row.get("duration") or "")
+            row_date = norm(row.get("date") or "")
             score = 0
-            if title and (row_title == title or row_title.startswith(title[:18]) or title.startswith(row_title[:18])):
+            if title and row_title == title:
+                score += 4
+            elif title and row_title and (row_title.startswith(title[:16]) or title.startswith(row_title[:16])):
                 score += 3
+            elif title and row_title and (title[:16] in row_title or row_title[:16] in title):
+                score += 2
             if author and row_author == author:
                 score += 2
             if duration and row_duration == duration:
+                score += 1
+            if date and row_date == date:
                 score += 1
             if score >= 3:
                 candidates.append((score, row))
@@ -738,15 +795,74 @@ def _find_card_node(root: Any, card_key: str) -> Optional[Any]:
     return None
 
 
-def collect_comments_for_card(keyword: str, card_key: str, *, max_comments: int = 100) -> Dict[str, Any]:
-    """重新搜索关键词，定位指定卡片，打开并采集评论。"""
-    search_videos(keyword, max_results=30, max_scroll_rounds=5)
-    hwnd = channels_hwnd()
-    _foreground_channels(hwnd)
+def close_comment_panel() -> bool:
+    hwnd = channels_hwnd(required=False)
+    if not hwnd:
+        return False
     root = auto.ControlFromHandle(hwnd)
-    node = _find_card_node(root, card_key)
-    if node is None:
+    for node in eng._uia_walk(root, max_depth=30, max_nodes=16000):
+        cls = _cls(node)
+        name = _text(node)
+        rect = _rect(node)
+        if "close-btn" in cls or (name == "关闭" and rect and 1250 <= rect[0] <= 1320 and rect[1] < 110):
+            try:
+                eng._click_uia_node(node)
+                time.sleep(0.6)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def close_extra_channels_windows(keep_hwnd: Optional[int] = None) -> int:
+    keep = int(keep_hwnd or 0)
+    targets: List[int] = []
+
+    def callback(win: int, _extra: Any) -> None:
+        if win == keep or not win32gui.IsWindowVisible(win):
+            return
+        if str(win32gui.GetClassName(win) or "") != "Chrome_WidgetWin_0":
+            return
+        if str(win32gui.GetWindowText(win) or "") not in ("微信", "WeChat", "Weixin"):
+            return
+        if not _doc_names(win):
+            return
+        targets.append(win)
+
+    win32gui.EnumWindows(callback, None)
+    for win in targets:
+        try:
+            win32gui.PostMessage(win, win32con.WM_CLOSE, 0, 0)
+        except Exception:
+            continue
+    if targets:
+        time.sleep(0.8)
+    return len(targets)
+
+
+def collect_comments_for_card(keyword: str, card_key: str, *, max_comments: int = 100, close_after: bool = True, source_query: str = "") -> Dict[str, Any]:
+    """重新搜索关键词/来源查询，定位指定卡片，打开并采集评论。"""
+    hwnd = None
+    node = None
+    for query in dict.fromkeys([source_query or keyword, keyword]):
+        if not query:
+            continue
+        search_videos(query, max_results=50, max_scroll_rounds=6)
+        hwnd = channels_hwnd()
+        _foreground_channels(hwnd)
+        root = auto.ControlFromHandle(hwnd)
+        node = _find_card_node(root, card_key)
+        if node is not None:
+            break
+    if node is None or hwnd is None:
         raise ChannelsUiError("搜索结果里找不到目标视频，可能已下架或排序变化")
     _click(node, label="目标视频卡片")
     _wait(lambda: _feed_group(auto.ControlFromHandle(hwnd)), timeout=6.0)
-    return collect_comments(max_comments=max_comments)
+    result = collect_comments(max_comments=max_comments)
+    if close_after:
+        try:
+            close_comment_panel()
+            close_extra_channels_windows(keep_hwnd=hwnd)
+        except Exception:
+            pass
+    return result

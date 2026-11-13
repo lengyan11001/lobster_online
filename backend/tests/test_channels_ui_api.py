@@ -64,9 +64,28 @@ def test_extract_contacts():
     assert "12345678" in result["qqs"]
 
 
+def _fake_ai(request, title, comments, prompt, strategy="prompt", model=""):
+    return {
+        "ok": True,
+        "error": "",
+        "items": [
+            {
+                "comment_id": "小王|需要设计，加我微信 abc12345",
+                "nickname": "小王",
+                "content": "需要设计，加我微信 abc12345",
+                "reason": "明确设计需求并留下联系方式",
+                "score": 0.96,
+                "intent_level": "high",
+                "is_high_intent": True,
+            }
+        ],
+    }
+
+
 def test_search_task_pipeline(client, monkeypatch):
     monkeypatch.setattr(channels_api.channels_ui, "search_videos", _fake_search)
     monkeypatch.setattr(channels_api.channels_ui, "collect_comments_for_card", _fake_comments)
+    monkeypatch.setattr(channels_api, "ai_filter_comments", _fake_ai)
 
     search = client.post("/api/channels/search/videos", json={"keyword": "装修", "max_results": 5}).json()
     assert search["code"] == 200
@@ -105,3 +124,28 @@ def test_capabilities(client):
     assert by_key["video_search"]["supported"] is True
     assert by_key["video_comments"]["supported"] is True
     assert by_key["private_message"]["supported"] is False
+
+
+def test_parse_like_count():
+    assert channels_api.parse_like_count("1.9万") == 19000
+    assert channels_api.parse_like_count("4429") == 4429
+    assert channels_api.parse_like_count("10万+") == 100000
+    assert channels_api.parse_like_count("") == 0
+
+
+def test_mark_video_candidates_filters_and_dedupes():
+    items = [
+        {"key": "a", "like": "100"},
+        {"key": "b", "like": "1000"},
+        {"key": "c", "like": "1.9万"},
+    ]
+    result = channels_api.mark_video_candidates(
+        items,
+        {"min_likes": 500, "avg_multiplier": 1.5, "exclude_historical_duplicates": True},
+        {"c"},
+    )
+    by_key = {row["key"]: row for row in result}
+    assert by_key["a"]["criteria_matched"] is False
+    assert by_key["b"]["criteria_matched"] is True
+    assert by_key["c"]["is_historical_duplicate"] is True
+    assert by_key["c"]["export_selected"] is False
