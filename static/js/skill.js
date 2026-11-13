@@ -1773,14 +1773,6 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'meta-social' && typeof window._openMetaSocialView === 'function') {
     window._openMetaSocialView();
-    return;
-  }
-  if (target === 'channels-workbench' && typeof window.showLobsterView === 'function') {
-    window.showLobsterView('channels-workbench').catch(function(error) {
-      console.error('Failed to open channels workbench:', error);
-    });
-    try { location.hash = 'channels-workbench'; } catch (e1) {}
-    return;
   }
 };
 

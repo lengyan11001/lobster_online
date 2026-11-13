@@ -30,7 +30,7 @@ def test_global_navigation_matches_workbench_layout():
     assert "AI调度助手" in html
     assert "AI营销创作" in html
     assert "AI获客" in html
-    assert "私域接管" in html
+    assert "私域销管" in html
     assert "AI海外平台" in html
     assert "抖音获客" in html
     assert "个微" in html
@@ -38,7 +38,7 @@ def test_global_navigation_matches_workbench_layout():
     assert "AI私域销冠" not in html
     assert "销售引流获客" not in html
     assert "服务运营交付" not in html
-    assert "视频号获客" in html
+    assert "视频号获客" not in html
     assert "快手获客" not in html
     assert "小红书获客" not in html
     sidebar_nav = html[html.index('<div class="chat-sidebar-nav'): html.index('<div class="chat-sidebar-section-label">')]

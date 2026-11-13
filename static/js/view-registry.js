@@ -37,11 +37,6 @@
     cache: 'reload'
   });
 
-  window.registerLobsterView('channels-workbench', {
-    html: '/static/views/channels-workbench.html?v=20261113-v1',
-    cache: 'reload'
-  });
-
   window.registerLobsterView('openclaw-memory', {
     html: '/static/views/openclaw-memory.html?v=20260601-memory-manager',
     cache: 'reload'
