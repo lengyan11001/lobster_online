@@ -1433,6 +1433,11 @@ def main() -> int:
                 _add_tree(zf, pack_root, rel)
             packed_manifest_paths.append(rel)
 
+    if only_paths:
+        marker = {"targeted": True, "paths": packed_manifest_paths}
+        with zipfile.ZipFile(out, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("OTA_PATHS.json", json.dumps(marker, ensure_ascii=False, indent=2))
+
     if encrypted_tmp is not None:
         try:
             encrypted_tmp.cleanup()
