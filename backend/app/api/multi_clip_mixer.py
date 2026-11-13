@@ -911,7 +911,8 @@ async def concat_multi_clip_videos(
 
 
 class ReplaceAudioBody(BaseModel):
-    video_url: str = Field(..., min_length=1, max_length=2000)
+    video_asset_id: Optional[str] = Field(default=None, max_length=64)
+    video_url: Optional[str] = Field(default=None, max_length=2000)
     title: str = Field("剪辑大师", max_length=80)
     audio_mode: str = Field("original", max_length=16)
     audio_asset_id: Optional[str] = Field(default=None, max_length=64)
@@ -933,6 +934,8 @@ async def replace_multi_clip_audio(
     mode = (body.audio_mode or "").strip()
     if mode not in {"original", "bgm"}:
         raise HTTPException(status_code=400, detail="不支持的音频模式")
+    if not str(body.video_asset_id or "").strip() and not str(body.video_url or "").strip():
+        raise HTTPException(status_code=400, detail="缺少模板成片地址")
     if mode == "original" and not str(body.audio_asset_id or "").strip():
         raise HTTPException(status_code=400, detail="请先标记一个原声源视频")
     if mode == "bgm" and not str(body.bgm_url or "").strip():
@@ -942,7 +945,14 @@ async def replace_multi_clip_audio(
     ffprobe = _find_ffprobe(ffmpeg)
     work_dir = Path(tempfile.mkdtemp(prefix="mcm_audio_"))
     try:
-        video_path = _download_remote_video(body.video_url, work_dir)
+        if str(body.video_asset_id or "").strip():
+            video_path, _, media_type = resolve_asset_path(
+                db, current_user.id, str(body.video_asset_id).strip()
+            )
+            if media_type != "video":
+                raise HTTPException(status_code=400, detail="模板成片不是视频")
+        else:
+            video_path = _download_remote_video(str(body.video_url or ""), work_dir)
         info = _probe_video(video_path, ffprobe)
         duration = float(info["duration"] or 0) or float(body.duration or 0)
         if duration <= 0.1:
@@ -996,6 +1006,7 @@ async def replace_multi_clip_audio(
             meta={
                 "title": (body.title or "剪辑大师").strip()[:80],
                 "audio_mode": mode,
+                "video_asset_id": str(body.video_asset_id or "").strip(),
                 "audio_source_asset_id": str(body.audio_asset_id or "").strip(),
                 "bgm_name": (body.bgm_name or "").strip()[:120],
                 "bgm_url": (body.bgm_url or "").strip()[:1000],

@@ -91,14 +91,6 @@
             </div>
             <div class="mcm-step-title" style="margin:10px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 2 步 · 选择模板</div>
             <label id="mcmTemplateRandomRow" class="mcm-template-random-row"><span><strong>模板选择</strong><small>关闭后选择指定模板；开启后每条随机选择模板。</small></span><span class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>随机模板</span></span></label>
-            <div id="mcmShanjianAudioRow" class="mcm-setting-row mcm-audio-mode-row">
-              <span><strong>模板成片音频</strong><small id="mcmShanjianAudioHint">选择成片最终使用哪路声音。</small></span>
-              <div class="mcm-audio-mode-options">
-                <label id="mcmShanjianAudioOriginalLabel"><input type="radio" name="mcmShanjianAudioMode" value="original"><span>原声</span></label>
-                <label id="mcmShanjianAudioBgmLabel"><input type="radio" name="mcmShanjianAudioMode" value="bgm"><span>背景音乐</span></label>
-                <label id="mcmShanjianAudioTemplateLabel"><input type="radio" name="mcmShanjianAudioMode" value="template" checked><span>模板声音</span></label>
-              </div>
-            </div>
             <div id="mcmTemplateChoiceArea">
               <div class="mcm-choice-toolbar">
               <div>
@@ -174,6 +166,15 @@
               <label class="mcm-volume-control">音量 <input id="mcmMusicVolume" type="range" min="0" max="1" step="0.05" value="0.24"><output id="mcmMusicVolumeValue">24%</output></label>
             </div>
             <div id="mcmMusicGrid" class="mcm-music-grid"></div>
+          </div>
+
+          <div id="mcmFinalAudioRow" class="mcm-setting-row mcm-audio-mode-row">
+            <span><strong>模板成片音频</strong><small id="mcmFinalAudioHint">选择成片最终使用哪路声音。</small></span>
+            <div class="mcm-audio-mode-options">
+              <label id="mcmFinalAudioOriginalLabel"><input type="radio" name="mcmFinalAudioMode" value="original"><span>原声</span></label>
+              <label id="mcmFinalAudioBgmLabel"><input type="radio" name="mcmFinalAudioMode" value="bgm"><span>背景音乐</span></label>
+              <label id="mcmFinalAudioTemplateLabel"><input type="radio" name="mcmFinalAudioMode" value="template" checked><span>模板声音</span></label>
+            </div>
           </div>
         </section>
 

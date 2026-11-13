@@ -195,30 +195,31 @@
     return currentTemplateProvider() === 'shanjian' && currentMixerTemplateScene() === 'realMan';
   }
 
-  function shanjianAudioFallback() {
+  function finalAudioFallback() {
     if (markedAudioClip()) return 'original';
     if (hasSelectableBgm()) return 'bgm';
     if (!isShanjianRealmanScene()) return 'template';
     return '';
   }
 
-  function currentShanjianAudioMode() {
-    var checked = document.querySelector('input[name="mcmShanjianAudioMode"]:checked');
+  function currentFinalAudioMode() {
+    var checked = document.querySelector('input[name="mcmFinalAudioMode"]:checked');
     var mode = checked ? String(checked.value || '') : 'template';
     if (mode !== 'original' && mode !== 'bgm' && mode !== 'template') mode = 'template';
     if (mode === 'original' && !markedAudioClip()) mode = '';
     if (mode === 'bgm' && !hasSelectableBgm()) mode = '';
     if (mode === 'template' && isShanjianRealmanScene()) mode = '';
-    if (!mode) return shanjianAudioFallback();
+    if (!mode) return finalAudioFallback();
     return mode;
   }
 
-  function syncShanjianAudioOptions() {
-    var row = $('mcmShanjianAudioRow');
-    if (row) row.hidden = currentTemplateProvider() !== 'shanjian';
-    var original = document.querySelector('input[name="mcmShanjianAudioMode"][value="original"]');
-    var bgm = document.querySelector('input[name="mcmShanjianAudioMode"][value="bgm"]');
-    var template = document.querySelector('input[name="mcmShanjianAudioMode"][value="template"]');
+  function syncFinalAudioOptions() {
+    var row = $('mcmFinalAudioRow');
+    var templateOn = !!(($('mcmTemplateSwitch') || {}).checked);
+    if (row) row.hidden = !templateOn;
+    var original = document.querySelector('input[name="mcmFinalAudioMode"][value="original"]');
+    var bgm = document.querySelector('input[name="mcmFinalAudioMode"][value="bgm"]');
+    var template = document.querySelector('input[name="mcmFinalAudioMode"][value="template"]');
     if (!original || !bgm || !template) return;
     var hasOriginal = !!markedAudioClip();
     var hasBgm = hasSelectableBgm();
@@ -230,16 +231,21 @@
       var label = radio.closest('label');
       if (label) label.classList.toggle('is-disabled', !!radio.disabled);
     });
-    var checked = document.querySelector('input[name="mcmShanjianAudioMode"]:checked');
+    var checked = document.querySelector('input[name="mcmFinalAudioMode"]:checked');
     if (!checked || checked.disabled) {
-      var fallback = shanjianAudioFallback();
-      var next = fallback ? document.querySelector('input[name="mcmShanjianAudioMode"][value="' + fallback + '"]') : null;
+      var fallback = finalAudioFallback();
+      var next = fallback ? document.querySelector('input[name="mcmFinalAudioMode"][value="' + fallback + '"]') : null;
       if (next && !next.disabled) next.checked = true;
     }
-    var hint = $('mcmShanjianAudioHint');
+    var hint = $('mcmFinalAudioHint');
+    var isLocal = currentTemplateProvider() === 'local';
     if (hint) {
       if (realman) {
         hint.textContent = '真人模板会校验真人讲话：请选择原声或背景音乐；模板声音不可用。';
+      } else if (isLocal) {
+        hint.textContent = hasOriginal || hasBgm
+          ? '我们的模板不带独立音轨：选模板声音保留基础成片原声；选原声/背景音乐会在成片后替换。'
+          : '选模板声音会保留基础成片原声；要换声音，请先点素材「用原声」或开启背景音乐。';
       } else if (!hasOriginal && !hasBgm) {
         hint.textContent = '先在素材卡片点「用原声」，或开启背景音乐并选一首。';
       } else if (!hasOriginal) {
@@ -854,7 +860,7 @@
     renderSegmentTextInputs();
     renderTemplateLayout();
     hydrateClipPosters();
-    syncShanjianAudioOptions();
+    syncFinalAudioOptions();
   }
 
   function uploadVideo(file) {
@@ -1397,7 +1403,7 @@
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').hidden = true;
     renderTemplateOverlayFields();
     renderTemplateLayout();
-    syncShanjianAudioOptions();
+    syncFinalAudioOptions();
   }
 
   function shanjianEditInfo(detail) {
@@ -2148,7 +2154,7 @@
         + '<span><strong>' + escapeHtml(item.music_name || '背景音乐') + '</strong><small>' + escapeHtml(item.note || (item.has_preview ? '可试听' : '默认音乐')) + '</small></span></button>';
     }).join('');
     if ($('mcmMusicPicked')) $('mcmMusicPicked').textContent = randomMusic ? '每条随机选择' : (state.selectedMusic ? ('已选：' + (state.selectedMusic.music_name || '背景音乐')) : '还未选择');
-    syncShanjianAudioOptions();
+    syncFinalAudioOptions();
   }
 
   function loadMusicOptions() {
@@ -2279,6 +2285,49 @@
     return setResultVideo(saved).then(function() { return saved; });
   }
 
+  function applyFinalAudioToResult(result, baseResult) {
+    var audioMode = currentFinalAudioMode();
+    if (audioMode !== 'original' && audioMode !== 'bgm') return Promise.resolve(result);
+    var audioClip = markedAudioClip();
+    var audioAssetId = String((baseResult && baseResult.audio_asset_id) || (audioClip && audioClip.assetId) || '');
+    var music = (baseResult && baseResult.music) || null;
+    var bgmUrl = audioMode === 'bgm'
+      ? String((music && music.bgm_url) || (($('mcmMusicSwitch') || {}).checked ? (selectedMusicForRun(true) || {}).bgm_url : '') || '')
+      : '';
+    if (audioMode === 'original' && !audioAssetId) {
+      return Promise.reject(new Error('还没有标记原声源，请先在素材卡片点「用原声」'));
+    }
+    if (audioMode === 'bgm' && !bgmUrl) {
+      return Promise.reject(new Error('背景音乐没有可用地址，请重新选择背景音乐'));
+    }
+    var videoAssetId = String((result && result.asset_id) || '');
+    var videoUrl = String((result && (result.source_url || result.video_url)) || '');
+    if (!videoAssetId && !videoUrl) return Promise.resolve(result);
+    progress('template', 'active', audioMode === 'original' ? '正在替换为原声音轨' : '正在替换为背景音乐');
+    return post('/api/multi-clip-mixer/replace-audio', {
+      video_asset_id: videoAssetId,
+      video_url: videoAssetId ? '' : videoUrl,
+      title: normalizeShanjianTitle(templateTitleValue()),
+      audio_mode: audioMode,
+      audio_asset_id: audioMode === 'original' ? audioAssetId : '',
+      bgm_url: bgmUrl,
+      bgm_name: String((music && music.music_name) || ''),
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
+      audio_volume: 1,
+      duration: Number((result && result.duration) || (baseResult && baseResult.duration) || 0)
+    }).then(function(replaced) {
+      var out = Object.assign({}, result || {}, {
+        asset_id: replaced.asset_id || '',
+        source_url: replaced.source_url || '',
+        preview_url: replaced.preview_url || '',
+        duration: Number(replaced.duration || (result && result.duration) || 0),
+        completion_message: '模板成片已完成，已替换为' + (audioMode === 'original' ? '原声' : '背景音乐') + '。'
+      });
+      progress('template', 'done', '音频替换完成');
+      return out;
+    });
+  }
+
   function pollShanjianTask(taskId) {
     return new Promise(function(resolve, reject) {
       var startedAt = Date.now();
@@ -2319,7 +2368,7 @@
     return loadShanjianTemplateDetail(state.selectedTemplate).then(function(detailResponse) {
       var editInfo = shanjianEditInfo(detailResponse);
       var supportsIpLayer = !!editInfo.ipLayer;
-      var submitAudioMode = currentShanjianAudioMode();
+      var submitAudioMode = currentFinalAudioMode();
       var keepAudio = isShanjianRealmanScene() && (submitAudioMode === 'original' || submitAudioMode === 'bgm');
       var structLayers = [];
       if (editInfo.headerLayer) structLayers.push({ markCode: 'headerLayer', show: true });
@@ -2361,45 +2410,15 @@
         progress('template', 'done', '本段模板完成，等待拼接');
         return saved;
       }
-      var audioMode = currentShanjianAudioMode();
+      var audioMode = currentFinalAudioMode();
       if (audioMode !== 'original' && audioMode !== 'bgm') {
         progress('template', 'done', '数字人2.0模板处理完成');
         return setResultVideo(saved).then(function() { return saved; });
       }
-      var audioClip = markedAudioClip();
-      var audioAssetId = String(baseResult.audio_asset_id || (audioClip && audioClip.assetId) || '');
-      var music = baseResult.music || null;
-      var bgmUrl = audioMode === 'bgm'
-        ? String((music && music.bgm_url) || (($('mcmMusicSwitch') || {}).checked ? (selectedMusicForRun(true) || {}).bgm_url : '') || '')
-        : '';
-      if (audioMode === 'original' && !audioAssetId) {
-        return Promise.reject(new Error('还没有标记原声源，请先在素材卡片点「用原声」'));
-      }
-      if (audioMode === 'bgm' && !bgmUrl) {
-        return Promise.reject(new Error('背景音乐没有可用地址，请重新选择背景音乐'));
-      }
-      progress('template', 'active', audioMode === 'original' ? '正在替换为原声音轨' : '正在替换为背景音乐');
-      return post('/api/multi-clip-mixer/replace-audio', {
-        video_url: task.video_url || '',
-        title: title,
-        audio_mode: audioMode,
-        audio_asset_id: audioMode === 'original' ? audioAssetId : '',
-        bgm_url: bgmUrl,
-        bgm_name: String((music && music.music_name) || ''),
-        bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
-        audio_volume: 1,
-        duration: finalDuration
-      }).then(function(replaced) {
-        var out = {
-          asset_id: replaced.asset_id || '',
-          source_url: replaced.source_url || '',
-          preview_url: replaced.preview_url || '',
-          duration: Number(replaced.duration || finalDuration),
-          introduce_name: title,
-          introduce_description: description,
-          completion_message: '数字人2.0模板成片已完成，已替换为' + (audioMode === 'original' ? '原声' : '背景音乐') + '。'
-        };
-        progress('template', 'done', '音频替换完成');
+      return applyFinalAudioToResult(saved, baseResult).then(function(out) {
+        out.introduce_name = title;
+        out.introduce_description = description;
+        out.completion_message = '数字人2.0模板成片已完成，已替换为' + (audioMode === 'original' ? '原声' : '背景音乐') + '。';
         return setResultVideo(out).then(function() { return out; });
       });
     });
@@ -2466,6 +2485,11 @@
       progress('template', 'active', '任务 ' + submitted.job_id + ' 处理中');
       return pollTemplateTask(submitted.job_id, pending.createdAt).then(function(task) {
         return finishTemplateTask(task, submitted.job_id, baseResult);
+      }).then(function(result) {
+        return applyFinalAudioToResult(result, baseResult).then(function(out) {
+          if (out === result) return out;
+          return setResultVideo(out).then(function() { return out; });
+        });
       });
     });
   }
@@ -2509,13 +2533,14 @@
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
     var clipPlan = buildClipPlan(runIndex);
-    var audioMode = currentShanjianAudioMode();
+    var audioMode = currentFinalAudioMode();
     var shanjianTemplate = !!options.useTemplate && currentTemplateProvider() === 'shanjian';
     var realmanTemplate = shanjianTemplate && currentMixerTemplateScene() === 'realMan';
     var keepBaseAudio = !!(options.useTemplate && (
       currentTemplateProvider() === 'local'
       || (shanjianTemplate && (realmanTemplate || audioMode === 'original'))
     ));
+    var suppressBaseBgm = shanjianTemplate || (!!options.useTemplate && audioMode !== 'template');
     var baseAudioAssetId = audioClip && (
       currentTemplateProvider() === 'local'
       || audioMode === 'original'
@@ -2552,8 +2577,8 @@
       output_index: runIndex,
       // 后面还要套模板：这条基础成片属于中间产物，不写入内容记录
       intermediate: !!options.useTemplate,
-      bgm_url: (!shanjianTemplate && music) ? music.bgm_url : '',
-      bgm_name: (!shanjianTemplate && music) ? music.music_name : '',
+      bgm_url: (!suppressBaseBgm && music) ? music.bgm_url : '',
+      bgm_name: (!suppressBaseBgm && music) ? music.music_name : '',
       bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
       output_ratio: currentOutputRatio(),
       fill_mode: currentFillMode()
@@ -2769,7 +2794,7 @@
     var useTemplate = !!(($('mcmTemplateSwitch') || {}).checked);
     var useMusic = !!(($('mcmMusicSwitch') || {}).checked);
     if (useTemplate && currentTemplateProvider() === 'shanjian') {
-      var audioMode = currentShanjianAudioMode();
+      var audioMode = currentFinalAudioMode();
       if (isShanjianRealmanScene() && !audioMode) {
         return showMessage('真人模板需要真人讲话：请先在素材卡片点「用原声」，或开启背景音乐并选择一首。', true);
       }
@@ -3032,6 +3057,7 @@
     if ($('mcmTemplateSwitch')) $('mcmTemplateSwitch').addEventListener('change', function(event) {
       $('mcmTemplatePanel').hidden = !event.target.checked;
       if (event.target.checked && !state.templateCatalog.length) loadTemplates(true).catch(function(error) { showMessage(error.message, true); });
+      syncFinalAudioOptions();
     });
     Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmTemplateProvider"]'), function(input) {
       input.addEventListener('change', function() {
@@ -3048,10 +3074,10 @@
     if ($('mcmMusicSwitch')) $('mcmMusicSwitch').addEventListener('change', function(event) {
       $('mcmMusicPanel').hidden = !event.target.checked;
       if (event.target.checked && !state.musicOptions.length) loadMusicOptions().catch(function(error) { showMessage(error.message, true); });
-      syncShanjianAudioOptions();
+      syncFinalAudioOptions();
     });
-    Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmShanjianAudioMode"]'), function(input) {
-      input.addEventListener('change', function() { syncShanjianAudioOptions(); });
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmFinalAudioMode"]'), function(input) {
+      input.addEventListener('change', function() { syncFinalAudioOptions(); });
     });
     if ($('mcmRandomMusicSwitch')) $('mcmRandomMusicSwitch').addEventListener('change', renderMusicOptions);
     var searchTimer = null;
@@ -3315,7 +3341,7 @@
     loadHistory();
     syncModePanels();
     renderClips();
-    syncShanjianAudioOptions();
+    syncFinalAudioOptions();
     renderBatchResults();
     renderHistory();
     restoreLatestResult();
