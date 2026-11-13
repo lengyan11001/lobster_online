@@ -70,7 +70,7 @@
   <title>__LOBSTER_DOCUMENT_TITLE__</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
-  <link rel="stylesheet" href="/static/css/common.css?v=20261113-drag-fix-1">
+  <link rel="stylesheet" href="/static/css/common.css?v=20261113-drag-fix-2">
     <link rel="stylesheet" href="/static/css/index.css?v=20261110-imglab-ui-v1">
   <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20261111-ps-multiselect-overlay">
   <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
@@ -78,7 +78,7 @@
 <body>
   <div class="page">
             <header class="header auth-guest pywebview-drag-region" id="appHeader">
-    <div class="window-drag-strip" id="windowDragStrip" hidden aria-hidden="true"></div>
+    <div class="window-drag-strip pywebview-drag-region" id="windowDragStrip" hidden aria-hidden="true"></div>
       <div class="header-left">
         <div class="logo">
           <img class="logo-mark" id="brandLogoMark" src="__LOBSTER_LOGO_MARK__" width="32" height="32" alt="">
@@ -3160,7 +3160,10 @@
     }
   }
   window.addEventListener('pywebviewready', show);
+  document.addEventListener('DOMContentLoaded', show);
   setTimeout(show, 800);
+  setTimeout(show, 2000);
+  setTimeout(show, 5000);
   box.addEventListener('click', function (e) {
     var btn = e.target && e.target.closest ? e.target.closest('button[data-win]') : null;
     if (!btn) return;
