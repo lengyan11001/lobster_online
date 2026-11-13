@@ -18,6 +18,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
 .ref-chip .ref-remove{text-decoration:none}
 .hist-actions button{border:1px solid #bfdbfe;color:#2563eb;background:#fff;border-radius:8px;font-size:11px;padding:6px 12px;display:inline-flex;align-items:center;gap:4px}
 .hist-actions button:hover{background:#2563eb;color:#fff}
+#submit-image-btn:disabled,#submit-video-btn:disabled{background:#9ca3af!important;background-image:none!important;box-shadow:none!important;cursor:not-allowed;opacity:.85}
 </style>
 </head>
 <body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
@@ -533,7 +534,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
 
   function setQuote(mode, text) { var q = el(mode + "-quote-text"); if (q) q.textContent = text; }
   function setResult(html) { el("result-body").innerHTML = html; }
+  function setSubmitBusy(mode, busy) {
+    var btn = el("submit-" + mode + "-btn");
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+  function restoreSubmitButtons() {
+    setSubmitBusy("image", false);
+    setSubmitBusy("video", false);
+  }
   function submit(mode) {
+    var submitBtn = el("submit-" + mode + "-btn");
+    if (submitBtn && submitBtn.disabled) return;
     var pe = el("gen-prompt-" + mode), prompt = pe ? pe.value.trim() : "";
     if (!prompt) { alert("请先填写提示词"); return; }
     var item = state.model[mode];
@@ -542,30 +555,35 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     var params = collect(mode);
     if (params.content && params.content[0] && params.content[0].type === "text") params.content[0].text = prompt;
     else params.prompt = prompt;
+    setSubmitBusy(mode, true);
     setQuote(mode, "正在报价…");
     api("/canvas-api/api/v3/tasks/quote", { method: "POST", body: JSON.stringify({ model: model, params: params }) }).then(function (q) {
       var price = (q && q.data && q.data.price) || "";
       setQuote(mode, price ? "预计 " + price + " 积分" : "提交中…");
       return api("/canvas-api/api/v3/tasks/create", { method: "POST", body: JSON.stringify({ model: model, params: params }) });
     }).then(function (d) {
+      setSubmitBusy(mode, false);
       var id = d && d.data && (d.data.task_id || d.data.id);
       if (!id) { setQuote(mode, "提交失败"); return; }
       setQuote(mode, "任务 " + id + " 生成中…");
       setResult('<div class="text-[13px] text-gray-400">正在生成，请稍候…</div>');
       poll(id, mode);
-    }).catch(function (e) { setQuote(mode, "提交失败：" + e.message); });
+    }).catch(function (e) {
+      setSubmitBusy(mode, false);
+      setQuote(mode, "提交失败：" + e.message);
+    });
   }
   function poll(id, mode) {
     var tries = 0;
     var timer = setInterval(function () {
       tries++;
-      if (tries > 120) { clearInterval(timer); setQuote(mode, "等待超时"); return; }
+      if (tries > 120) { clearInterval(timer); setSubmitBusy(mode, false); setQuote(mode, "等待超时"); return; }
       api("/canvas-api/api/v3/tasks/query", { method: "POST", body: JSON.stringify({ task_id: id }) }).then(function (d) {
         var data = (d && d.data) || d || {};
         var st = String(data.status || "").toLowerCase();
-        if (/fail|error/.test(st)) { clearInterval(timer); setQuote(mode, "生成失败"); loadHistory(true); return; }
+        if (/fail|error/.test(st)) { clearInterval(timer); setSubmitBusy(mode, false); setQuote(mode, "生成失败"); loadHistory(true); return; }
         var url = findUrl(data, mode);
-        if (/succe|complete|done/.test(st) || url) { clearInterval(timer); setQuote(mode, "已完成"); showResult(url, mode); loadHistory(true); return; }
+        if (/succe|complete|done/.test(st) || url) { clearInterval(timer); setSubmitBusy(mode, false); setQuote(mode, "已完成"); showResult(url, mode); loadHistory(true); return; }
         setQuote(mode, "生成中…（" + (st || "pending") + "）");
       }).catch(function () {});
     }, 5000);
@@ -684,8 +702,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     el("preview-title").textContent = name || "";
     el("preview-link").href = url;
     el("preview-mask").classList.remove("hidden");
+    restoreSubmitButtons();
   };
-  window.closePreview = function () { el("preview-mask").classList.add("hidden"); el("preview-body").innerHTML = ""; };
+  window.closePreview = function () { el("preview-mask").classList.add("hidden"); el("preview-body").innerHTML = ""; restoreSubmitButtons(); };
 
   window.switchGenMode = function (mode) {
     state.mode = mode;
