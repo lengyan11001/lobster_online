@@ -74,6 +74,7 @@ from .api.multi_clip_mixer import router as multi_clip_mixer_router
 from .api.media_compat import router as media_compat_router
 from .api.douyin_origin import router as douyin_origin_router
 from .api.tiktok_origin import router as tiktok_origin_router
+from .api.channels_origin import router as channels_origin_router
 from .api.tiktok_browser_leads import router as tiktok_browser_leads_router
 from .api.web_browser_extract import router as web_browser_extract_router
 from .api.liepin_origin import router as liepin_origin_router
@@ -1182,6 +1183,7 @@ def create_app() -> FastAPI:
         logger.info("ecommerce_publish router not found; using publish router for ecommerce account management")
     app.include_router(douyin_origin_router, prefix="")
     app.include_router(tiktok_origin_router, prefix="")
+    app.include_router(channels_origin_router, prefix="")
     app.include_router(tiktok_browser_leads_router, prefix="")
     app.include_router(web_browser_extract_router, prefix="")
     app.include_router(liepin_origin_router, prefix="")
@@ -1297,6 +1299,45 @@ def create_app() -> FastAPI:
             app.add_api_route(
                 route_path,
                 serve_tiktok_route,
+                methods=["GET"],
+                include_in_schema=False,
+            )
+
+
+        channels_route_pages = {
+            "/channels": "channels-origin/channels.html",
+            "/channels/workbench": "channels-origin/channels.html",
+            "/channels/search": "channels-origin/channels.html",
+            "/channels/monitor": "channels-origin/channels.html",
+            "/channels/collect": "channels-origin/channels.html",
+            "/channels/customers": "channels-origin/channels.html",
+            "/channels/intent": "channels-origin/channels.html",
+            "/channels/interaction": "channels-origin/channels.html",
+            "/channels/inbox": "channels-origin/channels.html",
+            "/channels/scheduler": "channels-origin/channels.html",
+            "/channels/nurture": "channels-origin/channels.html",
+            "/channels/groups": "channels-origin/channels.html",
+            "/channels/self-comments": "channels-origin/channels.html",
+            "/channels/logs": "channels-origin/channels.html",
+            "/channels/config": "channels-origin/channels.html",
+            "/channels/guide": "channels-origin/channels.html",
+        }
+
+        async def serve_channels_route(request: Request):
+            html_file = channels_route_pages.get(request.url.path, "channels-origin/channels.html")
+            return FileResponse(
+                static_dir / html_file,
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+
+        for route_path in channels_route_pages:
+            app.add_api_route(
+                route_path,
+                serve_channels_route,
                 methods=["GET"],
                 include_in_schema=False,
             )
