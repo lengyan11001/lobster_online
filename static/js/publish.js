@@ -385,6 +385,8 @@ function _buildSchedulePutBodyFromModal(msgEl) {
     schedule_kind: scheduleKind,
     requirements_text: req || null
   };
+  var contentLang = _publishContentLanguageSync();
+  if (contentLang) putBody.content_language = contentLang;
   if (scheduleKind === 'video') {
     putBody.video_source_asset_id = videoAssetId || null;
   }
@@ -436,6 +438,33 @@ function _reviewGenerateClearDraftsUi(accountId) {
   }
 }
 
+var _contentLangCache = '';
+function _publishContentLanguageSync() {
+  try {
+    var v = localStorage.getItem('lobster_ip_template_language') || '';
+    if (v) { _contentLangCache = v; return v; }
+  } catch (e) {}
+  return _contentLangCache || '';
+}
+function _ensurePublishContentLanguage() {
+  var cached = _publishContentLanguageSync();
+  if (cached) return Promise.resolve(cached);
+  var base = String((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '').replace(/\/$/, '');
+  if (!base) return Promise.resolve('');
+  return fetch(base + '/api/ip-content/personal-default', { headers: authHeaders() })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var req = (d && d.item && d.item.requirements) || {};
+      var lang = String(req.language || req.target_language || '').trim();
+      if (lang) {
+        _contentLangCache = lang;
+        try { localStorage.setItem('lobster_ip_template_language', lang); } catch (e) {}
+      }
+      return lang;
+    })
+    .catch(function () { return ''; });
+}
+
 function _postReviewGenerate(accountId, variantCount) {
   _reviewGenerateClearDraftsUi(accountId);
   var msgEl = document.getElementById('accountDetailReviewMsg');
@@ -448,7 +477,7 @@ function _postReviewGenerate(accountId, variantCount) {
   return fetch(publishLocalBase() + '/api/accounts/' + accountId + '/creator-schedule/review-generate', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-    body: JSON.stringify({ variant_count: variantCount })
+    body: JSON.stringify({ variant_count: variantCount, language: _publishContentLanguageSync() })
   })
     .then(function(r) { return _parsePublishJsonResponse(r); })
     .then(function(x) {
@@ -1456,6 +1485,8 @@ function _bindAccountButtons(el) {
       if (!assetId || !assetId.trim()) return;
       var title = prompt('发布标题（可留空）：', '') || '';
       var options = {};
+      var _copyLang = _publishContentLanguageSync();
+      if (_copyLang) options.content_language = _copyLang;
       var coverAssetId = null;
       if (platform === 'xiaohongshu') {
         var typeChoice = prompt('发布类型（仅图片素材时有效）：1=图文 2=长文，直接回车=图文', '1') || '1';
@@ -5780,6 +5811,7 @@ function initPublishView() {
   hideAccountDetailPanel();
   loadAccounts();
   loadCreativeCandidateGroups();
+  _ensurePublishContentLanguage();
 }
 
 function initAssetLibraryView() {
@@ -6791,7 +6823,11 @@ function _pubPlanCollectPayload() {
       times: times,
       tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
       declare: String((document.getElementById('pubPlanDeclare') || {}).value || '').trim(),
-      ai_copy: true
+      ai_copy: true,
+      options: (function () {
+        var lang = _publishContentLanguageSync();
+        return lang ? { content_language: lang } : {};
+      })()
     }
   };
 }
@@ -6848,6 +6884,8 @@ function submitPublishPlan() {
     if (!collected.ok) return _pubPlanMsg(collected.error, true);
     payload = collected.payload;
   }
+  var _langNow = _publishContentLanguageSync();
+  if (_langNow) payload.options = Object.assign({}, payload.options || {}, { content_language: _langNow });
   if (!editingId) {
     payload.enabled = false;
     payload.options = Object.assign({}, payload.options || {}, { _draft: true });

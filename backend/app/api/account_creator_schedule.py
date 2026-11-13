@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from .auth import _ServerUser, get_current_user_for_local
 from ..db import SessionLocal, get_db
 from ..datetime_iso import isoformat_utc
+from ..services import content_language as content_lang
 from ..models import (
     CreatorScheduleReviewSnapshot,
     CreatorScheduleTaskLog,
@@ -75,6 +76,7 @@ class CreatorScheduleOut(BaseModel):
     review_drafts_json: Optional[List[Any]] = None
     review_confirmed: bool = False
     review_selected_slot: int = 0
+    content_language: str = ""
 
 
 class CreatorSchedulePut(BaseModel):
@@ -96,10 +98,12 @@ class CreatorSchedulePut(BaseModel):
     review_drafts_json: Optional[List[Any]] = None
     review_confirmed: Optional[bool] = None
     review_selected_slot: Optional[int] = Field(None, ge=0, le=9)
+    content_language: Optional[str] = Field(None, description="发布内容语种，取个人 IP 模板；留空不改")
 
 
 class ReviewGenerateBody(BaseModel):
     variant_count: int = Field(3, ge=1, le=10)
+    language: str = Field("", description="目标语种 code；留空取该账号定时配置")
 
 
 class ReviewRegenerateSlotBody(BaseModel):
@@ -181,6 +185,7 @@ def _to_out(row: PublishAccountCreatorSchedule) -> dict:
         "review_drafts_json": getattr(row, "review_drafts_json", None),
         "review_confirmed": bool(getattr(row, "review_confirmed", False)),
         "review_selected_slot": int(getattr(row, "review_selected_slot", None) or 0),
+        "content_language": getattr(row, "content_language", "") or "",
     }
 
 
@@ -508,6 +513,8 @@ async def put_creator_schedule(
         row.review_confirmed = bool(body.review_confirmed)
     if _pydantic_body_has_field(body, "review_selected_slot") and body.review_selected_slot is not None:
         row.review_selected_slot = max(0, min(9, int(body.review_selected_slot)))
+    if body.content_language is not None:
+        row.content_language = content_lang.normalize(body.content_language) if str(body.content_language).strip() else ""
 
     if (getattr(row, "schedule_publish_mode", None) or "immediate") == "immediate":
         row.review_confirmed = False
@@ -607,6 +614,7 @@ async def post_review_generate(
             schedule_kind=(getattr(row, "schedule_kind", None) or "image").strip().lower(),
             requirements_text=(row.requirements_text or "").strip(),
             variant_count=body.variant_count,
+            language=(body.language or getattr(row, "content_language", "") or ""),
             replace_slot_hint=None,
             video_source_asset_id=getattr(row, "video_source_asset_id", None),
             user_bearer_token=ut,
@@ -701,6 +709,7 @@ async def post_review_generate_assets(
                 attachment_asset_ids=slot.get("attachment_asset_ids"),
                 schedule_kind=sch_kind,
                 video_source_asset_id=sch_video_asset,
+                language=(getattr(row, "content_language", "") or ""),
                 user_bearer_token=ut,
                 x_installation_id=xi or None,
             )
@@ -773,6 +782,7 @@ async def post_review_regenerate_slot(
             schedule_kind=(getattr(row, "schedule_kind", None) or "image").strip().lower(),
             requirements_text=(row.requirements_text or "").strip(),
             variant_count=1,
+            language=(getattr(row, "content_language", "") or ""),
             replace_slot_hint=hint,
             video_source_asset_id=getattr(row, "video_source_asset_id", None),
             user_bearer_token=ut,

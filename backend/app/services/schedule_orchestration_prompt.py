@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from . import content_language as content_lang
+
 if TYPE_CHECKING:
     from ..models import PublishAccount, PublishAccountCreatorSchedule
 
@@ -60,6 +62,11 @@ def build_schedule_orchestration_user_message(
 
     lines = [
         "【定时任务 · 自动编排执行】",
+    ]
+    lang = str(getattr(schedule, "content_language", "") or "").strip()
+    if lang:
+        lines.append(content_lang.instruction(lang))
+    lines += [
         f"- 发布账号：{platform} · {nickname}（account_id={aid}）",
         f"- 内容类型：{'视频' if kind == 'video' else '图文'}",
         f"- 定时间隔：每 {iv} 分钟（本条为本次到点触发的执行说明）",

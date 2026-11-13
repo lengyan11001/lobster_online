@@ -747,6 +747,8 @@ class PublishAccountCreatorSchedule(Base):
     """每次「确认并发布」递增；用于使上一轮审核编排协作退出，保证同账号仅一条有效发布编排。"""
     review_confirm_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     review_selected_slot: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    """发布内容语种（取个人 IP 模板语种，如 zh-CN / en），用于生成标题正文时统一语言。"""
+    content_language: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

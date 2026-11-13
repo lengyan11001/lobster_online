@@ -2426,6 +2426,7 @@ async def create_publish_task(
                 hint_title=body_title_s,
                 hint_desc=body_desc_s,
                 hint_tags=body_tags_raw_s,
+                language=str((body.options or {}).get("content_language") or ""),
                 raw_token=_bearer_from_request(request) or None,
                 chat_model=_chat_model_from_request(request) or None,
             )

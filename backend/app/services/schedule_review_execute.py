@@ -38,13 +38,17 @@ def _extract_asset_ids_and_urls(reply: str) -> tuple[List[str], List[str]]:
     return ids[:20], urls[:12]
 
 
-def _footer_no_publish() -> str:
-    return (
+def _footer_no_publish(language: str = "") -> str:
+    text = (
         "\n\n【系统 · 审核预览】本条为定时任务审核预览，"
         "你必须调用 invoke_capability / task.get_result 等完成素材生成；"
         "**禁止**调用 publish_content、open_account_browser；"
         "生成完成后在回复中用自然语言说明拟发布标题、正文要点、话题标签，并列出已生成素材的 asset_id 或可访问预览 URL。"
     )
+    if str(language or "").strip():
+        from . import content_language as content_lang
+        text += "\n" + content_lang.instruction(language)
+    return text
 
 
 def resolved_attachment_ids_for_review_chat(
@@ -71,6 +75,7 @@ async def execute_review_slot_generation(
     attachment_asset_ids: Optional[List[str]] = None,
     schedule_kind: Optional[str] = None,
     video_source_asset_id: Optional[str] = None,
+    language: str = "",
     user_bearer_token: Optional[str] = None,
     x_installation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -85,7 +90,7 @@ async def execute_review_slot_generation(
     if not msg:
         raise ValueError("提示词 prompt 不能为空")
 
-    body = msg + _footer_no_publish()
+    body = msg + _footer_no_publish(language)
     url = f"{_api_base_url()}/chat"
     ut = (user_bearer_token or "").strip()
     if ut:

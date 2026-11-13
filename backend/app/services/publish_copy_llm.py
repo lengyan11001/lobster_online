@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException
 
 from ..core.config import settings
+from . import content_language as content_lang
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ async def generate_publish_copy(
     hint_title: str = "",
     hint_desc: str = "",
     hint_tags: str = "",
+    language: str = "",
     raw_token: Optional[str] = None,
     chat_model: Optional[str] = None,
 ) -> Tuple[str, str, str]:
@@ -165,8 +167,10 @@ async def generate_publish_copy(
         "kuaishou": "快手",
     }.get((platform or "").strip().lower(), platform or "该平台")
 
+    lang = content_lang.normalize(language) if str(language or "").strip() else ""
     sys = (
-        "你是短视频与图文「发布文案」助手，只根据给定素材信息写可上架的标题与话术。\n"
+        (content_lang.instruction(lang) + "\n" if lang else "")
+        + "你是短视频与图文「发布文案」助手，只根据给定素材信息写可上架的标题与话术。\n"
         "【硬性规则】\n"
         "1. 只输出一个 JSON 对象，不要 Markdown 说明、不要代码块外的任何文字。\n"
         "2. JSON 键固定为：title（字符串）、description（字符串）、tags（字符串）。\n"
@@ -177,6 +181,10 @@ async def generate_publish_copy(
     )
     user_parts = [
         f"发布平台：{plat_cn}。素材类型：{media_type or 'unknown'}。",
+    ]
+    if lang:
+        user_parts.append(f"目标语种：{content_lang.label(lang)}（标题、正文、话题标签必须使用该语种，不要中英混排）。")
+    user_parts += [
         limits,
         f"素材文件名：{(filename or '')[:200]}",
         "【生成/脚本参考】\n" + ((asset_prompt or "").strip()[:3500] or "（无正文提示，请根据文件名与类型自拟主题）"),

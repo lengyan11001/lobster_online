@@ -12,6 +12,7 @@ import httpx
 from ..api.auth import create_access_token
 from .internal_chat_client import chat_headers_for_forwarded_browser, chat_headers_for_user
 from ..core.config import settings
+from . import content_language as content_lang
 
 logger = logging.getLogger(__name__)
 
@@ -416,13 +417,19 @@ def _build_generate_prompts_message(
     variant_count: int,
     replace_hint: str | None = None,
     video_source_asset_id: Optional[str] = None,
+    language: str = "",
 ) -> str:
     n = max(1, min(10, int(variant_count)))
     sk = (schedule_kind or "image").strip().lower()
     v_aid = (video_source_asset_id or "").strip()
     is_video = sk == "video"
+    lang = content_lang.normalize(language) if str(language or "").strip() else ""
     lines = [
         "【仅生成提示词草稿 · 不调用生成图片/视频工具】",
+    ]
+    if lang:
+        lines.append(content_lang.instruction(lang))
+    lines += [
         f"- 平台：{platform} · 账号昵称：{nickname}",
         f"- 内容类型：{'视频' if is_video else '图文'}",
         f"- 请输出恰好 {n} 条「将发给智能对话 POST /chat」的用户消息草稿。",
@@ -488,6 +495,7 @@ async def generate_review_drafts_via_chat(
     variant_count: int,
     replace_slot_hint: str | None = None,
     video_source_asset_id: Optional[str] = None,
+    language: str = "",
     user_bearer_token: Optional[str] = None,
     x_installation_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -504,6 +512,7 @@ async def generate_review_drafts_via_chat(
         variant_count=variant_count,
         replace_hint=replace_slot_hint,
         video_source_asset_id=video_source_asset_id,
+        language=language,
     )
     url = f"{_api_base_url()}/chat"
     ut = (user_bearer_token or "").strip()
@@ -543,6 +552,11 @@ async def generate_review_drafts_via_chat(
             f"模型仅返回 {len(raw_list)} 条提示词，需要 {n} 条；请重试或缩短「出几次」。"
         )
     out = [_normalize_prompt_draft(x) for x in raw_list[:n]]
+    lang = content_lang.normalize(language) if str(language or "").strip() else ""
+    if lang:
+        for item in out:
+            if isinstance(item, dict):
+                item["prompt"] = content_lang.with_instruction(item.get("prompt") or "", lang)
     return _merge_video_source_asset_into_drafts(
         out,
         schedule_kind=sk,

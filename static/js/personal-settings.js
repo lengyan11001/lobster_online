@@ -352,6 +352,7 @@
     state.personalTemplateLanguage = normalizeIpTemplateLanguage(value);
     var sel = $('psTemplateLanguage');
     if (sel) sel.value = state.personalTemplateLanguage;
+    try { localStorage.setItem('lobster_ip_template_language', state.personalTemplateLanguage); } catch (e) {}
   }
 
   function templateRequirementsWithLanguage(requirements, language) {

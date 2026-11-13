@@ -884,6 +884,30 @@ def _migrate_publish_account_creator_schedule_v5():
         logger.warning("Migration publish_account_creator_schedule v5 skipped: %s", e)
 
 
+def _migrate_publish_account_creator_schedule_v6():
+    """发布内容语种：取个人 IP 模板，生成标题/正文时统一使用。"""
+    from sqlalchemy import text
+
+    try:
+        if "sqlite" not in settings.database_url:
+            return
+        with engine.connect() as conn:
+            r = conn.execute(text("PRAGMA table_info(publish_account_creator_schedules)"))
+            cols = [row[1] for row in r]
+            if not cols:
+                return
+            if "content_language" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE publish_account_creator_schedules "
+                        "ADD COLUMN content_language VARCHAR(16) DEFAULT '' NOT NULL"
+                    )
+                )
+                conn.commit()
+    except Exception as e:
+        logger.warning("Migration publish_account_creator_schedule v6 skipped: %s", e)
+
+
 def _sync_global_openclaw_workspace():
     """Sync product-bundled OpenClaw defaults without touching user memory."""
     try:
@@ -1056,6 +1080,7 @@ def create_app() -> FastAPI:
     _migrate_publish_account_creator_schedule_v3()
     _migrate_publish_account_creator_schedule_v4()
     _migrate_publish_account_creator_schedule_v5()
+    _migrate_publish_account_creator_schedule_v6()
     _migrate_wecom_config_enterprise_product()
     _migrate_kf_customer_group()
     _migrate_alibaba_inquiry_accounts_v2()

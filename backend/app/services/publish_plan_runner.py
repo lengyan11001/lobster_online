@@ -413,6 +413,7 @@ async def _build_copy(user: User, plan: PublishPlan, candidate: Dict[str, Any]) 
                 hint_title="",
                 hint_desc="",
                 hint_tags=user_tags,
+                language=str((plan.options or {}).get("content_language") or ""),
                 raw_token=raw_token,
             )
             if user_tags:

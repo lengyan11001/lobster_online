@@ -44,7 +44,7 @@
 
   window.registerLobsterView('personal-settings', {
     html: '/static/views/personal-settings.html?v=20261107-hifly-avatar-entry-v1',
-    scripts: '/static/js/personal-settings.js?v=20261107-hifly-avatar-entry-v1',
+    scripts: '/static/js/personal-settings.js?v=20261113-ip-language-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -179,7 +179,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20261023-tiktok-publish-v2'
+    scripts: '/static/js/publish.js?v=20261113-ip-language-v1'
   });
 
   window.registerLobsterView('scheduled-tasks', {
