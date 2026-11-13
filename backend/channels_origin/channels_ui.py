@@ -143,6 +143,7 @@ def main_window() -> Dict[str, Any]:
 
 def channels_hwnd(*, required: bool = True) -> Optional[int]:
     candidates: List[Tuple[int, List[str], int]] = []
+    fallback: List[int] = []
     main_hwnd = int(main_window().get("hwnd") or 0)
 
     def callback(win: int, _extra: Any) -> None:
@@ -160,7 +161,8 @@ def channels_hwnd(*, required: bool = True) -> Optional[int]:
         if title and title not in ("微信", "WeChat", "Weixin"):
             return
         names = _doc_names(win)
-        if not any(("视频号" in name) or ("搜一搜" in name) or ("赞和收藏" in name) for name in names):
+        if not names:
+            fallback.append(win)
             return
         score = 0
         if any(name == "视频号" or name.startswith("视频号") for name in names):
@@ -169,15 +171,20 @@ def channels_hwnd(*, required: bool = True) -> Optional[int]:
             score += 2
         if any("赞和收藏" in name for name in names):
             score += 1
+        # 打开视频后 RootWebArea 会变成作者/视频标题，不再包含“视频号”。
+        # 只要标题是微信且存在文档节点，就应视为视频号窗口。
+        score += 1
         candidates.append((win, names, score))
 
     win32gui.EnumWindows(callback, None)
-    if not candidates:
-        if required:
-            raise ChannelsUiError("视频号窗口未打开，请先在微信左侧点『视频号』")
-        return None
-    candidates.sort(key=lambda item: (item[2], len(item[1])), reverse=True)
-    return int(candidates[0][0])
+    if candidates:
+        candidates.sort(key=lambda item: (item[2], len(item[1])), reverse=True)
+        return int(candidates[0][0])
+    if fallback:
+        return int(fallback[0])
+    if required:
+        raise ChannelsUiError("视频号窗口未打开，请先在微信左侧点『视频号』")
+    return None
 
 
 def active_doc_name(hwnd: Optional[int] = None) -> str:
