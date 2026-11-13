@@ -2543,7 +2543,59 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     "health_url": health_url,
                 }
 
-        def watch_backend(window) -> None:
+        def _page_probe(window) -> dict:
+            """读页面是否真的渲染出内容（白屏时 body 里几乎没有节点）。"""
+            try:
+                result = window.evaluate_js(
+                    "(() => { try { const b = document.body; "
+                    "const n = b ? b.querySelectorAll('*').length : 0; "
+                    "return JSON.stringify({ready: document.readyState, nodes: n, href: String(location.href)}); } "
+                    "catch (e) { return JSON.stringify({error: String(e)}); } })()"
+                )
+            except Exception as exc:
+                return {"error": str(exc)}
+            if isinstance(result, dict):
+                return result
+            if isinstance(result, str) and result:
+                try:
+                    return json.loads(result)
+                except Exception:
+                    return {}
+            return {}
+
+        def ensure_webview_page(window, client_url: str, *, reason: str, attempts: int = 3) -> bool:
+            """白屏兜底：页面没渲染出来就重新导航。
+
+            2026-11-13 客户现场：后端进程挂掉后 WebView 停在空白页，watchdog 只调了
+            JS 恢复钩子（空白页里等于没执行），页面再也没被加载回来。这里主动探测
+            body 节点数，空白就重新 load_url，最多 3 次。
+            """
+            for attempt in range(1, attempts + 1):
+                deadline = time.time() + 12.0
+                info = {}
+                while time.time() < deadline:
+                    info = _page_probe(window)
+                    if int(info.get("nodes") or 0) > 3 and info.get("ready") in ("interactive", "complete"):
+                        log(
+                            "webview page ok reason=%s attempt=%s nodes=%s url=%s"
+                            % (reason, attempt, info.get("nodes"), info.get("href"))
+                        )
+                        return True
+                    time.sleep(0.8)
+                log(
+                    "webview page blank reason=%s attempt=%s info=%s reload_url=%s"
+                    % (reason, attempt, info, client_url)
+                )
+                try:
+                    window.load_url(client_url)
+                except Exception as exc:
+                    log("webview reload failed reason=%s attempt=%s error=%s" % (reason, attempt, exc))
+                    return False
+                time.sleep(3.0)
+            log("webview page still blank reason=%s after %s attempts" % (reason, attempts))
+            return False
+
+        def watch_backend(window, client_url: str) -> None:
             """Restart only an unexpectedly exited local backend while the window is open."""
             stop_event = runtime["watchdog_stop"]
             failures = 0
@@ -2618,6 +2670,13 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     )
                 except Exception:
                     pass
+                threading.Thread(
+                    target=ensure_webview_page,
+                    args=(window, client_url),
+                    kwargs={"reason": "backend_watchdog"},
+                    name="lobster-webview-reload",
+                    daemon=True,
+                ).start()
 
         def start_services_then_load(window) -> None:
             try:
@@ -2632,8 +2691,15 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     window.load_url(actual_url)
                     log("webview client page loaded")
                     threading.Thread(
+                        target=ensure_webview_page,
+                        args=(window, actual_url),
+                        kwargs={"reason": "startup"},
+                        name="lobster-webview-verify",
+                        daemon=True,
+                    ).start()
+                    threading.Thread(
                         target=watch_backend,
-                        args=(window,),
+                        args=(window, actual_url),
                         name="lobster-backend-watchdog",
                         daemon=True,
                     ).start()
