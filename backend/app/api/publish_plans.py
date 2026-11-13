@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import threading
 import os
 import subprocess
 import tempfile
@@ -23,6 +25,8 @@ from ..db import get_db
 from ..models import PublishAccount, PublishGroupItem, PublishPlan, PublishPlanItem, PublishTask
 
 logger = logging.getLogger(__name__)
+
+_PLAN_CREATE_LOCK = threading.Lock()
 router = APIRouter()
 
 _PLATFORMS = {"douyin", "wechat_channels", "tiktok"}
@@ -971,26 +975,57 @@ def create_publish_plan(
     acct = _resolve_plan_account(db, current_user.id, body.account_id, body.account_nickname)
     if (body.account_id or str(body.account_nickname or "").strip()) and acct is None:
         raise HTTPException(404, detail="发布账号不存在，请先在「发布账号」里添加")
-    plan = PublishPlan(
-        user_id=current_user.id,
-        name=(str(body.name or "").strip() or f"批量计划 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
-        enabled=bool(body.enabled if body.enabled is not None else True),
-        platform=platform,
-        account_id=int(acct.id) if acct is not None else None,
-        account_nickname=(acct.nickname if acct is not None else (body.account_nickname or "")) or "",
-        source_folder=folder or None,
-        source_groups=groups,
-        source_records=records,
-        daily_count=len(times),
-        times=times,
-        tags=str(body.tags or "").strip() or None,
-        ai_copy=bool(body.ai_copy),
-        options=dict(body.options or {}),
-        fired_slots={},
-    )
-    db.add(plan)
-    db.commit()
-    db.refresh(plan)
+    # 用进程内锁保证「查重 + 插入」原子：两个并发请求不会同时通过查重。
+    with _PLAN_CREATE_LOCK:
+        # 2026-11-13：前端 publish.js 曾被重复加载，一次点击会发两次同样的 POST。
+        # 10 秒内同配置视为重复提交，直接返回已建的 plan（旧客户端也挡住）。
+        try:
+            since = datetime.utcnow() - timedelta(seconds=10)
+            recent = (
+                db.query(PublishPlan)
+                .filter(PublishPlan.user_id == current_user.id, PublishPlan.created_at >= since)
+                .order_by(PublishPlan.id.desc())
+                .limit(10)
+                .all()
+            )
+            wanted_account = int(acct.id) if acct is not None else None
+            wanted_records = json.dumps(records, ensure_ascii=False, sort_keys=True)
+            for row in recent:
+                row_account = int(row.account_id) if row.account_id is not None else None
+                if (
+                    str(row.platform or "") == platform
+                    and row_account == wanted_account
+                    and str(row.source_folder or "") == folder
+                    and list(row.source_groups or []) == groups
+                    and json.dumps(list(row.source_records or []), ensure_ascii=False, sort_keys=True) == wanted_records
+                    and list(row.times or []) == times
+                    and str(row.tags or "") == str(body.tags or "").strip()
+                    and bool(row.ai_copy) == bool(body.ai_copy)
+                ):
+                    logger.info("[发布任务] 忽略重复提交：10s 内同配置 plan=%s", row.id)
+                    return {"ok": True, "duplicate": True, "plan": _plan_payload(db, row)}
+        except Exception as exc:
+            logger.warning("[发布任务] 重复提交检查失败（继续创建）: %s", exc)
+        plan = PublishPlan(
+            user_id=current_user.id,
+            name=(str(body.name or "").strip() or f"批量计划 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
+            enabled=bool(body.enabled if body.enabled is not None else True),
+            platform=platform,
+            account_id=int(acct.id) if acct is not None else None,
+            account_nickname=(acct.nickname if acct is not None else (body.account_nickname or "")) or "",
+            source_folder=folder or None,
+            source_groups=groups,
+            source_records=records,
+            daily_count=len(times),
+            times=times,
+            tags=str(body.tags or "").strip() or None,
+            ai_copy=bool(body.ai_copy),
+            options=dict(body.options or {}),
+            fired_slots={},
+        )
+        db.add(plan)
+        db.commit()
+        db.refresh(plan)
     if plan.enabled:
         stopped = _pause_other_plans(db, current_user.id, keep_id=int(plan.id))
         if stopped:

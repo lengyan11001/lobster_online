@@ -177,9 +177,10 @@ window.registerLobsterView('alibaba-inquiries', {
     reloadExisting: true
   });
 
+  // publish.js 由 index.html 全局加载；这里再挂一次会让脚本执行两遍，
+  // 导致发布中心的点击事件处理两次（批量计划一次点击建出两条记录，2026-11-13）。
   window.registerLobsterView('assets', {
-    html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20261113-ip-language-v2'
+    html: '/static/views/assets.html?v=20260806-content-record-categories'
   });
 
   window.registerLobsterView('scheduled-tasks', {

@@ -6871,6 +6871,9 @@ function _pubPlanPreviewPage(page) {
 }
 
 function submitPublishPlan() {
+  // 防重复提交：即使脚本被重复加载/重复绑定，一次点击也只发一次创建请求。
+  if (window.__lobsterPlanSubmitting) return;
+  window.__lobsterPlanSubmitting = true;
   var editingId = _pubPlanEditingId;
   var editingPlan = editingId ? _pubPlanCache.filter(function(p) { return String(p.id) === String(editingId); })[0] : null;
   var payload;
@@ -6911,6 +6914,7 @@ function submitPublishPlan() {
   }).catch(function(err) {
     _pubPlanMsg((editingId ? '保存失败：' : '创建记录失败：') + ((err && err.message) || err), true);
   }).then(function() {
+    window.__lobsterPlanSubmitting = false;
     if (btn) {
       btn.disabled = false;
       btn.textContent = editingPlan && editingPlan.committed ? '保存名称/标签' : (editingId ? '保存修改' : '创建记录');
