@@ -1374,6 +1374,7 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
   height: 10px;
   z-index: 80;
   cursor: move;
+  pointer-events: none;
 }
 html.is-frameless-shell .header { padding-top: 26px; }
 html.is-frameless-shell .window-drag-strip {

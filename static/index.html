@@ -70,7 +70,7 @@
   <title>__LOBSTER_DOCUMENT_TITLE__</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
-  <link rel="stylesheet" href="/static/css/common.css?v=20261110-drag-band-22">
+  <link rel="stylesheet" href="/static/css/common.css?v=20261113-drag-fix-1">
     <link rel="stylesheet" href="/static/css/index.css?v=20261110-imglab-ui-v1">
   <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20261111-ps-multiselect-overlay">
   <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
@@ -3141,6 +3141,10 @@
     if (a && typeof a.window_close === 'function' && mark === 'bihuo') box.hidden = false;
     var strip = document.getElementById('windowDragStrip');
     if (strip && mark === 'bihuo') strip.hidden = false;
+    // 无边框壳：顶部要留出 26px 给 header 自己命中（pywebview 只认直接命中
+    // .pywebview-drag-region 的元素）。不依赖 window_chrome_apply 的成功与否，
+    // 否则慢启动/skipped 时顶部一个像素都拖不动（2026-11-13 用户反馈）。
+    if (a && mark === 'bihuo') document.documentElement.classList.add('is-frameless-shell');
     if (!a || mark !== 'bihuo') return;
     // 页面 ready 时窗口 handle 一定已存在：再补一次无边框/边缘缩放安装。
     // 老逻辑只靠 shown 事件 + 15s 兜底线程，启动慢的机器会整层错过。
