@@ -385,6 +385,38 @@ def clear_service_log(path: Path, label: str) -> bool:
         return False
 
 
+def preserve_service_log(path: Path, label: str, *, keep: int = 5, tail_bytes: int = 4 * 1024 * 1024) -> None:
+    """重启/清理前留档上一份日志，避免崩溃现场被 clear 掉（2026-11-13 客户白屏排查）。"""
+    try:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_dir = path.parent / "logs" / "crashes"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        target = backup_dir / f"{path.stem}_{stamp}{path.suffix}"
+        size = path.stat().st_size
+        if size > tail_bytes:
+            with path.open("rb") as src:
+                src.seek(size - tail_bytes)
+                data = src.read()
+            target.write_bytes(b"[truncated: last 4MB]\n" + data)
+        else:
+            shutil.copy2(path, target)
+        log(f"Logs: preserved {label} crash log path={target} size={target.stat().st_size}")
+        backups = sorted(
+            backup_dir.glob(f"{path.stem}_*{path.suffix}"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for old in backups[keep:]:
+            try:
+                old.unlink()
+            except Exception:
+                pass
+    except Exception as exc:
+        log(f"Logs: preserve {label} failed: {exc}")
+
+
 def clear_startup_service_logs() -> None:
     clear_service_log(ROOT / "backend.log", "backend")
     clear_service_log(ROOT / "mcp.log", "mcp")
@@ -2445,6 +2477,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
                 mcp_restarted = False
                 if not port_open("127.0.0.1", mcp_port, timeout=0.4):
+                    preserve_service_log(ROOT / "mcp.log", "mcp recovery")
                     clear_service_log(ROOT / "mcp.log", "mcp recovery")
                     mcp_proc = start_bat("MCPRecovery", "run_mcp.bat", env)
                     if mcp_proc is not None:
@@ -2516,6 +2549,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         log(f"Desktop recovery: backend port {port} is owned by another process")
                         return {"ok": False, "error": "backend port is occupied"}
 
+                preserve_service_log(ROOT / "backend.log", "backend recovery")
                 clear_service_log(ROOT / "backend.log", "backend recovery")
                 recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
                 runtime["backend_proc"] = recovered_proc
