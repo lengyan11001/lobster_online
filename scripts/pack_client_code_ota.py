@@ -1210,6 +1210,11 @@ def main() -> int:
         help="Targeted OTA: comma-separated relative file/dir paths to pack; skips the default full website path list",
     )
     ap.add_argument(
+        "--only-paths-file",
+        default="",
+        help="Targeted OTA: newline-separated relative file/dir paths; one path per line",
+    )
+    ap.add_argument(
         "--overseas",
         action="store_true",
         help="Pack overseas edition OTA; default false keeps LOBSTER_IS_OVERSEAS_USER=false in bundled .env",
@@ -1301,6 +1306,13 @@ def main() -> int:
         for item in str(getattr(args, "only_paths", "") or "").split(",")
         if item.strip()
     ]
+    only_paths_file = str(getattr(args, "only_paths_file", "") or "").strip()
+    if only_paths_file:
+        only_paths = [
+            line.strip().replace("\\", "/").strip("/")
+            for line in Path(only_paths_file).read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
     if only_paths:
         version_rels = set(VERSION_FILE_RELS)
         paths_tuple = tuple(
