@@ -455,7 +455,8 @@ function _ensurePublishContentLanguage() {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       var req = (d && d.item && d.item.requirements) || {};
-      var lang = String(req.language || req.target_language || '').trim();
+      var meta = (d && d.item && d.item.meta) || {};
+      var lang = String(req.language || req.target_language || meta.language || meta.target_language || '').trim();
       if (lang) {
         _contentLangCache = lang;
         try { localStorage.setItem('lobster_ip_template_language', lang); } catch (e) {}
@@ -3270,6 +3271,8 @@ function _submitAssetPublishModal() {
     }
     if (labelOptions) payload.options.douyin_label = labelOptions;
     if (target.saved_from_url) payload.options._saved_from_url = String(target.source_url || '').slice(0, 300);
+    var _copyLang2 = _publishContentLanguageSync();
+    if (_copyLang2) payload.options.content_language = _copyLang2;
     _assetPublishToast('正在发布到 ' + _assetPublishAccountLabel(account) + '...', false);
     return fetch(publishLocalBase() + '/api/publish', {
       method: 'POST',

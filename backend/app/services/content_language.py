@@ -124,6 +124,22 @@ def from_requirements(requirements: Any) -> str:
     return DEFAULT_LANGUAGE
 
 
+def from_template(requirements: Any, meta: Any = None) -> str:
+    """模板行可能把语种放在 requirements，也可能只在 meta（个人默认配置行）。"""
+    for source in (requirements, meta):
+        if not isinstance(source, dict):
+            continue
+        for key in ("language", "target_language", "content_language", "profile_language", "lang"):
+            value = source.get(key)
+            if str(value or "").strip():
+                return normalize(value)
+        common = str(source.get("common") or "")
+        match = _RE_COMMON_LANG.search(common)
+        if match:
+            return normalize(match.group(1))
+    return DEFAULT_LANGUAGE
+
+
 def with_instruction(text: str, code: Any) -> str:
     """在已有提示词前面补语言规则；已有同一条规则时不重复。"""
     rule = instruction(code)

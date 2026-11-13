@@ -230,9 +230,10 @@ async def generate_publish_copy(
     if not desc:
         desc = title
     logger.info(
-        "[PUBLISH-COPY-LLM] platform=%s media=%s title_len=%d desc_len=%d tags_len=%d",
+        "[PUBLISH-COPY-LLM] platform=%s media=%s language=%s title_len=%d desc_len=%d tags_len=%d",
         platform,
         media_type,
+        (content_lang.normalize(language) if str(language or "").strip() else ""),
         len(title),
         len(desc),
         len(tags),

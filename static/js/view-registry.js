@@ -179,7 +179,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20261113-ip-language-v1'
+    scripts: '/static/js/publish.js?v=20261113-ip-language-v2'
   });
 
   window.registerLobsterView('scheduled-tasks', {
