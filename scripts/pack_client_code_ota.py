@@ -1205,6 +1205,11 @@ def main() -> int:
         help="仅随 OTA 更新指定 skills/<SKILL> 目录；需与 --full-code 一起使用，可重复指定",
     )
     ap.add_argument(
+        "--only-paths",
+        default="",
+        help="Targeted OTA: comma-separated relative file/dir paths to pack; skips the default full website path list",
+    )
+    ap.add_argument(
         "--overseas",
         action="store_true",
         help="Pack overseas edition OTA; default false keeps LOBSTER_IS_OVERSEAS_USER=false in bundled .env",
@@ -1291,7 +1296,18 @@ def main() -> int:
     )
     parent = root.parent
     paths_tuple: tuple[str, ...]
-    if include_skills:
+    only_paths = [
+        item.strip().replace("\\", "/").strip("/")
+        for item in str(getattr(args, "only_paths", "") or "").split(",")
+        if item.strip()
+    ]
+    if only_paths:
+        version_rels = set(VERSION_FILE_RELS)
+        paths_tuple = tuple(
+            [p for p in only_paths if p not in version_rels]
+            + [p for p in only_paths if p in version_rels]
+        )
+    elif include_skills:
         paths_tuple = (
             "backend",
             "static/client_version.json",
