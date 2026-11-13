@@ -1010,6 +1010,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[启动] 发布数据每日同步未启动: %s", e)
     try:
+        from .services.publish_login_monitor import publish_login_monitor_loop
+
+        asyncio.create_task(publish_login_monitor_loop())
+        logger.info("[启动] 抖音/视频号登录巡检已启动（每天 08:00 北京时间，掉线上报）")
+    except Exception as e:
+        logger.warning("[启动] 登录巡检未启动: %s", e)
+    try:
         from .services.cloud_session_renew import cloud_token_renew_loop
 
         asyncio.create_task(cloud_token_renew_loop())

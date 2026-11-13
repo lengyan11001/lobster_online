@@ -1220,6 +1220,8 @@ async def check_browser_login(
     profile_dir: str,
     platform: str,
     browser_options: Optional[Dict[str, Any]] = None,
+    *,
+    focus: bool = True,
 ) -> bool:
     """Check login status. Opens a context if needed (persistent cookies)."""
     from .drivers import DRIVERS
@@ -1271,7 +1273,7 @@ async def check_browser_login(
         )
         driver = driver_cls()
         logged_in = await driver.check_login(page, navigate=True)
-        if logged_in:
+        if logged_in and focus:
             try:
                 await page.bring_to_front()
             except Exception:

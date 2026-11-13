@@ -2660,6 +2660,11 @@ async def create_publish_task(
         task.status = "success" if result.get("ok") else "failed"
         if result.get("need_login"):
             task.status = "need_login"
+            # 发布时确认掉线：本地标记 + 上报云端（云端 24h 去重后短信通知）
+            try:
+                acct.status = "offline"
+            except Exception:
+                pass
         # 真正发布成功才计数（dry_run / need_login 不算）
         if task.status == "success" and not result.get("dry_run"):
             _record_asset_publish(db, asset, acct.platform)
@@ -2671,6 +2676,15 @@ async def create_publish_task(
         }
         task.finished_at = datetime.utcnow()
         db.commit()
+        if result.get("need_login"):
+            try:
+                from ..services.publish_login_monitor import report_account_offline
+
+                asyncio.create_task(
+                    report_account_offline(acct, reason=(result.get("error") or "need_login"))
+                )
+            except Exception as exc:
+                logger.warning("[PUBLISH-API] 上报登录失效失败: %s", exc)
     except Exception as e:
         task.status = "failed"
         task.error = str(e)
