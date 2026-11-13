@@ -11549,7 +11549,8 @@ body.online-mastra-chat-compose .online-mastra-chat {
     }
 
     #content-douyin-leads.content-block.has-page-shell,
-    #content-tiktok-workbench.content-block.has-page-shell {
+    #content-tiktok-workbench.content-block.has-page-shell,
+    #content-channels-workbench.content-block.has-page-shell {
       height: calc(100dvh - 76px);
       min-height: 0;
       padding: 0;
