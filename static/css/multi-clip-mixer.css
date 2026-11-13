@@ -299,3 +299,11 @@
 .mcm-seg-text-row textarea[data-seg-field="title"] {
   min-height: 78px;
 }
+
+/* 模板成片音频三选一：原声 / 背景音乐 / 模板声音 */
+.mcm-audio-mode-row { align-items: flex-start; }
+.mcm-audio-mode-options { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.mcm-audio-mode-options label { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid #dfe4ec; border-radius: 999px; background: #fff; color: #546174; cursor: pointer; font-size: 12px; }
+.mcm-audio-mode-options input { width: auto; height: auto; accent-color: #e5484d; }
+.mcm-audio-mode-options input:checked + span { color: #d9363e; font-weight: 600; }
+.mcm-audio-mode-options label.is-disabled { opacity: .45; cursor: not-allowed; }

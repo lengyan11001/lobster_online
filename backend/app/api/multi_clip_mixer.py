@@ -401,6 +401,67 @@ def _download_bgm(url: str, work_dir: Path) -> Path:
     return target
 
 
+def _download_remote_video(url: str, work_dir: Path) -> Path:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("模板成片地址无效")
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
+        suffix = ".mp4"
+    target = work_dir / f"template_output{suffix}"
+    with httpx.Client(timeout=300.0, follow_redirects=True, trust_env=False) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        target.write_bytes(response.content)
+    if not target.exists() or target.stat().st_size == 0:
+        raise RuntimeError("模板成片下载为空")
+    return target
+
+
+def _replace_video_audio(
+    ffmpeg: str,
+    video_path: Path,
+    out_path: Path,
+    *,
+    duration: float,
+    audio_path: Optional[Path] = None,
+    bgm_path: Optional[Path] = None,
+    audio_volume: float = 1.0,
+    bgm_volume: float = 0.24,
+) -> None:
+    duration = max(0.1, float(duration or 0))
+    command = [ffmpeg, "-y", "-i", str(video_path)]
+    if audio_path is not None:
+        command.extend(["-i", str(audio_path)])
+        audio_filter = (
+            f"[1:a:0]atrim=start=0:duration={duration:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={audio_volume},aresample=48000,"
+            "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+            f"apad=whole_dur={duration:.3f}[aout]"
+        )
+    elif bgm_path is not None:
+        command.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
+        audio_filter = (
+            f"[1:a:0]atrim=duration={duration:.3f},asetpts=PTS-STARTPTS,"
+            f"volume={bgm_volume},aresample=48000,"
+            "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[aout]"
+        )
+    else:
+        raise ValueError("缺少音频源")
+    command.extend([
+        "-filter_complex", audio_filter,
+        "-map", "0:v:0",
+        "-map", "[aout]",
+        "-t", f"{duration:.3f}",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "160k",
+        "-movflags", "+faststart",
+        str(out_path),
+    ])
+    _run_process(command)
+
+
 def _extend_visual_segments_to_target(
     segments: List[Dict[str, Any]], target_duration: float, *, allow_trim: bool = False
 ) -> float:
@@ -847,6 +908,124 @@ async def concat_multi_clip_videos(
         "segments": rendered["segments"],
         "public_upload_warning": "" if source_url else str(upload_diag.get("error") or "成片已保存在本机，但暂时没有公网链接"),
     }
+
+
+class ReplaceAudioBody(BaseModel):
+    video_url: str = Field(..., min_length=1, max_length=2000)
+    title: str = Field("剪辑大师", max_length=80)
+    audio_mode: str = Field("original", max_length=16)
+    audio_asset_id: Optional[str] = Field(default=None, max_length=64)
+    bgm_url: Optional[str] = None
+    bgm_name: Optional[str] = None
+    bgm_volume: float = Field(0.24, ge=0, le=1)
+    audio_volume: float = Field(1.0, ge=0, le=2)
+    duration: float = Field(0, ge=0, le=3600)
+
+
+@router.post("/api/multi-clip-mixer/replace-audio")
+async def replace_multi_clip_audio(
+    body: ReplaceAudioBody,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """用标记的原声源或背景音乐替换模板成片的音轨。"""
+    mode = (body.audio_mode or "").strip()
+    if mode not in {"original", "bgm"}:
+        raise HTTPException(status_code=400, detail="不支持的音频模式")
+    if mode == "original" and not str(body.audio_asset_id or "").strip():
+        raise HTTPException(status_code=400, detail="请先标记一个原声源视频")
+    if mode == "bgm" and not str(body.bgm_url or "").strip():
+        raise HTTPException(status_code=400, detail="请先选择背景音乐")
+
+    ffmpeg = find_ffmpeg()
+    ffprobe = _find_ffprobe(ffmpeg)
+    work_dir = Path(tempfile.mkdtemp(prefix="mcm_audio_"))
+    try:
+        video_path = _download_remote_video(body.video_url, work_dir)
+        info = _probe_video(video_path, ffprobe)
+        duration = float(info["duration"] or 0) or float(body.duration or 0)
+        if duration <= 0.1:
+            raise HTTPException(status_code=400, detail="模板成片时长为 0，无法替换音频")
+
+        audio_path: Optional[Path] = None
+        bgm_path: Optional[Path] = None
+        if mode == "original":
+            audio_path, _, media_type = resolve_asset_path(
+                db, current_user.id, str(body.audio_asset_id).strip()
+            )
+            if media_type != "video":
+                raise HTTPException(status_code=400, detail="原声源不是视频")
+            audio_info = _probe_video(audio_path, ffprobe)
+            if not bool(audio_info["has_audio"]):
+                raise HTTPException(status_code=400, detail="原声源视频没有音频")
+        else:
+            bgm_path = _download_bgm(str(body.bgm_url).strip(), work_dir)
+
+        out_path = work_dir / "final.mp4"
+        _replace_video_audio(
+            ffmpeg,
+            video_path,
+            out_path,
+            duration=duration,
+            audio_path=audio_path,
+            bgm_path=bgm_path,
+            audio_volume=float(body.audio_volume or 1.0),
+            bgm_volume=float(body.bgm_volume or 0.24),
+        )
+        data = out_path.read_bytes()
+        asset_id, filename, file_size, source_url = await asyncio.to_thread(
+            _save_bytes_or_tos, data, ".mp4", "video/mp4"
+        )
+        upload_diag: Dict[str, Any] = {}
+        if not source_url:
+            source_url, upload_diag = await _upload_bytes_to_auth_server(
+                data, filename, "video/mp4", request, timeout=240.0
+            )
+        out_info = _probe_video(out_path, ffprobe)
+        row = Asset(
+            asset_id=asset_id,
+            user_id=current_user.id,
+            filename=filename,
+            media_type="video",
+            file_size=file_size,
+            source_url=source_url,
+            prompt="multi_clip_mixer_audio_replace",
+            model="local:ffmpeg-multi-clip-audio",
+            tags="multi_clip_mixer,video,audio_replace",
+            meta={
+                "title": (body.title or "剪辑大师").strip()[:80],
+                "audio_mode": mode,
+                "audio_source_asset_id": str(body.audio_asset_id or "").strip(),
+                "bgm_name": (body.bgm_name or "").strip()[:120],
+                "bgm_url": (body.bgm_url or "").strip()[:1000],
+                "bgm_volume": float(body.bgm_volume or 0.24),
+            },
+        )
+        try:
+            db.add(row)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        return {
+            "ok": True,
+            "asset_id": asset_id,
+            "source_url": source_url or "",
+            "preview_url": f"/api/assets/{asset_id}/content",
+            "file_size": file_size,
+            "duration": round(float(out_info["duration"] or duration), 3),
+            "width": out_info["width"],
+            "height": out_info["height"],
+            "public_upload_warning": "" if source_url else str(upload_diag.get("error") or "成片已保存在本机，但暂时没有公网链接"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[multi-clip-mixer] replace audio failed user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail=f"替换音频失败：{exc}") from exc
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @router.post("/api/multi-clip-mixer/render")
