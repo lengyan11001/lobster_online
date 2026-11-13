@@ -1775,6 +1775,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'x-leads': true,
   'tiktok-leads': true,
   'tiktok-workbench': true,
+  'channels-workbench': true,
   'ai-3d-model': true,
   'openclaw-skill-chat': true,
   'personal-whatsapp': true
@@ -1798,6 +1799,7 @@ var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
   reddit_leads_access: true,
   x_leads_access: true,
   tiktok_leads_access: true,
+  channels_leads_access: true,
   openai_official_image_channel_access: true,
   bihuo_25_video_skill: true,
   ai_secretary_entry: true,
@@ -1863,6 +1865,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'reddit-leads': 'reddit_leads_access',
   'x-leads': 'x_leads_access',
   'tiktok-workbench': 'tiktok_leads_access',
+  'channels-workbench': 'channels_leads_access',
   'social-leads': ['reddit_leads_access', 'x_leads_access', 'tiktok_leads_access', 'reddit_leads', 'x_leads', 'tiktok_leads'],
   tutorial: 'tutorial_entry',
 };

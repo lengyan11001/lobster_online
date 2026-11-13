@@ -30,7 +30,7 @@ def test_global_navigation_matches_workbench_layout():
     assert "AI调度助手" in html
     assert "AI营销创作" in html
     assert "AI获客" in html
-    assert "私域销管" in html
+    assert "私域接管" in html
     assert "AI海外平台" in html
     assert "抖音获客" in html
     assert "个微" in html
@@ -38,7 +38,7 @@ def test_global_navigation_matches_workbench_layout():
     assert "AI私域销冠" not in html
     assert "销售引流获客" not in html
     assert "服务运营交付" not in html
-    assert "视频号获客" not in html
+    assert "视频号获客" in html
     assert "快手获客" not in html
     assert "小红书获客" not in html
     sidebar_nav = html[html.index('<div class="chat-sidebar-nav'): html.index('<div class="chat-sidebar-section-label">')]
@@ -49,7 +49,7 @@ def test_global_navigation_matches_workbench_layout():
 
     marketing_nav = sidebar_nav[sidebar_nav.index("<span>AI营销创作</span>"): sidebar_nav.index("</details>", sidebar_nav.index("<span>AI营销创作</span>"))]
     expected_marketing_labels = [
-        "IP日更文案",
+        "IP口播文案",
         "AI设计图",
         "数字人口播视频",
         "同城爆款视频",
@@ -57,7 +57,8 @@ def test_global_navigation_matches_workbench_layout():
         "公众号文章",
     ]
     assert [marketing_nav.index(label) for label in expected_marketing_labels] == sorted(marketing_nav.index(label) for label in expected_marketing_labels)
-    for hidden_label in ("创意视频", "爆款TVC", "爆款复刻", "剪辑大师", "PPT制作", "电商详情页"):
+    assert "视频号获客" in marketing_nav
+    for hidden_label in (">创意视频<", "爆款TVC", "爆款复刻", "剪辑大师", "PPT制作", "电商详情页"):
         assert hidden_label not in marketing_nav
 
 
