@@ -344,6 +344,27 @@ def _merge_cards(target: Dict[str, Dict[str, Any]], rows: List[Dict[str, Any]]) 
     return added
 
 
+def _replace_edit_text(edit: Any, text: str) -> None:
+    """先全选再粘贴，避免搜索框里越叠越多（装修装修装修...）。"""
+    _click(edit, label="搜索输入框")
+    time.sleep(0.15)
+    try:
+        auto.SendKeys("{Ctrl}a", waitTime=0.05)
+    except Exception:
+        pass
+    time.sleep(0.1)
+    eng._paste_text(text)
+    time.sleep(0.2)
+    try:
+        value_pattern = edit.GetValuePattern()
+        current = str(value_pattern.Value or "")
+        if current != str(text or ""):
+            value_pattern.SetValue(str(text or ""))
+            time.sleep(0.2)
+    except Exception:
+        pass
+
+
 def search_videos(keyword: str, *, max_results: int = 20, max_scroll_rounds: int = 6) -> Dict[str, Any]:
     keyword = str(keyword or "").strip()
     if not keyword:
@@ -359,9 +380,7 @@ def search_videos(keyword: str, *, max_results: int = 20, max_scroll_rounds: int
     edit = _wait(lambda: _feed_search_edit(root), timeout=3.0)
     if not edit:
         raise ChannelsUiError("视频号搜索输入框未出现")
-    _click(edit, label="搜索输入框")
-    eng._paste_text(keyword)
-    time.sleep(0.25)
+    _replace_edit_text(edit, keyword)
     auto.SendKeys("{Enter}", waitTime=0.05)
     _wait(lambda: "搜一搜" in active_doc_name(hwnd), timeout=8.0)
 
