@@ -191,3 +191,37 @@ def test_is_channels_window_matches_video_tab(monkeypatch):
     monkeypatch.setattr(channels_ui.win32gui, "GetWindowRect", lambda win: (0, 0, 1200, 800))
     monkeypatch.setattr(channels_ui, "_doc_names", lambda win: ["装修避坑 - 第一页"])
     assert channels_ui._is_channels_window(8) is True
+
+
+def test_click_refuses_when_target_window_not_wechat(monkeypatch):
+    clicked = []
+    monkeypatch.setattr(channels_ui, "_rect", lambda node: (0, 0, 10, 10))
+    monkeypatch.setattr(channels_ui.win32gui, "WindowFromPoint", lambda pt: 555)
+    monkeypatch.setattr(channels_ui.win32gui, "GetAncestor", lambda hwnd, flag: 555)
+    monkeypatch.setattr(channels_ui.win32gui, "GetForegroundWindow", lambda: 999)
+    monkeypatch.setattr(channels_ui, "_process_name", lambda hwnd: "chrome.exe")
+    monkeypatch.setattr(channels_ui.eng, "_click_uia_node", lambda node: clicked.append(node))
+    with pytest.raises(channels_ui.ChannelsUiError):
+        channels_ui._click(object(), label="测试控件")
+    assert clicked == []
+
+
+def test_click_proceeds_when_wechat_in_foreground(monkeypatch):
+    clicked = []
+    monkeypatch.setattr(channels_ui, "_rect", lambda node: (0, 0, 10, 10))
+    monkeypatch.setattr(channels_ui.win32gui, "WindowFromPoint", lambda pt: 555)
+    monkeypatch.setattr(channels_ui.win32gui, "GetAncestor", lambda hwnd, flag: 555)
+    monkeypatch.setattr(channels_ui.win32gui, "GetForegroundWindow", lambda: 555)
+    monkeypatch.setattr(channels_ui, "_process_name", lambda hwnd: "wechatappex.exe")
+    monkeypatch.setattr(channels_ui.eng, "_click_uia_node", lambda node: clicked.append(node))
+    channels_ui._click(object(), label="测试控件")
+    assert len(clicked) == 1
+
+
+def test_wheel_refuses_when_not_wechat(monkeypatch):
+    moved = []
+    monkeypatch.setattr(channels_ui, "_foreground_is_wechat", lambda: False)
+    monkeypatch.setattr(channels_ui.win32api, "SetCursorPos", lambda pt: moved.append(pt))
+    with pytest.raises(channels_ui.ChannelsUiError):
+        channels_ui._wheel(100, 100)
+    assert moved == []

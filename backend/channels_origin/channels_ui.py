@@ -209,7 +209,7 @@ def open_channels() -> Dict[str, Any]:
     tab = eng._find_tab_item(root, ["视频号"])
     if not tab:
         raise ChannelsUiError("微信左侧栏未找到『视频号』入口")
-    eng._click_uia_node(tab)
+    _click(tab, label="微信左侧栏视频号入口")
     hwnd = _wait(lambda: channels_hwnd(required=False), timeout=6.0)
     if not hwnd:
         raise ChannelsUiError("点击视频号后未出现视频号窗口")
@@ -233,7 +233,7 @@ def ensure_feed_tab(hwnd: Optional[int] = None) -> bool:
         return True
     for tab in _tabs(target):
         try:
-            eng._click_uia_node(tab)
+            _click(tab, label="视频号标签")
             time.sleep(0.7)
             doc = active_doc_name(target)
             if doc == "视频号" or doc.startswith("视频号"):
@@ -267,9 +267,46 @@ def _find_first(root: Any, *, class_contains: str = "", name: str = "", type_con
     return None
 
 
+_WECHAT_PROCESS_NAMES = {"weixin.exe", "wechatappex.exe"}
+
+
+def _process_name(hwnd: int) -> str:
+    try:
+        _thread, pid = win32process.GetWindowThreadProcessId(int(hwnd))
+        import psutil
+
+        return str(psutil.Process(int(pid)).name() or "").lower()
+    except Exception:
+        return ""
+
+
+def _foreground_is_wechat() -> bool:
+    return _process_name(int(win32gui.GetForegroundWindow() or 0)) in _WECHAT_PROCESS_NAMES
+
+
 def _click(node: Any, *, label: str = "") -> None:
+    """只在前台确实是微信窗口时点击，避免坐标落点漂到别的程序上。"""
     if node is None:
         raise ChannelsUiError(f"控件不存在：{label}")
+    rect = _rect(node)
+    if rect:
+        center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+        try:
+            target = int(win32gui.GetAncestor(win32gui.WindowFromPoint(center), win32con.GA_ROOT) or 0)
+        except Exception:
+            target = 0
+        if target and win32gui.GetForegroundWindow() != target:
+            if _process_name(target) not in _WECHAT_PROCESS_NAMES:
+                raise ChannelsUiError(f"目标窗口不是微信，已停止点击：{label}")
+            if not _activate_hwnd(target):
+                raise ChannelsUiError(f"微信窗口无法切到前台，已停止点击：{label}")
+            time.sleep(0.15)
+        if target and win32gui.GetForegroundWindow() != target:
+            raise ChannelsUiError(f"前台窗口校验失败，已停止点击：{label}")
+        if not _foreground_is_wechat():
+            raise ChannelsUiError(f"前台不是微信，已停止点击：{label}")
+    elif not _foreground_is_wechat():
+        raise ChannelsUiError(f"控件没有坐标且前台不是微信，已停止点击：{label}")
     try:
         eng._click_uia_node(node)
     except Exception as exc:
@@ -284,6 +321,8 @@ def _foreground_channels(hwnd: int) -> None:
 
 
 def _wheel(x: int, y: int, notches: int = 6) -> None:
+    if not _foreground_is_wechat():
+        raise ChannelsUiError("前台不是微信窗口，已停止滚轮操作")
     win32api.SetCursorPos((int(x), int(y)))
     for _ in range(max(1, abs(int(notches)))):
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, 120 if notches > 0 else -120, 0)
@@ -609,6 +648,8 @@ def _search_page_input(root: Any) -> Optional[Any]:
 
 
 def _scroll_top(x: int = 700, y: int = 400, notches: int = 40) -> None:
+    if not _foreground_is_wechat():
+        raise ChannelsUiError("前台不是微信窗口，已停止滚动")
     win32api.SetCursorPos((int(x), int(y)))
     for _ in range(max(1, int(notches))):
         win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, 120, 0)
@@ -631,6 +672,8 @@ def _click_accounts_tab(hwnd: int) -> None:
     # 搜索页子 tab 没有 UIA：全部/视频/账号/直播 相对搜索框固定偏移
     x = rect[0] + 142
     y = rect[3] + 22
+    if not _foreground_is_wechat():
+        raise ChannelsUiError("前台不是微信窗口，已停止点击账号 tab")
     win32api.SetCursorPos((int(x), int(y)))
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
