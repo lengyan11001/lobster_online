@@ -36,6 +36,7 @@ BLOB_CUSTOMERS_PRECISE = "channels_ui_customers_precise"
 BLOB_ACCOUNTS = "channels_ui_accounts"
 BLOB_SETTINGS = "channels_ui_settings"
 BLOB_LOGS = "channels_ui_logs"
+BLOB_FEEDBACK = "channels_feedback_examples"
 
 DOUYIN_INTENT_DIRECTION_DEFAULT = (
     "请筛选评论中是否属于精准客户。这里的精准客户指：有真实需求、了解意愿、"
@@ -150,6 +151,30 @@ def ai_available(request: Optional[Request] = None) -> bool:
         return False
 
 
+def _feedback_text() -> str:
+    rows = _load(BLOB_FEEDBACK, [])
+    if not isinstance(rows, list) or not rows:
+        return ""
+    positives = []
+    negatives = []
+    for row in rows[-80:]:
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content") or "").strip()
+        if not content:
+            continue
+        line = "- " + content[:120]
+        if row.get("is_high_intent"):
+            positives.append(line)
+        else:
+            negatives.append(line)
+    parts = []
+    if positives:
+        parts.append("人工标记为精准客户的评论（必须保留）：\n" + "\n".join(positives[-10:]))
+    if negatives:
+        parts.append("人工标记为误判的评论（必须排除）：\n" + "\n".join(negatives[-10:]))
+    return "\n\n".join(parts)
+
 def ai_filter_comments(
     request: Optional[Request],
     title: str,
@@ -177,10 +202,14 @@ def ai_filter_comments(
                 "reply_count": row.get("reply_count") or "",
                 "avatar_url": row.get("avatar") or "",
             })
+        feedback = _feedback_text()
+        effective_prompt = str(prompt or "")
+        if feedback:
+            effective_prompt = effective_prompt + "\n\n人工反馈示例（必须参考）：\n" + feedback
         result = client.filter_comments(
             title or "",
             rows,
-            direction=str(prompt or ""),
+            direction=effective_prompt,
             intent_profile="douyin_transactional",
             filter_strategy=str(strategy or "prompt"),
         )
@@ -446,7 +475,11 @@ async def search_videos_api(request: Request):
     merged: Dict[str, Dict[str, Any]] = {}
     errors: List[str] = []
     per_query = max(10, min(30, max_results))
-    for query in queries:
+    related_added = False
+    index = 0
+    while index < len(queries):
+        query = queries[index]
+        index += 1
         try:
             result = await asyncio.to_thread(
                 channels_ui.search_videos,
@@ -459,10 +492,49 @@ async def search_videos_api(request: Request):
                 if key and key not in merged:
                     item["source_query"] = query
                     merged[key] = item
+            if deep and not related_added:
+                try:
+                    related = await asyncio.to_thread(channels_ui.extract_related_keywords, 5)
+                except Exception:
+                    related = []
+                for term in related:
+                    term = str(term or "").strip()
+                    if term and term not in queries and len(queries) < max_queries:
+                        queries.append(term)
+                related_added = True
         except Exception as exc:
             errors.append(f"{query}: {str(exc)[:120]}")
         if len(merged) >= max_results:
             break
+    if deep and bool(body.get("include_accounts")):
+        try:
+            accounts = await asyncio.to_thread(
+                channels_ui.search_accounts,
+                keyword,
+                max_results=min(5, max(2, max_queries // 2)),
+                max_scroll_rounds=2,
+            )
+            for account in (accounts.get("items") or [])[:5]:
+                name = str(account.get("name") or "").strip()
+                if not name or len(merged) >= max_results:
+                    continue
+                try:
+                    result = await asyncio.to_thread(
+                        channels_ui.search_videos,
+                        name,
+                        max_results=per_query,
+                        max_scroll_rounds=3,
+                    )
+                    for item in result.get("items") or []:
+                        key = str(item.get("key") or item.get("raw") or "")
+                        if key and key not in merged:
+                            item["source_query"] = name
+                            item["source_account"] = name
+                            merged[key] = item
+                except Exception as exc:
+                    errors.append(f"账号:{name}: {str(exc)[:100]}")
+        except Exception as exc:
+            errors.append(f"账号搜索: {str(exc)[:120]}")
     if not merged:
         _log(f"视频搜索失败：{errors[:2]}", level="error", keyword=keyword)
         return _error((errors[0] if errors else "没有搜到视频")[:300], 500)
@@ -802,6 +874,49 @@ async def ai_status(request: Request):
         "direction": str(settings.get("comment_direction") or DOUYIN_INTENT_DIRECTION_DEFAULT),
     })
 
+
+@router.post("/tasks/{task_id}/feedback")
+async def task_feedback(task_id: int, request: Request):
+    body = await _json_body(request)
+    comment_id = str(body.get("comment_id") or "").strip()
+    wants_high = bool(body.get("is_high_intent"))
+    note = str(body.get("note") or "").strip()
+    if not comment_id:
+        return _error("缺少 comment_id")
+    tasks = _load(BLOB_TASKS, [])
+    task = next((t for t in tasks if int(t.get("id") or 0) == int(task_id)), None)
+    if not task:
+        return _error("任务不存在", 404)
+    comments = task.get("all_comments") or task.get("comments") or []
+    target = next((row for row in comments if str(row.get("comment_id") or "") == comment_id), None)
+    if not target:
+        return _error("评论不存在")
+    high = [row for row in (task.get("high_intent_users") or []) if str(row.get("comment_id") or "") != comment_id]
+    if wants_high:
+        high.append({
+            **target,
+            "comment_id": comment_id,
+            "is_high_intent": True,
+            "ai_score": 1.0,
+            "ai_intent_level": "high",
+            "ai_reason": note or "人工标记精准",
+        })
+    task["high_intent_users"] = high
+    task["summary"] = _task_summary(task)
+    task["updated_at"] = _now_text()
+    _save(BLOB_TASKS, tasks)
+    rows = [row for row in _load(BLOB_FEEDBACK, []) if str(row.get("comment_id") or "") != comment_id]
+    rows.append({
+        "comment_id": comment_id,
+        "nickname": target.get("nickname") or "",
+        "content": target.get("content") or "",
+        "is_high_intent": wants_high,
+        "note": note,
+        "created_at": _now_text(),
+    })
+    _save(BLOB_FEEDBACK, rows[-500:])
+    _persist_customers()
+    return _ok({"count": len(high), "is_high_intent": wants_high})
 
 @router.get("/customer-pools")
 async def customer_pools():

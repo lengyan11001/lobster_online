@@ -866,3 +866,42 @@ def collect_comments_for_card(keyword: str, card_key: str, *, max_comments: int 
         except Exception:
             pass
     return result
+
+
+
+def extract_related_keywords(max_items: int = 8) -> List[str]:
+    """从搜索结果右侧“相关搜索”提取扩展词。"""
+    hwnd = channels_hwnd(required=False)
+    if not hwnd:
+        return []
+    root = auto.ControlFromHandle(hwnd)
+    nodes = eng._uia_walk(root, max_depth=32, max_nodes=18000)
+    anchor_y = None
+    for node in nodes:
+        if _text(node) == "相关搜索":
+            rect = _rect(node)
+            if rect:
+                anchor_y = rect[1]
+                break
+    if anchor_y is None:
+        return []
+    terms: List[str] = []
+    seen = set()
+    for node in nodes:
+        rect = _rect(node)
+        text = _text(node).strip()
+        if not rect or rect[1] <= anchor_y or rect[1] > anchor_y + 500:
+            continue
+        if rect[0] < 1180 or not text or len(text) > 40:
+            continue
+        cls = _cls(node)
+        if "ellipsis-text" not in cls and _type(node) != "TextControl":
+            continue
+        key = re.sub(r"\s+", "", text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        terms.append(text)
+        if len(terms) >= max_items:
+            break
+    return terms
