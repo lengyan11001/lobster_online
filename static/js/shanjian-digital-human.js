@@ -1465,7 +1465,7 @@
     if ($('shanjianMaterialLibraryTabBtn')) $('shanjianMaterialLibraryTabBtn').classList.toggle('is-active', state.activeView === 'material');
     if ($('shanjianResultTabBtn')) $('shanjianResultTabBtn').classList.toggle('is-active', state.activeView === 'result');
     if (state.activeView === 'material') {
-      loadMaterialPickerItems(false).catch(function() {});
+      loadMaterialPickerItems(true).catch(function() {});
       renderMaterialLibrary();
     }
   }
@@ -1702,8 +1702,8 @@
     var remoteId = String(item.remote_asset_id || '').trim();
     var sourceUrl = normalizeAssetUrl(item.source_url || '');
     var publicSource = isPublicAssetUrl(sourceUrl);
-    // 本机只存在本地、又没同步到云端的素材，云端剪辑取不到文件，不在列表里出现。
-    if (!cloudIds && !remoteId && !publicSource) return null;
+    // 2026-11-14：刚上传、还没同步到云端的素材也要能看到、能选。
+    // 列表接口会给本地签名预览 URL；提交前会走 /api/assets/shanjian-prepare 生成合规副本。
     var assetId = cloudIds ? String(item.asset_id || '').trim() : (remoteId || String(item.asset_id || '').trim());
     if (!assetId) return null;
     var thumb = normalizeAssetUrl(item.preview_url || item.open_url || sourceUrl || '');
@@ -2121,7 +2121,8 @@
       +     '<button type="button" id="shanjianMaterialPickerReload" class="btn btn-ghost btn-sm">刷新素材库</button>'
       +   '</div>'
       +   '<div id="shanjianMaterialPickerStatus" style="padding:0.6rem 1rem 0;color:#6d7791;font-size:0.8rem;">正在加载素材库...</div>'
-      +   '<div id="shanjianMaterialPickerGrid" style="padding:0.75rem 1rem 1rem;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0.65rem;min-height:260px;max-height:58vh;"></div>'
+      +   '<div id="shanjianMaterialPickerGrid" style="padding:0.75rem 1rem 0.2rem;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0.65rem;min-height:260px;max-height:56vh;"></div>'
+      +   '<div id="shanjianMaterialPickerPager" class="shanjian-material-pager" style="padding:0 1rem 0.5rem;"></div>'
       +   '<div class="shanjian-modal-foot">'
       +     '<span id="shanjianMaterialPickerCount" style="color:#6d7791;font-size:0.82rem;">已选择 0 个</span>'
       +     '<div class="shanjian-modal-actions">'
@@ -2140,6 +2141,11 @@
       var closer = event.target && event.target.closest ? event.target.closest('[data-modal-close="shanjianMaterialPickerModal"]') : null;
       if (closer) {
         closeModal('shanjianMaterialPickerModal');
+        return;
+      }
+      var previewHit = event.target && event.target.closest ? event.target.closest('[data-material-preview]') : null;
+      if (previewHit) {
+        openMaterialPreview(previewHit.getAttribute('data-material-preview'));
         return;
       }
       var card = event.target && event.target.closest ? event.target.closest('[data-material-asset-id]') : null;
@@ -2176,6 +2182,83 @@
     });
   }
 
+  var MATERIAL_PAGE_SIZE = 18;
+
+  function paginateMaterialItems(items, page) {
+    var total = (items || []).length;
+    var pages = Math.max(1, Math.ceil(total / MATERIAL_PAGE_SIZE));
+    var current = Math.min(Math.max(1, parseInt(page, 10) || 1), pages);
+    var start = (current - 1) * MATERIAL_PAGE_SIZE;
+    return { total: total, pages: pages, page: current, items: (items || []).slice(start, start + MATERIAL_PAGE_SIZE) };
+  }
+
+  function materialPagerHtml(scope, page, pages, total) {
+    if (pages <= 1) return '<span class="shanjian-pager-info">共 ' + total + ' 个素材</span>';
+    var html = '';
+    function btn(label, target, disabled, active) {
+      return '<button type="button" class="shanjian-pager-btn' + (active ? ' is-active' : '') + '"'
+        + ' data-material-page="' + target + '" data-material-page-scope="' + scope + '"'
+        + (disabled ? ' disabled' : '') + '>' + label + '</button>';
+    }
+    html += btn('上一页', page - 1, page <= 1, false);
+    var start = Math.max(1, page - 2);
+    var end = Math.min(pages, start + 4);
+    start = Math.max(1, Math.min(start, end - 4));
+    for (var i = start; i <= end; i += 1) html += btn(String(i), i, false, i === page);
+    html += btn('下一页', page + 1, page >= pages, false);
+    html += '<span class="shanjian-pager-info">第 ' + page + ' / ' + pages + ' 页 · 共 ' + total + ' 个</span>';
+    return html;
+  }
+
+  function bindMaterialPager(container, onPage) {
+    if (!container) return;
+    Array.prototype.forEach.call(container.querySelectorAll('[data-material-page]'), function(btn) {
+      btn.addEventListener('click', function() {
+        onPage(parseInt(btn.getAttribute('data-material-page'), 10) || 1);
+      });
+    });
+  }
+
+  function ensureMaterialPreviewOverlay() {
+    var overlay = document.getElementById('shanjianMaterialPreview');
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'shanjianMaterialPreview';
+    overlay.className = 'shanjian-material-preview';
+    overlay.innerHTML = '<div class="shanjian-material-preview-card">'
+      + '<button type="button" class="shanjian-material-preview-close" data-material-preview-close="1" aria-label="关闭">×</button>'
+      + '<div class="shanjian-material-preview-body" id="shanjianMaterialPreviewBody"></div>'
+      + '<div class="shanjian-material-preview-name" id="shanjianMaterialPreviewName"></div>'
+      + '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(event) {
+      if (event.target === overlay || (event.target && event.target.closest && event.target.closest('[data-material-preview-close]'))) {
+        overlay.style.display = 'none';
+        var body = overlay.querySelector('#shanjianMaterialPreviewBody');
+        if (body) body.innerHTML = '';
+      }
+    });
+    return overlay;
+  }
+
+  function openMaterialPreview(assetId) {
+    assetId = String(assetId || '').trim();
+    if (!assetId) return;
+    var item = (state.materialPicker.items || []).find(function(row) { return String(row && row.asset_id || '') === assetId; });
+    if (!item) return;
+    var overlay = ensureMaterialPreviewOverlay();
+    var body = overlay.querySelector('#shanjianMaterialPreviewBody');
+    var name = overlay.querySelector('#shanjianMaterialPreviewName');
+    if (name) name.textContent = item.name || '';
+    var url = item.open_url || item.preview_url || item.source_url || '';
+    if (body) {
+      body.innerHTML = item.media_type === 'video'
+        ? '<video src="' + escapeHtml(url) + '" controls autoplay playsinline style="max-width:92vw;max-height:76vh;background:#000;border-radius:12px;"></video>'
+        : '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(item.name) + '" style="max-width:92vw;max-height:76vh;object-fit:contain;background:#000;border-radius:12px;">';
+    }
+    overlay.style.display = 'flex';
+  }
+
   function renderMaterialLibrary() {
     var grid = $('shanjianMaterialGrid');
     var empty = $('shanjianMaterialEmpty');
@@ -2188,6 +2271,8 @@
     count.textContent = String(items.length);
     if (!items.length) {
       grid.innerHTML = '';
+      var emptyPager = $('shanjianMaterialPager');
+      if (emptyPager) emptyPager.innerHTML = '';
       empty.style.display = 'block';
       empty.textContent = state.materialPicker.loading
         ? '正在加载素材库...'
@@ -2196,7 +2281,9 @@
     }
     empty.style.display = 'none';
     var selectedMap = selectedMaterialIdsMap();
-    grid.innerHTML = items.map(function(item) {
+    var paged = paginateMaterialItems(items, state.materialPage || 1);
+    state.materialPage = paged.page;
+    grid.innerHTML = paged.items.map(function(item) {
       var active = selectedMap[item.asset_id] ? ' is-selected' : '';
       var thumb = item.media_type === 'video'
         ? (item.preview_url
@@ -2207,7 +2294,7 @@
           : '<div>图片</div>');
       return ''
         + '<button type="button" class="shanjian-material-picker-item' + active + '" data-material-library-id="' + escapeHtml(item.asset_id) + '">'
-        + '<span class="shanjian-material-picker-thumb">' + thumb + '</span>'
+        + '<span class="shanjian-material-picker-thumb" data-material-preview="' + escapeHtml(item.asset_id) + '" title="点击放大预览">' + thumb + '</span>'
         + '<span style="min-width:0;display:flex;flex-direction:column;gap:0.16rem;">'
         + '<span class="shanjian-material-picker-name" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span>'
         + '<span class="shanjian-material-picker-meta">' + escapeHtml(item.media_type === 'video' ? '视频素材' : '图片素材') + '</span>'
@@ -2215,10 +2302,17 @@
         + '<span class="shanjian-material-picker-check">✓</span>'
         + '</button>';
     }).join('');
+    var libraryPager = $('shanjianMaterialPager');
+    if (libraryPager) {
+      libraryPager.innerHTML = materialPagerHtml('library', paged.page, paged.pages, paged.total);
+      bindMaterialPager(libraryPager, function(page) { state.materialPage = page; renderMaterialLibrary(); });
+    }
     Array.prototype.forEach.call(grid.querySelectorAll('[data-material-library-id]'), function(btn) {
-      btn.addEventListener('click', function() {
+      btn.addEventListener('click', function(event) {
         var assetId = String(btn.getAttribute('data-material-library-id') || '').trim();
         if (!assetId) return;
+        var previewEl = event.target && event.target.closest ? event.target.closest('[data-material-preview]') : null;
+        if (previewEl) { openMaterialPreview(assetId); return; }
         if (selectedMap[assetId]) {
           state.selectedMaterials = (state.selectedMaterials || []).filter(function(item) {
             return String(item && item.asset_id || '').trim() !== assetId;
@@ -2260,6 +2354,8 @@
     if (count) count.textContent = '已选择 ' + selectedCount + ' 个';
     if (confirm) confirm.disabled = selectedCount < 1;
 
+    var pickerPagerEl = modal.querySelector('#shanjianMaterialPickerPager');
+    if (pickerPagerEl) pickerPagerEl.innerHTML = '';
     if (state.materialPicker.loading) {
       status.textContent = '正在加载素材库...';
       grid.innerHTML = '<div class="shanjian-material-empty" style="grid-column:1 / -1;">正在加载素材库...</div>';
@@ -2276,8 +2372,10 @@
       grid.innerHTML = '<div class="shanjian-material-empty" style="grid-column:1 / -1;">没有搜到匹配的素材，换个关键词试试。</div>';
       return;
     }
-    status.textContent = '共 ' + state.materialPicker.items.length + ' 个素材，当前显示 ' + items.length + ' 个';
-    grid.innerHTML = items.map(function(item) {
+    var pagedPicker = paginateMaterialItems(items, state.materialPickerPage || 1);
+    state.materialPickerPage = pagedPicker.page;
+    status.textContent = '共 ' + pagedPicker.total + ' 个素材，当前显示 ' + pagedPicker.items.length + ' 个（第 ' + pagedPicker.page + ' / ' + pagedPicker.pages + ' 页）';
+    grid.innerHTML = pagedPicker.items.map(function(item) {
       var active = selectedMap[item.asset_id] ? ' is-selected' : '';
       var thumb = item.media_type === 'video'
         ? (item.preview_url
@@ -2288,12 +2386,17 @@
           : '<div>图片</div>');
       return ''
         + '<button type="button" class="shanjian-material-picker-item' + active + '" data-material-asset-id="' + escapeHtml(item.asset_id) + '">'
-        +   '<span class="shanjian-material-picker-thumb">' + thumb + '</span>'
+        +   '<span class="shanjian-material-picker-thumb" data-material-preview="' + escapeHtml(item.asset_id) + '" title="点击放大预览">' + thumb + '</span>'
         +   '<span class="shanjian-material-picker-name" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + '</span>'
         +   '<span class="shanjian-material-picker-meta">' + escapeHtml(item.media_type === 'video' ? '视频素材' : '图片素材') + '</span>'
         +   '<span class="shanjian-material-picker-check">✓</span>'
         + '</button>';
     }).join('');
+    var pickerPager = modal.querySelector('#shanjianMaterialPickerPager');
+    if (pickerPager) {
+      pickerPager.innerHTML = materialPagerHtml('picker', pagedPicker.page, pagedPicker.pages, pagedPicker.total);
+      bindMaterialPager(pickerPager, function(page) { state.materialPickerPage = page; renderMaterialPicker(); });
+    }
   }
 
   function toggleMaterialPickerSelection(assetId) {
@@ -2329,11 +2432,13 @@
         var rows = Array.isArray(data.assets) ? data.assets : (Array.isArray(data.items) ? data.items : []);
         state.materialPicker.items = rows.map(function(row) { return normalizeMaterialAsset(row, fromCloud); }).filter(Boolean);
         state.materialPicker.loading = false;
+        renderMaterialLibrary();
         renderMaterialPicker();
         return state.materialPicker.items;
       });
     }).catch(function(err) {
       state.materialPicker.loading = false;
+      renderMaterialLibrary();
       var status = modal.querySelector('#shanjianMaterialPickerStatus');
       if (status) status.textContent = err && err.message ? err.message : '素材库加载失败';
       renderMaterialPicker();
@@ -4513,9 +4618,18 @@
       + '#content-shanjian-digital-human .shanjian-material-card-title{font-size:0.85rem;font-weight:600;color:#182033;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
       + '#content-shanjian-digital-human .shanjian-material-card-meta{font-size:0.74rem;color:#6d7791;}'
       + '#content-shanjian-digital-human .shanjian-material-card-remove{border:none;background:rgba(239,68,68,0.08);color:#b91c1c;width:30px;height:30px;border-radius:999px;cursor:pointer;flex:0 0 auto;}'
-      + '#content-shanjian-digital-human .shanjian-material-picker-item{position:relative;display:grid;grid-template-columns:66px minmax(0,1fr) auto;gap:0.58rem;align-items:center;padding:0.6rem 0.62rem;border:1px solid rgba(26,39,68,0.08);border-radius:14px;background:#fff;cursor:pointer;box-shadow:0 10px 22px rgba(26,39,68,0.05);text-align:left;}'
+      + '#content-shanjian-digital-human .shanjian-material-picker-item{position:relative;display:grid;grid-template-columns:96px minmax(0,1fr) auto;gap:0.58rem;align-items:center;padding:0.6rem 0.62rem;border:1px solid rgba(26,39,68,0.08);border-radius:14px;background:#fff;cursor:pointer;box-shadow:0 10px 22px rgba(26,39,68,0.05);text-align:left;}'
       + '#content-shanjian-digital-human .shanjian-material-picker-item.is-selected{border-color:rgba(124,94,255,0.34);box-shadow:0 12px 28px rgba(124,94,255,0.14);}'
-      + '#content-shanjian-digital-human .shanjian-material-picker-thumb{width:66px;height:66px;border-radius:12px;overflow:hidden;background:#eef2ff;display:flex;align-items:center;justify-content:center;color:#60708c;font-size:0.76rem;}'
+      + '#content-shanjian-digital-human .shanjian-material-picker-thumb{width:96px;height:96px;border-radius:12px;overflow:hidden;background:#eef2ff;display:flex;align-items:center;justify-content:center;color:#60708c;font-size:0.76rem;cursor:zoom-in;}'
+      + '#content-shanjian-digital-human .shanjian-material-pager{display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;margin-top:0.75rem;}'
+      + '#content-shanjian-digital-human .shanjian-pager-btn{border:1px solid rgba(124,94,255,0.18);background:#fff;color:#4b5563;border-radius:10px;padding:0.32rem 0.7rem;font-size:0.78rem;cursor:pointer;}'
+      + '#content-shanjian-digital-human .shanjian-pager-btn.is-active{background:linear-gradient(135deg,#7c5eff,#6a8cff);color:#fff;border-color:transparent;}'
+      + '#content-shanjian-digital-human .shanjian-pager-btn:disabled{opacity:0.45;cursor:default;}'
+      + '#content-shanjian-digital-human .shanjian-pager-info{font-size:0.76rem;color:#6d7791;margin-left:0.3rem;}'
+      + '.shanjian-material-preview{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(8,12,24,0.86);}'
+      + '.shanjian-material-preview-card{position:relative;display:flex;flex-direction:column;gap:0.5rem;align-items:center;justify-content:center;max-width:96vw;}'
+      + '.shanjian-material-preview-close{position:absolute;top:-2.4rem;right:0;border:none;background:rgba(255,255,255,0.16);color:#fff;width:34px;height:34px;border-radius:999px;font-size:1.1rem;cursor:pointer;}'
+      + '.shanjian-material-preview-name{color:#e5e7eb;font-size:0.85rem;max-width:80vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
       + '#content-shanjian-digital-human .shanjian-material-picker-thumb img,#content-shanjian-digital-human .shanjian-material-picker-thumb video{width:100%;height:100%;object-fit:cover;display:block;}'
       + '#content-shanjian-digital-human .shanjian-material-picker-name{min-width:0;font-size:0.84rem;font-weight:700;color:#1f2b42;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'
       + '#content-shanjian-digital-human .shanjian-material-picker-meta{font-size:0.72rem;color:#6d7791;white-space:nowrap;}'
@@ -5001,6 +5115,7 @@
                   </div>
                 </div>
                 <div id="shanjianMaterialGrid" class="shanjian-template-grid"></div>
+                <div id="shanjianMaterialPager" class="shanjian-material-pager"></div>
                 <div id="shanjianMaterialEmpty" class="shanjian-section-empty"></div>
               </div>
 
