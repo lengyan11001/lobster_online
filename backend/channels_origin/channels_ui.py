@@ -194,6 +194,14 @@ def active_doc_name(hwnd: Optional[int] = None) -> str:
 
 
 def open_channels() -> Dict[str, Any]:
+    existing = channels_hwnd(required=False)
+    if existing:
+        _activate_hwnd(int(existing))
+        try:
+            ensure_feed_tab(int(existing))
+        except Exception:
+            pass
+        return {"ok": True, "hwnd": int(existing), "doc": active_doc_name(int(existing)), "reused": True}
     main = main_window()
     main_hwnd = int(main["hwnd"])
     _activate_hwnd(main_hwnd)
@@ -814,22 +822,53 @@ def close_comment_panel() -> bool:
     return False
 
 
-def close_extra_channels_windows(keep_hwnd: Optional[int] = None) -> int:
-    keep = int(keep_hwnd or 0)
-    targets: List[int] = []
+_MINI_PROGRAM_DOCS = {"AppIndex", "Context"}
+_WECHAT_TITLES = ("微信", "WeChat", "Weixin")
+
+
+def _wechat_appex_windows() -> List[int]:
+    rows: List[int] = []
 
     def callback(win: int, _extra: Any) -> None:
-        if win == keep or not win32gui.IsWindowVisible(win):
+        try:
+            import psutil
+
+            _thread, pid = win32process.GetWindowThreadProcessId(win)
+            name = str(psutil.Process(int(pid)).name() or "").lower()
+        except Exception:
+            return
+        if name != "wechatappex.exe":
             return
         if str(win32gui.GetClassName(win) or "") != "Chrome_WidgetWin_0":
             return
-        if str(win32gui.GetWindowText(win) or "") not in ("微信", "WeChat", "Weixin"):
-            return
-        if not _doc_names(win):
-            return
-        targets.append(win)
+        rows.append(int(win))
 
     win32gui.EnumWindows(callback, None)
+    return rows
+
+
+def _is_channels_window(win: int) -> bool:
+    """判断是否为视频号窗口：不碰小程序窗口，也不碰 Chromium 隐藏辅助窗口。"""
+    try:
+        title = str(win32gui.GetWindowText(win) or "")
+        visible = bool(win32gui.IsWindowVisible(win))
+        left, top, right, bottom = win32gui.GetWindowRect(win)
+    except Exception:
+        return False
+    names = _doc_names(win)
+    if names and all(name in _MINI_PROGRAM_DOCS for name in names):
+        return False
+    if names:
+        return True
+    if title in _WECHAT_TITLES:
+        return visible and (right - left) > 200
+    return False
+
+
+def close_extra_channels_windows(keep_hwnd: Optional[int] = None) -> int:
+    """回收多余的视频号窗口，保留 keep_hwnd；不碰微信小程序窗口。"""
+    keep = int(keep_hwnd or 0)
+    targets = [win for win in _wechat_appex_windows() if win != keep and _is_channels_window(win)]
     for win in targets:
         try:
             win32gui.PostMessage(win, win32con.WM_CLOSE, 0, 0)
@@ -905,3 +944,7 @@ def extract_related_keywords(max_items: int = 8) -> List[str]:
         if len(terms) >= max_items:
             break
     return terms
+
+def close_all_wechat_appex_windows() -> int:
+    """兼容旧调用：回收多余视频号窗口，保留当前视频号窗口与微信小程序窗口。"""
+    return close_extra_channels_windows(keep_hwnd=channels_hwnd(required=False))

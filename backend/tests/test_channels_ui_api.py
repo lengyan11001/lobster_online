@@ -149,3 +149,45 @@ def test_mark_video_candidates_filters_and_dedupes():
     assert by_key["b"]["criteria_matched"] is True
     assert by_key["c"]["is_historical_duplicate"] is True
     assert by_key["c"]["export_selected"] is False
+
+
+def test_open_channels_reuses_existing_window(monkeypatch):
+    monkeypatch.setattr(channels_ui, "channels_hwnd", lambda **kwargs: 4242)
+    monkeypatch.setattr(channels_ui, "ensure_feed_tab", lambda hwnd=None: True)
+    monkeypatch.setattr(channels_ui, "_activate_hwnd", lambda hwnd: True)
+    monkeypatch.setattr(channels_ui, "active_doc_name", lambda hwnd=None: "视频号")
+
+    def _boom():
+        raise AssertionError("已有视频号窗口时不应再点微信侧栏")
+
+    monkeypatch.setattr(channels_ui, "main_window", _boom)
+    result = channels_ui.open_channels()
+    assert result["ok"] is True
+    assert result["reused"] is True
+    assert result["hwnd"] == 4242
+
+
+def test_close_extra_channels_windows_keeps_keep(monkeypatch):
+    posted = []
+    monkeypatch.setattr(channels_ui, "_wechat_appex_windows", lambda: [1, 2, 3])
+    monkeypatch.setattr(channels_ui, "_is_channels_window", lambda win: True)
+    monkeypatch.setattr(channels_ui.win32gui, "PostMessage", lambda win, msg, wp, lp: posted.append(win))
+    monkeypatch.setattr(channels_ui.time, "sleep", lambda *_: None)
+    assert channels_ui.close_extra_channels_windows(keep_hwnd=1) == 2
+    assert posted == [2, 3]
+
+
+def test_is_channels_window_skips_mini_program(monkeypatch):
+    monkeypatch.setattr(channels_ui.win32gui, "GetWindowText", lambda win: "AI小助手")
+    monkeypatch.setattr(channels_ui.win32gui, "IsWindowVisible", lambda win: True)
+    monkeypatch.setattr(channels_ui.win32gui, "GetWindowRect", lambda win: (0, 0, 400, 600))
+    monkeypatch.setattr(channels_ui, "_doc_names", lambda win: ["AppIndex", "Context"])
+    assert channels_ui._is_channels_window(9) is False
+
+
+def test_is_channels_window_matches_video_tab(monkeypatch):
+    monkeypatch.setattr(channels_ui.win32gui, "GetWindowText", lambda win: "小田 设计 装修")
+    monkeypatch.setattr(channels_ui.win32gui, "IsWindowVisible", lambda win: True)
+    monkeypatch.setattr(channels_ui.win32gui, "GetWindowRect", lambda win: (0, 0, 1200, 800))
+    monkeypatch.setattr(channels_ui, "_doc_names", lambda win: ["装修避坑 - 第一页"])
+    assert channels_ui._is_channels_window(8) is True

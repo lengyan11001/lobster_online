@@ -456,6 +456,18 @@ async def stats():
         "accounts": len(accounts) if isinstance(accounts, list) else 0,
     })
 
+def _cleanup_channels_windows() -> None:
+    """关闭残留的视频号弹窗/评论面板，避免任务栏堆积 WeChatAppEx 窗口。"""
+    try:
+        channels_ui.close_comment_panel()
+    except Exception:
+        pass
+    try:
+        channels_ui.close_extra_channels_windows(keep_hwnd=channels_ui.channels_hwnd(required=False))
+    except Exception:
+        pass
+
+
 @router.post("/search/videos")
 async def search_videos_api(request: Request):
     import asyncio
@@ -535,6 +547,10 @@ async def search_videos_api(request: Request):
                     errors.append(f"账号:{name}: {str(exc)[:100]}")
         except Exception as exc:
             errors.append(f"账号搜索: {str(exc)[:120]}")
+    try:
+        await asyncio.to_thread(_cleanup_channels_windows)
+    except Exception:
+        pass
     if not merged:
         _log(f"视频搜索失败：{errors[:2]}", level="error", keyword=keyword)
         return _error((errors[0] if errors else "没有搜到视频")[:300], 500)
@@ -583,8 +599,10 @@ async def search_accounts_api(request: Request):
             max_scroll_rounds=int(body.get("max_scroll_rounds") or settings.get("max_scroll_rounds") or 8),
         )
     except Exception as exc:
+        await asyncio.to_thread(_cleanup_channels_windows)
         _log(f"账号搜索失败：{exc}", level="error", keyword=keyword)
         return _error(str(exc)[:300], 500)
+    await asyncio.to_thread(_cleanup_channels_windows)
     rows = _load(BLOB_ACCOUNTS, [])
     existing = {row.get("key"): row for row in rows if isinstance(row, dict)}
     for row in result.get("items") or []:
@@ -813,8 +831,7 @@ async def run_task(task_id: int, request: Request):
         task["error"] = str(exc)[:300]
     finally:
         try:
-            channels_ui.close_comment_panel()
-            channels_ui.close_extra_channels_windows(keep_hwnd=channels_ui.channels_hwnd(required=False))
+            await asyncio.to_thread(_cleanup_channels_windows)
         except Exception:
             pass
     task["updated_at"] = _now_text()
