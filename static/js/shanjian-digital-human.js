@@ -1719,6 +1719,11 @@
       preview_url: thumb,
       open_url: publicSource ? sourceUrl : normalizeAssetUrl(item.open_url || item.source_url || item.preview_url || ''),
       source_url: sourceUrl,
+      tags: materialTagList(item),
+      creative_group: String(item.creative_candidate_group || '').trim(),
+      creative_groups: (Array.isArray(item.creative_candidate_groups) ? item.creative_candidate_groups : [])
+        .map(function(g) { return String(g || '').trim(); })
+        .filter(Boolean),
       selected_key: assetId
     };
   }
@@ -2117,7 +2122,9 @@
       +     '<button type="button" class="shanjian-modal-close" data-modal-close="shanjianMaterialPickerModal" aria-label="关闭">×</button>'
       +   '</div>'
       +   '<div style="padding:0.95rem 1rem 0 1rem;display:flex;gap:0.65rem;align-items:center;flex-wrap:wrap;">'
-      +     '<input id="shanjianMaterialPickerSearch" class="shanjian-search" type="search" placeholder="搜索素材名称、ID 或类型" style="flex:1 1 280px;min-width:0;">'
+      +     '<input id="shanjianMaterialPickerSearch" class="shanjian-search" type="search" placeholder="搜索素材名称、ID 或类型" style="flex:1 1 220px;min-width:0;">'
+      +     '<select id="shanjianMaterialPickerGroupSelect" class="shanjian-filter-select" title="按分组筛选"><option value="">全部分组</option></select>'
+      +     '<select id="shanjianMaterialPickerTagSelect" class="shanjian-filter-select" title="按标签筛选"><option value="">全部标签</option></select>'
       +     '<button type="button" id="shanjianMaterialPickerReload" class="btn btn-ghost btn-sm">刷新素材库</button>'
       +   '</div>'
       +   '<div id="shanjianMaterialPickerStatus" style="padding:0.6rem 1rem 0;color:#6d7791;font-size:0.8rem;">正在加载素材库...</div>'
@@ -2168,13 +2175,73 @@
     return modal;
   }
 
+  function materialTagList(item) {
+    var raw = item && item.tags;
+    if (Array.isArray(raw)) {
+      return raw.map(function(tag) { return String(tag || '').trim(); }).filter(Boolean);
+    }
+    return String(raw || '').split(/[,，、;；\s]+/).map(function(tag) { return tag.trim(); }).filter(Boolean);
+  }
+
+  function collectMaterialFacets(items) {
+    var groups = {};
+    var tags = {};
+    (items || []).forEach(function(item) {
+      var groupList = (item.creative_groups || []).concat(item.creative_group ? [item.creative_group] : []);
+      groupList.forEach(function(g) { g = String(g || '').trim(); if (g) groups[g] = true; });
+      materialTagList(item).forEach(function(tag) { tags[tag] = true; });
+    });
+    return { groups: Object.keys(groups).sort(), tags: Object.keys(tags).sort() };
+  }
+
+  function fillMaterialSelect(select, values, placeholder, current, onPick) {
+    if (!select) return;
+    var html = '<option value="">' + placeholder + '</option>';
+    (values || []).forEach(function(value) {
+      html += '<option value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</option>';
+    });
+    select.innerHTML = html;
+    select.value = values && values.indexOf(current) >= 0 ? current : '';
+    select.onchange = function() { onPick(String(select.value || '')); };
+  }
+
+  function syncMaterialFilterSelects() {
+    var facets = collectMaterialFacets(state.materialPicker.items || []);
+    function pick(key) {
+      return function(value) {
+        state[key] = value;
+        state.materialPage = 1;
+        state.materialPickerPage = 1;
+        renderMaterialLibrary();
+        if (document.getElementById('shanjianMaterialPickerModal')) renderMaterialPicker();
+      };
+    }
+    fillMaterialSelect($('shanjianMaterialGroupSelect'), facets.groups, '全部分组', state.materialGroupFilter || '', pick('materialGroupFilter'));
+    fillMaterialSelect($('shanjianMaterialTagSelect'), facets.tags, '全部标签', state.materialTagFilter || '', pick('materialTagFilter'));
+    var modal = document.getElementById('shanjianMaterialPickerModal');
+    if (modal) {
+      fillMaterialSelect(modal.querySelector('#shanjianMaterialPickerGroupSelect'), facets.groups, '全部分组', state.materialGroupFilter || '', pick('materialGroupFilter'));
+      fillMaterialSelect(modal.querySelector('#shanjianMaterialPickerTagSelect'), facets.tags, '全部标签', state.materialTagFilter || '', pick('materialTagFilter'));
+    }
+  }
+
   function filteredMaterialPickerItems() {
     var query = String(state.materialPicker.query || '').trim().toLowerCase();
+    var group = String(state.materialGroupFilter || '').trim();
+    var tag = String(state.materialTagFilter || '').trim();
     var items = (state.materialPicker.items || []).filter(function(item) {
       if (state.materialFilter === 'image') return item && item.media_type === 'image';
       if (state.materialFilter === 'video') return item && item.media_type === 'video';
       return true;
     });
+    if (group) {
+      items = items.filter(function(item) {
+        return (item.creative_groups || []).indexOf(group) >= 0 || item.creative_group === group;
+      });
+    }
+    if (tag) {
+      items = items.filter(function(item) { return materialTagList(item).indexOf(tag) >= 0; });
+    }
     if (!query) return items;
     return items.filter(function(item) {
       var haystack = [item.name || '', item.asset_id || '', item.media_type || ''].join(' ').toLowerCase();
@@ -2267,6 +2334,7 @@
     if ($('shanjianMaterialFilterAllBtn')) $('shanjianMaterialFilterAllBtn').classList.toggle('is-active', state.materialFilter === 'all');
     if ($('shanjianMaterialFilterImageBtn')) $('shanjianMaterialFilterImageBtn').classList.toggle('is-active', state.materialFilter === 'image');
     if ($('shanjianMaterialFilterVideoBtn')) $('shanjianMaterialFilterVideoBtn').classList.toggle('is-active', state.materialFilter === 'video');
+    syncMaterialFilterSelects();
     var items = filteredMaterialPickerItems();
     count.textContent = String(items.length);
     if (!items.length) {
@@ -2354,6 +2422,7 @@
     if (count) count.textContent = '已选择 ' + selectedCount + ' 个';
     if (confirm) confirm.disabled = selectedCount < 1;
 
+    syncMaterialFilterSelects();
     var pickerPagerEl = modal.querySelector('#shanjianMaterialPickerPager');
     if (pickerPagerEl) pickerPagerEl.innerHTML = '';
     if (state.materialPicker.loading) {
@@ -4666,6 +4735,7 @@
       + '#content-shanjian-digital-human .shanjian-tab-btn.is-active{background:linear-gradient(135deg,#7c5eff,#6a8cff);color:#fff;box-shadow:0 14px 30px rgba(108,99,255,0.22);}'
       + '#content-shanjian-digital-human .shanjian-library-toolbar{display:flex;gap:0.8rem;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:1rem;}'
       + '#content-shanjian-digital-human .shanjian-search{flex:1 1 260px;min-width:220px;border:1px solid rgba(124,94,255,0.16);border-radius:14px;padding:0.82rem 0.9rem;background:#fff;}'
+      + '#content-shanjian-digital-human .shanjian-filter-select{max-width:180px;border:1px solid rgba(124,94,255,0.16);border-radius:12px;padding:0.6rem 0.7rem;background:#fff;color:#334155;font-size:0.82rem;}'
       + '#content-shanjian-digital-human .shanjian-library-tip{font-size:0.82rem;color:#68748f;line-height:1.65;padding:0.8rem 0.92rem;border-radius:16px;background:linear-gradient(180deg, rgba(255,255,255,0.94), rgba(246,248,255,0.92));border:1px solid rgba(124,94,255,0.10);margin-bottom:1rem;white-space:normal;}'
       + '#content-shanjian-digital-human .shanjian-library-section + .shanjian-library-section{margin-top:1.2rem;}'
       + '#content-shanjian-digital-human .shanjian-section-head{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.82rem;flex-wrap:wrap;}'
@@ -5098,6 +5168,8 @@
                 <div class="shanjian-library-toolbar">
                   <input id="shanjianMaterialSearchInput" class="shanjian-search" type="text" placeholder="搜索素材名称、素材ID">
                   <div class="shanjian-toolbar-actions">
+                    <select id="shanjianMaterialGroupSelect" class="shanjian-filter-select" title="按分组筛选"><option value="">全部分组</option></select>
+                    <select id="shanjianMaterialTagSelect" class="shanjian-filter-select" title="按标签筛选"><option value="">全部标签</option></select>
                     <button type="button" id="shanjianMaterialReloadBtn" class="btn btn-ghost btn-sm">刷新素材</button>
                   </div>
                 </div>

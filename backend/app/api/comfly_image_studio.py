@@ -363,6 +363,8 @@ async def _generate_image_studio_core(
     auto_save: bool = True,
     timeout_seconds: float | None = None,
     max_attempts: int = 3,
+    save_asset_origin: str = "generated",
+    save_content_visibility: str | None = None,
 ) -> Dict[str, Any]:
     prompt = (prompt or "").strip()
     if not prompt:
@@ -570,6 +572,8 @@ async def _generate_image_studio_core(
             current_user=current_user,
             prompt=prompt,
             model=model_id,
+            asset_origin=save_asset_origin,
+            content_visibility=save_content_visibility,
         )
 
     return {
@@ -738,6 +742,8 @@ async def _save_image_studio_results(
     current_user: _ServerUser,
     prompt: str,
     model: str,
+    asset_origin: str = "generated",
+    content_visibility: str | None = None,
 ) -> List[Dict[str, Any]]:
     """把生成结果落到素材库。
 
@@ -759,6 +765,8 @@ async def _save_image_studio_results(
                 tags="auto,comfly.image_studio",
                 prompt=prompt[:500] if prompt else None,
                 model=(model or "")[:128] or None,
+                asset_origin=asset_origin,
+                content_visibility=content_visibility,
             )
             effective = await _resolve_v3_tasks_url_for_download(
                 body.url, "image", current_user, request=request

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
+from ..models import Asset
 from ..services import local_bestseller_plan_store as plan_store
 from .assets import _is_internal_asset_http_url, get_asset_public_url
 from .auth import _ServerUser, get_current_user_for_local
@@ -1006,6 +1007,9 @@ async def local_bestseller_scene_generate(
         upload_payloads=[],
         reference_image_urls=refs,
         auto_save=True,
+        # 同城爆款过程图不进素材库/内容记录，只有成片对外（2026-11-14）
+        save_asset_origin="generated",
+        save_content_visibility="intermediate",
         timeout_seconds=_LOCAL_BESTSELLER_SCENE_TIMEOUT_SECONDS,
     )
     return {"ok": True, "item": _card_with_scene_result(card, result), "raw": result}
@@ -1040,6 +1044,9 @@ async def local_bestseller_scene_batch(
                     upload_payloads=[],
                     reference_image_urls=_resolve_reference_urls(profile=profile, card=card, current_user=current_user, request=request, db=db),
                     auto_save=True,
+                    # 同城爆款过程图不进素材库/内容记录，只有成片对外（2026-11-14）
+                    save_asset_origin="generated",
+                    save_content_visibility="intermediate",
                     timeout_seconds=_LOCAL_BESTSELLER_SCENE_TIMEOUT_SECONDS,
                 )
                 return _card_with_scene_result(card, result)
@@ -1128,12 +1135,56 @@ class LocalBestsellerPlanRecordBody(BaseModel):
     items: List[Dict[str, Any]] = Field(default_factory=list, description="方案卡片原文：原样存、原样返回")
 
 
+def _demote_local_bestseller_process_assets(
+    db: Session,
+    user_id: int,
+    items: List[Dict[str, Any]],
+) -> int:
+    """把方案里引用的场景图/底图降级为中间产物：不进素材库、不进内容记录。
+
+    2026-11-14 用户要求：同城爆款只有成片对外，过程图不要出现在素材库。
+    只处理非用户上传的素材；用户自己上传的底图不动。
+    """
+    ids = set()
+    for card in items or []:
+        if not isinstance(card, dict):
+            continue
+        for key in ("scene_asset_id", "image_asset_id"):
+            aid = str(card.get(key) or "").strip()
+            if aid:
+                ids.add(aid)
+    if not ids:
+        return 0
+    rows = (
+        db.query(Asset)
+        .filter(Asset.user_id == user_id, Asset.asset_id.in_(sorted(ids)))
+        .all()
+    )
+    changed = 0
+    for row in rows:
+        meta = dict(row.meta or {}) if isinstance(row.meta, dict) else {}
+        origin = str(meta.get("asset_origin") or meta.get("origin") or "").strip().lower()
+        if origin == "user_upload":
+            continue
+        meta.setdefault("feature", "local_bestseller")
+        meta["asset_origin"] = "intermediate"
+        meta["content_visibility"] = "intermediate"
+        meta["demoted_by"] = "local_bestseller_plan"
+        row.meta = meta
+        changed += 1
+    if changed:
+        db.commit()
+    return changed
+
+
 @router.post("/api/local-bestseller/plans", summary="保存/更新同城爆款方案记录")
 async def local_bestseller_plans_save(
     body: LocalBestsellerPlanRecordBody,
     current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
 ):
     items = [item for item in (body.items or []) if isinstance(item, dict)]
+    _demote_local_bestseller_process_assets(db, current_user.id, items)
     if not items:
         raise HTTPException(status_code=400, detail="方案记录不能为空")
     days = [int(item.get("day") or 0) for item in items if int(item.get("day") or 0) > 0]
