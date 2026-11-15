@@ -562,8 +562,10 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
         target_duration = user_target
         if audio_source_asset_id:
             audio_source_path, _, audio_media_type = resolve_asset_path(db, user_id, audio_source_asset_id)
-            if audio_media_type != "video":
-                raise ValueError("主音轨素材必须是视频")
+            # 2026-11-15 口播驱动：TTS 生成的是 audio（mp3），这里要允许音频作为主音轨；
+            # 视频作为主音轨的旧逻辑保持不变。
+            if audio_media_type not in {"video", "audio"}:
+                raise ValueError("主音轨素材必须是音频或视频")
             if audio_source_path.parent.name.startswith("media_edit_dl_"):
                 download_dirs.add(audio_source_path.parent)
             audio_info = _probe_video(audio_source_path, ffprobe)

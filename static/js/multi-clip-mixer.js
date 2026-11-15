@@ -418,7 +418,33 @@
     }];
   }
 
+  function buildSpeechPlan(totalSeconds) {
+    var clips = (state.clips || []).filter(function(clip) { return !!clip.assetId; });
+    if (!clips.length) return [];
+    var total = Math.max(0.5, Number(totalSeconds) || 0);
+    // 口播模式不看「成片设置」的片段时长，直接按音频总长切镜头：
+    // 约 1.8 秒一个镜头，最多 12 个；素材不够就循环复用。
+    var count = Math.max(1, Math.min(12, Math.round(total / 1.8)));
+    var per = total / count;
+    var plan = [];
+    for (var i = 0; i < count; i += 1) {
+      var clip = clips[i % clips.length];
+      var duration = Math.max(0, Number(clip.duration || 0));
+      var span = Math.min(per, duration > 0 ? duration : per);
+      if (span <= 0.2) continue;
+      var start = Number(clip.startSec || 0);
+      if (duration > 0 && start + span > duration) start = Math.max(0, duration - span);
+      if (currentClipMode() === 'random' && duration > span) start = Math.random() * (duration - span);
+      plan.push({ asset_id: clip.assetId, start_sec: start, end_sec: start + span });
+    }
+    return plan;
+  }
+
   function buildClipPlan(outputIndex) {
+    var speech = state.speechAudio;
+    if (currentVoiceMode() === 'speech' && speech && speech.assetId && Number(speech.duration) > 0) {
+      return buildSpeechPlan(Number(speech.duration));
+    }
     var mode = currentClipMode();
     if (mode === 'single') return buildSinglePlan();
     if (mode === 'original') return buildOriginalPlan();
