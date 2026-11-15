@@ -307,3 +307,18 @@
 .mcm-audio-mode-options input { width: auto; height: auto; accent-color: #e5484d; }
 .mcm-audio-mode-options input:checked + span { color: #d9363e; font-weight: 600; }
 .mcm-audio-mode-options label.is-disabled { opacity: .45; cursor: not-allowed; }
+
+.mcm-subtitle { margin: 22px 0 8px; font-size: 12px; font-weight: 650; letter-spacing: .06em; color: #98a1b2; }
+.mcm-subtitle:first-of-type { margin-top: 4px; }
+.mcm-source-actions { display: flex; gap: 8px; }
+.mcm-group-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; max-height: 240px; overflow: auto; margin-top: 10px; }
+.mcm-group-item { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; border: 1px solid #e3e7ee; border-radius: 8px; background: #fff; cursor: pointer; }
+.mcm-group-item:hover { border-color: #cfd6e2; background: #f8fafc; }
+.mcm-group-item strong { font-size: 13px; font-weight: 600; color: #2b3344; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcm-group-item span { font-size: 11px; color: #8a93a3; }
+.mcm-empty-hint { grid-column: 1 / -1; font-size: 12px; color: #8a93a3; padding: 8px 2px; }
+.mcm-speech-text { width: 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid #e3e7ee; border-radius: 8px; font: inherit; font-size: 13px; line-height: 1.55; resize: vertical; }
+.mcm-speech-options { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+.mcm-speech-options label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #6b7280; }
+.mcm-speech-options input { width: 84px; padding: 6px 8px; border: 1px solid #e3e7ee; border-radius: 6px; }
+.mcm-speech-options select { min-width: 180px; }

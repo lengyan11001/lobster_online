@@ -1,11 +1,11 @@
-<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20261031-template-audio-v8">
+<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20261115-speech-group-v9">
 <div id="content-multi-clip-mixer" class="content-block">
   <div class="mcm-page">
     <header class="mcm-header">
       <div>
         <span class="mcm-eyebrow">视频创作</span>
         <h2>剪辑大师</h2>
-        <p>固定取同一段，或随机抽段批量生成；可指定一个视频作为整条成片主音轨。</p>
+        <p>三步：放进素材篮 → 选声音（口播 / 原声 / 音乐）→ 输出。素材可以直接选，也可以按分组批量添加。</p>
       </div>
       <button id="mcmBackBtn" type="button" class="btn btn-ghost btn-sm">返回技能商店</button>
     </header>
@@ -16,29 +16,30 @@
           <div class="mcm-section-head">
             <div>
               <span class="mcm-step">01</span>
-              <h3>选择视频片段</h3>
-              <p>添加后可逐个微调片段，也可以用下方模式一键统一。</p>
+              <h3>素材篮</h3>
+              <p>直接添加视频，或从素材分组批量追加；两边可以混着用，重复的会自动去重。</p>
             </div>
-            <button id="mcmAddVideoBtn" type="button" class="btn btn-primary">添加视频</button>
+            <div class="mcm-source-actions">
+              <button id="mcmAddVideoBtn" type="button" class="btn btn-primary">添加视频</button>
+              <button id="mcmAddGroupBtn" type="button" class="btn btn-ghost">从分组添加</button>
+            </div>
             <input id="mcmVideoInput" type="file" accept="video/*" multiple hidden>
           </div>
 
           <div id="mcmClipList" class="mcm-clip-list"></div>
+          <div id="mcmGroupPanel" class="mcm-choice-panel" hidden>
+            <div class="mcm-choice-toolbar">
+              <div><strong>从素材分组添加</strong><span id="mcmGroupHint">选中分组后把该组视频追加到片段列表（自动去重）</span></div>
+              <button id="mcmGroupReloadBtn" type="button" class="btn btn-ghost btn-sm">刷新分组</button>
+            </div>
+            <div id="mcmGroupList" class="mcm-group-list"></div>
+          </div>
           <div id="mcmClipEmpty" class="mcm-empty-clips">
             <div class="mcm-empty-mark">+</div>
             <strong>添加 3 个视频即可快速开始</strong>
             <span>默认所有视频截取同一段 0-3 秒，也可以切换随机抽段批量生成。</span>
           </div>
-        </section>
-
-        <section class="mcm-section">
-          <div class="mcm-section-head">
-            <div>
-              <span class="mcm-step">02</span>
-              <h3>成片设置</h3>
-            </div>
-          </div>
-
+          <div class="mcm-subtitle">剪辑方式</div>
           <div class="mcm-mode-panel">
             <div class="mcm-mode-select-row">
               <label for="mcmClipModeSelect">剪辑模式</label>
@@ -69,6 +70,79 @@
             </div>
           </div>
 
+        </section>
+
+        <section class="mcm-section">
+          <div class="mcm-section-head">
+            <div>
+              <span class="mcm-step">02</span>
+              <h3>声音</h3>
+              <p>口播文案 / 素材原声 / 背景音乐，三选一。</p>
+            </div>
+          </div>
+
+          <div id="mcmVoiceModeRow" class="mcm-setting-row mcm-audio-mode-row">
+            <span><strong>声音来源</strong><small id="mcmVoiceModeHint">口播文案 = 先 TTS 成语音，再用语音驱动成片；素材原声 = 用片段里标记的原声。</small></span>
+            <div class="mcm-audio-mode-options">
+              <label><input type="radio" name="mcmVoiceMode" value="original" checked><span>素材原声</span></label>
+              <label><input type="radio" name="mcmVoiceMode" value="speech"><span>口播文案</span></label>
+              <label><input type="radio" name="mcmVoiceMode" value="bgm"><span>仅音乐/静音</span></label>
+            </div>
+          </div>
+          <div id="mcmSpeechPanel" class="mcm-choice-panel" hidden>
+            <div class="mcm-choice-toolbar">
+              <div><strong>口播文案</strong><span id="mcmSpeechStatus">输入文案后生成口播音轨</span></div>
+              <button id="mcmSpeechPreviewBtn" type="button" class="btn btn-ghost btn-sm">试听</button>
+              <button id="mcmSpeechGenerateBtn" type="button" class="btn btn-primary btn-sm">生成口播音轨</button>
+            </div>
+            <textarea id="mcmSpeechText" class="mcm-speech-text" rows="4" placeholder="输入口播文案，生成后会用这段语音驱动成片时长"></textarea>
+            <div class="mcm-speech-options">
+              <label>音色<select id="mcmSpeechVoice" class="mcm-mode-select"></select></label>
+              <label>语速<input id="mcmSpeechRate" type="number" min="0.5" max="2" step="0.1" value="1"></label>
+              <label>音量<input id="mcmSpeechVolume" type="number" min="0" max="2" step="0.1" value="1"></label>
+              <label>语调<input id="mcmSpeechPitch" type="number" min="0.5" max="2" step="0.1" value="1"></label>
+            </div>
+          </div>
+
+          <div class="mcm-subtitle">背景音乐</div>
+          <label class="mcm-setting-row" for="mcmMusicSwitch">
+            <span><strong>添加同城爆款音乐</strong><small>从已有音乐模板中选择，支持试听。</small></span>
+            <input id="mcmMusicSwitch" type="checkbox">
+          </label>
+          <div id="mcmMusicPanel" class="mcm-choice-panel" hidden>
+            <div class="mcm-choice-toolbar">
+              <div>
+                <strong>音乐选择</strong>
+                <span id="mcmMusicPicked">还未选择</span>
+              </div>
+              <label id="mcmMusicRandomRow" class="mcm-inline-check"><input id="mcmRandomMusicSwitch" type="checkbox" checked><span>随机音乐</span></label>
+              <label class="mcm-volume-control">音量 <input id="mcmMusicVolume" type="range" min="0" max="1" step="0.05" value="0.24"><output id="mcmMusicVolumeValue">24%</output></label>
+            </div>
+            <div id="mcmMusicGrid" class="mcm-music-grid"></div>
+          </div>
+
+          <div id="mcmFinalAudioRow" class="mcm-setting-row mcm-audio-mode-row">
+            <span><strong>模板成片音频</strong><small id="mcmFinalAudioHint">选择成片最终使用哪路声音。</small></span>
+            <div class="mcm-audio-mode-options">
+              <label id="mcmFinalAudioOriginalLabel"><input type="radio" name="mcmFinalAudioMode" value="original"><span>原声</span></label>
+              <label id="mcmFinalAudioBgmLabel"><input type="radio" name="mcmFinalAudioMode" value="bgm"><span>背景音乐</span></label>
+              <label id="mcmFinalAudioTemplateLabel"><input type="radio" name="mcmFinalAudioMode" value="template" checked><span>模板声音</span></label>
+            </div>
+          </div>
+
+
+        </section>
+
+        <section class="mcm-section">
+          <div class="mcm-section-head">
+            <div>
+              <span class="mcm-step">03</span>
+              <h3>输出</h3>
+              <p>画面比例、模板和最终生成。</p>
+            </div>
+          </div>
+
+          <div class="mcm-subtitle">画面</div>
           <div class="mcm-template-categories" id="mcmOutputRatioRow">
             <span class="mcm-template-category-label">成片比例</span>
             <span class="mcm-template-tag-list" id="mcmOutputRatioList"></span>
@@ -79,6 +153,7 @@
             <span class="mcm-template-tag-list" id="mcmFillModeList"></span>
             <span class="mcm-template-category-hint" id="mcmFillModeHint"></span>
           </div>
+          <div class="mcm-subtitle">模板</div>
           <label class="mcm-setting-row" for="mcmTemplateSwitch">
             <span><strong>套用定制模板</strong><small>先完成片段拼接，再使用模板定制能力生成成片。</small></span>
             <input id="mcmTemplateSwitch" type="checkbox">
@@ -152,30 +227,6 @@
             </div>
           </div>
 
-          <label class="mcm-setting-row" for="mcmMusicSwitch">
-            <span><strong>添加同城爆款音乐</strong><small>从已有音乐模板中选择，支持试听。</small></span>
-            <input id="mcmMusicSwitch" type="checkbox">
-          </label>
-          <div id="mcmMusicPanel" class="mcm-choice-panel" hidden>
-            <div class="mcm-choice-toolbar">
-              <div>
-                <strong>音乐选择</strong>
-                <span id="mcmMusicPicked">还未选择</span>
-              </div>
-              <label id="mcmMusicRandomRow" class="mcm-inline-check"><input id="mcmRandomMusicSwitch" type="checkbox" checked><span>随机音乐</span></label>
-              <label class="mcm-volume-control">音量 <input id="mcmMusicVolume" type="range" min="0" max="1" step="0.05" value="0.24"><output id="mcmMusicVolumeValue">24%</output></label>
-            </div>
-            <div id="mcmMusicGrid" class="mcm-music-grid"></div>
-          </div>
-
-          <div id="mcmFinalAudioRow" class="mcm-setting-row mcm-audio-mode-row">
-            <span><strong>模板成片音频</strong><small id="mcmFinalAudioHint">选择成片最终使用哪路声音。</small></span>
-            <div class="mcm-audio-mode-options">
-              <label id="mcmFinalAudioOriginalLabel"><input type="radio" name="mcmFinalAudioMode" value="original"><span>原声</span></label>
-              <label id="mcmFinalAudioBgmLabel"><input type="radio" name="mcmFinalAudioMode" value="bgm"><span>背景音乐</span></label>
-              <label id="mcmFinalAudioTemplateLabel"><input type="radio" name="mcmFinalAudioMode" value="template" checked><span>模板声音</span></label>
-            </div>
-          </div>
         </section>
 
         <div id="mcmMessage" class="mcm-message" hidden></div>
@@ -185,7 +236,7 @@
       <aside class="mcm-result-column">
         <section class="mcm-result-section">
           <div class="mcm-result-head">
-            <div><span class="mcm-step">03</span><h3>生成结果</h3></div>
+            <div><span class="mcm-step">04</span><h3>生成结果</h3></div>
             <div class="mcm-result-head-tools"><span id="mcmTotalDuration" class="mcm-duration">0 秒</span><button id="mcmHistoryToggleBtn" type="button" class="btn btn-ghost btn-sm">历史记录</button></div>
           </div>
           <div id="mcmResultSurface" class="mcm-result-surface">

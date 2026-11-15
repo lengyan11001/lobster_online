@@ -34,6 +34,11 @@
     templatePollTimer: null,
     pendingTemplateTask: null,
     batchResults: [],
+    speechAudio: null,
+    lastSpeechAudioUrl: '',
+    voiceMode: 'original',
+    voiceLibrary: [],
+    assetGroups: [],
     batchSelection: {},
     history: [],
     historySelection: {},
@@ -2529,6 +2534,12 @@
   function runOneRender(runIndex, totalRuns, options) {
     var music = selectedMusicForRun(options.useMusic);
     var audioClip = markedAudioClip();
+    var voiceMode = currentVoiceMode();
+    var speech = state.speechAudio;
+    var speechDriven = voiceMode === 'speech' && !!(speech && speech.assetId);
+    if (voiceMode === 'speech' && !speechDriven) {
+      throw new Error('已选择口播文案，但还没有生成口播音轨');
+    }
     var templateBeforeRun = templateStateSnapshot();
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
@@ -2540,12 +2551,15 @@
       currentTemplateProvider() === 'local'
       || (shanjianTemplate && (realmanTemplate || audioMode === 'original'))
     ));
+    if (speechDriven || voiceMode === 'bgm') keepBaseAudio = false;
     var suppressBaseBgm = shanjianTemplate || (!!options.useTemplate && audioMode !== 'template');
-    var baseAudioAssetId = audioClip && (
-      currentTemplateProvider() === 'local'
-      || audioMode === 'original'
-      || realmanTemplate
-    ) ? String(audioClip.assetId || '') : '';
+    var baseAudioAssetId = speechDriven
+      ? String(speech.assetId || '')
+      : (audioClip && (
+          currentTemplateProvider() === 'local'
+          || audioMode === 'original'
+          || realmanTemplate
+        ) ? String(audioClip.assetId || '') : '');
     // 原片套模板 + 本地模板：源素材本身就是最终画源，跳过裁剪/拼接这一遍重编码
     var directOriginal = currentClipMode() === 'original'
       && currentTemplateProvider() === 'local'
@@ -2571,7 +2585,9 @@
       keep_original_audio: keepBaseAudio,
       audio_asset_id: baseAudioAssetId,
       // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
-      target_duration: currentClipMode() === 'single' ? null : (targetSeconds > 0 ? targetSeconds : (baseAudioAssetId ? Number(audioClip.duration || 0) : null)),
+      target_duration: speechDriven
+        ? (Number(speech.duration) > 0 ? Number(speech.duration) : null)
+        : (currentClipMode() === 'single' ? null : (targetSeconds > 0 ? targetSeconds : (baseAudioAssetId ? Number((audioClip || {}).duration || 0) : null))),
       audio_volume: 1,
       clip_mode: currentClipMode(),
       output_index: runIndex,
@@ -2587,7 +2603,7 @@
       baseResult.music = music || null;
       baseResult.bgm_url = music ? String(music.bgm_url || '') : '';
       baseResult.bgm_name = music ? String(music.music_name || '') : '';
-      baseResult.audio_asset_id = audioClip ? String(audioClip.assetId || '') : '';
+      baseResult.audio_asset_id = baseAudioAssetId || '';
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));
       progress('music', 'done', music ? ('已添加 ' + music.music_name) : (audioClip ? '已使用标记视频主音轨' : '本次未添加音乐'));
@@ -2952,11 +2968,227 @@
     }).finally(function() { setBusy(false); });
   }
 
+  function cloudRequest(path, options, allowErrorPayload) {
+    var base = cloudBaseUrl();
+    if (!base) return Promise.reject(new Error('未配置云端地址，无法使用口播音色'));
+    return requestTo(base, path, options, allowErrorPayload);
+  }
+
+  function currentVoiceMode() {
+    var checked = document.querySelector('input[name="mcmVoiceMode"]:checked');
+    return checked ? String(checked.value || 'original') : 'original';
+  }
+
+  function probeAssetDuration(assetId) {
+    return new Promise(function(resolve) {
+      var video = document.createElement('video');
+      var done = false;
+      function finish(value) {
+        if (done) return;
+        done = true;
+        try { video.removeAttribute('src'); video.load(); } catch (err) {}
+        resolve(Number(value) || 0);
+      }
+      video.preload = 'metadata';
+      video.muted = true;
+      video.src = assetPlaybackUrl(assetId);
+      video.onloadedmetadata = function() { finish(video.duration); };
+      video.onerror = function() { finish(0); };
+      setTimeout(function() { finish(video.duration); }, 8000);
+    });
+  }
+
+  function loadAssetGroups() {
+    var list = $('mcmGroupList');
+    if (list) list.innerHTML = '<div class="mcm-empty-hint">正在加载分组...</div>';
+    return request('/api/assets/creative-candidate-groups').then(function(data) {
+      state.assetGroups = Array.isArray(data.groups) ? data.groups : [];
+      renderAssetGroups();
+    }).catch(function(err) {
+      if (list) list.innerHTML = '<div class="mcm-empty-hint">分组加载失败：' + escapeHtml(err.message || err) + '</div>';
+    });
+  }
+
+  function renderAssetGroups() {
+    var list = $('mcmGroupList');
+    if (!list) return;
+    if (!state.assetGroups.length) {
+      list.innerHTML = '<div class="mcm-empty-hint">还没有素材分组，先去素材库给素材打分组。</div>';
+      return;
+    }
+    list.innerHTML = state.assetGroups.map(function(group) {
+      var name = String(group.name || '');
+      return '<button type="button" class="mcm-group-item" data-group="' + escapeHtml(name) + '">'
+        + '<strong>' + escapeHtml(name) + '</strong>'
+        + '<span>图片 ' + (Number(group.count) || 0) + ' · 用过 ' + (Number(group.use_count) || 0) + ' 次</span>'
+        + '</button>';
+    }).join('');
+  }
+
+  function addGroupAssets(name) {
+    name = String(name || '').trim();
+    if (!name) return Promise.resolve();
+    var hint = $('mcmGroupHint');
+    if (hint) hint.textContent = '正在读取「' + name + '」的素材...';
+    return request('/api/assets?origin=all&limit=200&creative_group=' + encodeURIComponent(name)).then(function(data) {
+      var rows = Array.isArray(data.assets) ? data.assets : (Array.isArray(data.items) ? data.items : []);
+      var existing = {};
+      state.clips.forEach(function(clip) { if (clip.assetId) existing[String(clip.assetId)] = true; });
+      var videos = rows.filter(function(row) {
+        return String(row.media_type || '').toLowerCase() === 'video' && !existing[String(row.asset_id || '')];
+      });
+      if (!videos.length) {
+        if (hint) hint.textContent = '「' + name + '」没有可添加的新视频';
+        return null;
+      }
+      return Promise.all(videos.map(function(row) {
+        return probeAssetDuration(row.asset_id).then(function(duration) {
+          addVideoClip({
+            assetId: String(row.asset_id || ''),
+            name: String(row.filename || row.asset_id || ''),
+            duration: duration || 0,
+            sourceUrl: row.source_url || '',
+            streamUrl: row.open_url || '',
+            previewUrl: assetContentUrl(row.asset_id),
+            posterUrl: assetPosterUrl(row.asset_id),
+            group: name
+          });
+        });
+      })).then(function() {
+        if (hint) hint.textContent = '已从「' + name + '」添加 ' + videos.length + ' 个视频';
+      });
+    }).catch(function(err) {
+      if (hint) hint.textContent = '添加失败：' + (err.message || err);
+    });
+  }
+
+  function renderSpeechVoices() {
+    var select = $('mcmSpeechVoice');
+    if (!select) return;
+    if (!state.voiceLibrary.length) {
+      select.innerHTML = '<option value="">没有可用音色</option>';
+      return;
+    }
+    select.innerHTML = state.voiceLibrary.map(function(item) {
+      return '<option value="' + escapeHtml(item.voice) + '">' + escapeHtml(item.title) + '</option>';
+    }).join('');
+  }
+
+  function loadSpeechVoices() {
+    if (state.voiceLibrary.length) { renderSpeechVoices(); return Promise.resolve(); }
+    var select = $('mcmSpeechVoice');
+    if (select) select.innerHTML = '<option value="">加载音色中...</option>';
+    return cloudRequest('/api/hifly/my/voice/list?page=1&size=100', { headers: headers(false) }).then(function(data) {
+      var items = Array.isArray(data.items) ? data.items : [];
+      state.voiceLibrary = items.map(function(item) {
+        return {
+          voice: String(item.voice || item.voice_id || ''),
+          title: String(item.title || item.name || item.voice || '')
+        };
+      }).filter(function(item) { return !!item.voice; });
+      renderSpeechVoices();
+    }).catch(function(err) {
+      if (select) select.innerHTML = '<option value="">音色加载失败</option>';
+      var status = $('mcmSpeechStatus');
+      if (status) status.textContent = '音色加载失败：' + (err.message || err);
+    });
+  }
+
+  function speechPayload() {
+    return {
+      voice: String((($('mcmSpeechVoice') || {}).value) || ''),
+      text: String((($('mcmSpeechText') || {}).value) || '').trim(),
+      rate: Number((($('mcmSpeechRate') || {}).value) || 1),
+      volume: Number((($('mcmSpeechVolume') || {}).value) || 1),
+      pitch: Number((($('mcmSpeechPitch') || {}).value) || 1)
+    };
+  }
+
+  function generateSpeechAudio() {
+    var body = speechPayload();
+    var status = $('mcmSpeechStatus');
+    if (!body.text) { showMessage('先输入口播文案', true); return Promise.resolve(); }
+    if (!body.voice) { showMessage('先选择音色', true); return Promise.resolve(); }
+    var button = $('mcmSpeechGenerateBtn');
+    if (button) { button.disabled = true; button.textContent = '生成中...'; }
+    if (status) status.textContent = '正在合成语音...';
+    return cloudRequest('/api/hifly/my/voice/preview-tts', {
+      method: 'POST', headers: headers(true), body: JSON.stringify(body)
+    }).then(function(data) {
+      var audioUrl = String(data.audio_url || '');
+      if (!audioUrl) throw new Error('TTS 没有返回音频');
+      state.lastSpeechAudioUrl = audioUrl;
+      var duration = Number(data.duration_seconds || 0);
+      if (audioUrl.indexOf('data:') === 0) {
+        return fetch(audioUrl).then(function(resp) { return resp.blob(); }).then(function(blob) {
+          var file = new File([blob], 'speech.mp3', { type: 'audio/mpeg' });
+          return uploadVideo(file).then(function(saved) {
+            return { assetId: saved.asset_id, duration: duration };
+          });
+        });
+      }
+      return post('/api/assets/save-url', {
+        url: audioUrl, media_type: 'audio', tags: '口播,tts', asset_origin: 'generated'
+      }).then(function(saved) {
+        return { assetId: saved.asset_id, duration: duration };
+      });
+    }).then(function(result) {
+      state.speechAudio = {
+        assetId: String((result || {}).assetId || ''),
+        duration: Number((result || {}).duration || 0),
+        text: body.text,
+        voice: body.voice
+      };
+      if (status) status.textContent = '口播音轨已生成' + (state.speechAudio.duration ? ('（约 ' + formatSeconds(state.speechAudio.duration) + '）') : '');
+    }).catch(function(err) {
+      if (status) status.textContent = '生成失败：' + (err.message || err);
+      showMessage('口播生成失败：' + (err.message || err), true);
+    }).finally(function() {
+      if (button) { button.disabled = false; button.textContent = '生成口播音轨'; }
+    });
+  }
+
+  function previewSpeechAudio() {
+    if (state.lastSpeechAudioUrl) {
+      new Audio(state.lastSpeechAudioUrl).play().catch(function(err) { showMessage('试听失败：' + (err.message || err), true); });
+      return;
+    }
+    generateSpeechAudio().then(function() {
+      if (state.lastSpeechAudioUrl) {
+        new Audio(state.lastSpeechAudioUrl).play().catch(function(err) { showMessage('试听失败：' + (err.message || err), true); });
+      }
+    });
+  }
+
   function bindEvents() {
     if ($('mcmBackBtn')) $('mcmBackBtn').addEventListener('click', function() {
       if (typeof window.showLobsterView === 'function') window.showLobsterView('skill-store');
     });
     if ($('mcmAddVideoBtn')) $('mcmAddVideoBtn').addEventListener('click', openVideoPicker);
+    if ($('mcmAddGroupBtn')) $('mcmAddGroupBtn').addEventListener('click', function() {
+      var panel = $('mcmGroupPanel');
+      if (!panel) return;
+      var opening = panel.hidden;
+      panel.hidden = !opening;
+      if (opening) loadAssetGroups();
+    });
+    if ($('mcmGroupReloadBtn')) $('mcmGroupReloadBtn').addEventListener('click', loadAssetGroups);
+    if ($('mcmGroupList')) $('mcmGroupList').addEventListener('click', function(event) {
+      var btn = event.target && event.target.closest ? event.target.closest('[data-group]') : null;
+      if (btn) addGroupAssets(btn.getAttribute('data-group'));
+    });
+    function _syncVoiceMode() {
+      state.voiceMode = currentVoiceMode();
+      var panel = $('mcmSpeechPanel');
+      if (panel) panel.hidden = state.voiceMode !== 'speech';
+      if (state.voiceMode === 'speech') loadSpeechVoices();
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmVoiceMode"]'), function(radio) {
+      radio.addEventListener('change', _syncVoiceMode);
+    });
+    _syncVoiceMode();
+    if ($('mcmSpeechGenerateBtn')) $('mcmSpeechGenerateBtn').addEventListener('click', generateSpeechAudio);
+    if ($('mcmSpeechPreviewBtn')) $('mcmSpeechPreviewBtn').addEventListener('click', previewSpeechAudio);
     if ($('mcmClipEmpty')) $('mcmClipEmpty').addEventListener('click', openVideoPicker);
     if ($('mcmVideoInput')) $('mcmVideoInput').addEventListener('change', function(event) {
       var files = Array.prototype.slice.call(event.target.files || []).filter(function(file) {
