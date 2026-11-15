@@ -3098,9 +3098,9 @@
     return {
       voice: String((($('mcmSpeechVoice') || {}).value) || ''),
       text: String((($('mcmSpeechText') || {}).value) || '').trim(),
-      rate: Number((($('mcmSpeechRate') || {}).value) || 1),
-      volume: Number((($('mcmSpeechVolume') || {}).value) || 1),
-      pitch: Number((($('mcmSpeechPitch') || {}).value) || 1)
+      rate: String((($('mcmSpeechRate') || {}).value) || '1'),
+      volume: String((($('mcmSpeechVolume') || {}).value) || '1'),
+      pitch: String((($('mcmSpeechPitch') || {}).value) || '1')
     };
   }
 
