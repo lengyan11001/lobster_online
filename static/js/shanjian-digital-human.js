@@ -5462,7 +5462,12 @@
       bindEvents();
     }
 
-    setActiveView(state.taskId ? 'result' : 'avatar');
+    var pendingView = '';
+    try {
+      pendingView = String(sessionStorage.getItem('lobster.shanjian.pendingView') || '');
+      if (pendingView) sessionStorage.removeItem('lobster.shanjian.pendingView');
+    } catch (err) {}
+    setActiveView(pendingView || (state.taskId ? 'result' : 'avatar'));
     bootstrapData().catch(function(err) {
       showMessage(err && err.message ? err.message : '初始化 Shanjian 页面失败', true);
     });

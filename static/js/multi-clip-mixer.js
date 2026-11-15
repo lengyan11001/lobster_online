@@ -3066,7 +3066,9 @@
     var select = $('mcmSpeechVoice');
     if (!select) return;
     if (!state.voiceLibrary.length) {
-      select.innerHTML = '<option value="">没有可用音色</option>';
+      select.innerHTML = '<option value="">还没有可用音色</option>';
+      var emptyStatus = $('mcmSpeechStatus');
+      if (emptyStatus) emptyStatus.textContent = '还没有自己的音色，点右边「创建/管理音色」去录制或克隆一个';
       return;
     }
     select.innerHTML = state.voiceLibrary.map(function(item) {
@@ -3187,6 +3189,14 @@
       radio.addEventListener('change', _syncVoiceMode);
     });
     _syncVoiceMode();
+    if ($('mcmSpeechVoiceManageBtn')) $('mcmSpeechVoiceManageBtn').addEventListener('click', function() {
+      try { sessionStorage.setItem('lobster.shanjian.pendingView', 'voice'); } catch (err) {}
+      if (typeof window.showAppView === 'function') {
+        window.showAppView('shanjian-digital-human');
+      } else {
+        try { location.hash = 'shanjian-digital-human'; } catch (err) {}
+      }
+    });
     if ($('mcmSpeechGenerateBtn')) $('mcmSpeechGenerateBtn').addEventListener('click', generateSpeechAudio);
     if ($('mcmSpeechPreviewBtn')) $('mcmSpeechPreviewBtn').addEventListener('click', previewSpeechAudio);
     if ($('mcmClipEmpty')) $('mcmClipEmpty').addEventListener('click', openVideoPicker);

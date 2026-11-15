@@ -322,3 +322,5 @@
 .mcm-speech-options label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #6b7280; }
 .mcm-speech-options input { width: 84px; padding: 6px 8px; border: 1px solid #e3e7ee; border-radius: 6px; }
 .mcm-speech-options select { min-width: 180px; }
+
+.mcm-speech-manage { align-self: flex-end; margin-bottom: 1px; }
