@@ -214,6 +214,7 @@ async def _persist_audio_for_shanjian(
             speed,
             len(data),
         )
+    data, media_type, ext = await asyncio.to_thread(_transcode_audio_to_mp3, data, media_type)
     asset_id, filename_or_key, file_size, public_url = _save_bytes_or_tos(data, ext, media_type)
     if not public_url:
         raise HTTPException(status_code=503, detail="数字人口播音频转存 TOS 失败，无法提交数字人2.0")
@@ -334,6 +335,45 @@ def _apply_audio_speed(data: bytes, media_type: str, speed_ratio: Any) -> tuple[
             detail = (proc.stderr or b"")[:300].decode("utf-8", errors="ignore").strip()
             raise HTTPException(status_code=502, detail=f"音频变速失败: {detail or 'ffmpeg 未生成输出'}")
         return dst.read_bytes(), media_type
+
+
+def _transcode_audio_to_mp3(data: bytes, media_type: str) -> tuple[bytes, str, str]:
+    """数字人2.0 上游只收 mp3；m4a/aac 会报 InvalidFile.Format「音频类型不符合要求的类型」。
+
+    用户 210 2026-11-15 连续 5 次失败就是上传了 .m4a 驱动音频。这里统一转 mp3 再转存 TOS。
+    """
+    ext = _audio_ext_from_content(media_type, "")
+    if ext == ".mp3":
+        return data, "audio/mpeg", ".mp3"
+    exe = _ffmpeg_path()
+    if not exe:
+        raise HTTPException(status_code=503, detail="服务器缺少 ffmpeg，暂时无法把音频转成 mp3，请直接上传 mp3")
+    with tempfile.TemporaryDirectory(prefix="shanjian-mp3-") as tmp:
+        src = Path(tmp) / f"in{ext or '.bin'}"
+        dst = Path(tmp) / "out.mp3"
+        src.write_bytes(data)
+        cmd = [
+            exe,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(src),
+            "-vn",
+            "-acodec",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            "-ar",
+            "44100",
+            str(dst),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, timeout=600)
+        if proc.returncode != 0 or not dst.exists() or dst.stat().st_size <= 0:
+            detail = (proc.stderr or b"")[:300].decode("utf-8", errors="ignore").strip()
+            raise HTTPException(status_code=502, detail=f"音频转 mp3 失败: {detail or 'ffmpeg 未生成输出'}")
+        return dst.read_bytes(), "audio/mpeg", ".mp3"
 
 
 def _asset_local_path(asset: Optional[Asset]) -> Optional[Path]:
