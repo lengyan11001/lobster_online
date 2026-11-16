@@ -22266,37 +22266,33 @@ def _send_text_local_slow_once(
 
 def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
     """确定性发送链路写不进输入框时（微信 4.x 自绘输入框读不回内容），
-    交给桌面 Agent：校验当前会话就是目标，再清空输入框→写入→回车，最后从聊天记录验证。
-    只在“已阻止点击发送”这种确认没发出去的情况下调用，避免重复发送。"""
+    交给 robot 操作层：open_chat 先摆正会话，send_message 用快照差异验证。
+    只在"已阻止点击发送"（确认没发出去）的分支调用，避免重复发送。"""
     try:
-        from publisher.agent import recover_desktop
+        from publisher.robot import wechat_ops as W
 
-        expect = str(text or "").strip()[:16]
-        if not expect:
+        opened = W.open_chat(str(peer_id))
+        if not opened.ok:
+            logger.warning(
+                "[native-wechat] robot 无法切到目标会话 peer=%s layer=%s err=%s",
+                peer_id, opened.layer, opened.error,
+            )
             return None
-        rec = recover_desktop(
-            stage="wechat_send",
-            goal=(
-                "当前会话必须是「" + str(peer_id) + "」。用 send 动作把下面这条消息发出去，"
-                "发送后要能在聊天记录里看到：" + str(text)
-            ),
-            guard_name=str(peer_id),
-            expect_text=expect,
-            max_steps=4,
-            timeout_seconds=180.0,
-        )
-        if rec.ok:
-            logger.info("[native-wechat] agent 接管发送成功 peer=%s steps=%s", peer_id, rec.steps)
+        sent = W.send_message(str(text), to=str(peer_id))
+        if sent.ok:
+            logger.info("[native-wechat] robot 接管发送成功 peer=%s evidence=%s",
+                        peer_id, str(sent.evidence.get("matched") or "")[:40])
             return {
                 "ok": True,
-                "driver": "agent_send",
+                "driver": "robot_send",
                 "peer_id": peer_id,
-                "agent_steps": rec.steps,
+                "matched": sent.evidence.get("matched", ""),
                 "text": text,
             }
-        logger.warning("[native-wechat] agent 发送未成功 peer=%s err=%s", peer_id, str(rec.error)[:160])
+        logger.warning("[native-wechat] robot 发送失败 peer=%s layer=%s err=%s",
+                       peer_id, sent.layer, sent.error)
     except Exception as exc:
-        logger.warning("[native-wechat] agent 发送兜底异常: %s", str(exc)[:200])
+        logger.warning("[native-wechat] robot 发送兜底异常: %s", str(exc)[:200])
     return None
 
 
