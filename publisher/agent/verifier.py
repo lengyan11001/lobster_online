@@ -10,10 +10,20 @@ Verifier = Callable[[Any, Dict[str, Any]], Awaitable[bool]]
 
 
 async def _text_visible(page: Any, text: str) -> bool:
+    """必须“看得见”才算。抖音页面里常有隐藏的 toast/占位节点（发布成功 count=1 visible=0），
+    只数 count 会把没发生的事当成成功。"""
     try:
-        return (await page.get_by_text(text, exact=False).count()) > 0
+        loc = page.get_by_text(text, exact=False)
+        count = await loc.count()
     except Exception:
         return False
+    for idx in range(min(count, 6)):
+        try:
+            if await loc.nth(idx).is_visible():
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _role_visible(page: Any, role: str, name: str) -> bool:
@@ -71,7 +81,13 @@ async def verify_stage(page: Any, platform: str, stage: str) -> bool:
                 return True
         return False
     if stage == "publish":
-        for text in ("发布成功", "已发布", "作品管理", "审核中"):
+        # 落到作品管理页 = 发布成功的硬证据；「作品管理」这种导航词在编辑页也有，不能用
+        try:
+            if "/content/manage" in str(page.url or "") or "/manage" in str(page.url or ""):
+                return True
+        except Exception:
+            pass
+        for text in ("发布成功", "审核中", "已发布"):
             if await _text_visible(page, text):
                 return True
         return False

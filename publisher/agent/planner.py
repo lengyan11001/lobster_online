@@ -33,7 +33,9 @@ def _system_prompt() -> str:
     return (
         "You are a browser/desktop automation assistant. Reply with ONE JSON object only, no prose.\n"
         "Schema: {\"thought\":str,\"action\":str,\"target\":object,\"text\":str,\"expect\":object,\"confidence\":float}\n"
-        "Allowed actions: click,type,set_files,press,wait_for,scroll,close_overlay,reload,screenshot,abort.\n"
+        "Allowed actions: click,type,set_files,press,wait_for,scroll,close_overlay,reload,screenshot,goto,abort.\n"
+        "goto: {action:'goto', target:{value:'https://<platform host>/<path>'}} — only same-platform hosts, "
+        "use it when you are on the wrong page.\n"
         "target supports {by:'text'|'role'|'selector'|'point', value, role, x, y}.\n"
         "To attach a video/image the ONLY correct action is set_files with "
         "target {by:'selector', value:'input[type=file]'} (the file path is supplied by the caller).\n"
@@ -141,7 +143,7 @@ def _build_payload(observation: Observation, goal: str, history: List[Dict[str, 
         ]
     else:
         content = text
-    return {"model": str(cfg.get("model_name") or _model_name()), "temperature": 0.1, "max_tokens": 400,
+    return {"model": str(cfg.get("model_name") or _model_name()), "temperature": 0.1, "max_tokens": 900,
             "messages": [{"role": "system", "content": _system_prompt()},
                          {"role": "user", "content": content}]}
 
@@ -185,6 +187,22 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
     action = _parse_action(_extract_json(content))
     if action is None:
         logger.warning("[agent] unparsable llm reply: %s", (content or "")[:300])
+        if budget.take_llm():
+            # 截断/跑偏时别直接判死：用纯文本再要一次，并要求 thought 短、只回 JSON
+            retry = {"model": payload["model"], "temperature": 0.0, "max_tokens": 900,
+                     "messages": payload["messages"] + [
+                         {"role": "user", "content": "Your previous reply was not valid JSON. "
+                          "Reply with ONE JSON object only, thought under 40 characters."}]}
+            data2, _ = await _post_chat(url, retry, _headers(cfg))
+            if data2:
+                content2 = ""
+                try:
+                    content2 = data2["choices"][0]["message"]["content"] or ""
+                except Exception:
+                    content2 = ""
+                action = _parse_action(_extract_json(content2))
+                if action is None:
+                    logger.warning("[agent] still unparsable: %s", (content2 or "")[:200])
     return action
 
 

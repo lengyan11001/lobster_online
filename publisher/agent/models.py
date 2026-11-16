@@ -43,7 +43,7 @@ class Action:
 
     ALLOWED = {
         "click", "type", "set_files", "press", "wait_for",
-        "scroll", "close_overlay", "reload", "screenshot", "abort",
+        "scroll", "close_overlay", "reload", "screenshot", "goto", "abort",
     }
 
     def valid(self) -> bool:

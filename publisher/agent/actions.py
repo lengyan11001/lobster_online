@@ -3,34 +3,76 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 from .models import Action, StepResult
 
 logger = logging.getLogger(__name__)
 
+# 只允许在这些平台域名内跳转：agent 能自己纠错（走错页面→回到上传页），但不会被模型带去别处
+_ALLOWED_HOST_SUFFIXES = (
+    "douyin.com",
+    "weixin.qq.com",
+    "tiktok.com",
+    "xiaohongshu.com",
+    "kuaishou.com",
+    "toutiao.com",
+    "weibo.com",
+    "bilibili.com",
+)
 
-async def _first_visible(locator: Any) -> Any:
+
+def _host_allowed(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    return any(host == suf or host.endswith("." + suf) for suf in _ALLOWED_HOST_SUFFIXES)
+
+
+async def _in_nav(el: Any) -> bool:
+    """左侧导航/顶部栏里的同名元素不算目标：抖音左栏那个「作品发布」会被「发布」误命中，
+    点下去直接离开编辑页、草稿丢失。"""
+    js = "el => !!el.closest('nav,aside,header,[role=navigation],[class*=sidebar],[class*=Sidebar]')"
+    try:
+        return bool(await el.evaluate(js))
+    except Exception:
+        return False
+
+
+async def _first_visible(locator: Any, *, skip_nav: bool = False) -> Any:
     count = await locator.count()
+    fallback = None
     for idx in range(min(count, 8)):
         item = locator.nth(idx)
         try:
-            if await item.is_visible():
-                return item
+            if not await item.is_visible():
+                continue
+            if skip_nav and await _in_nav(item):
+                if fallback is None:
+                    fallback = item
+                continue
+            return item
         except Exception:
             continue
-    return locator.nth(0) if count else None
+    return fallback if fallback is not None else (locator.nth(0) if count else None)
 
 
 async def _resolve_target(page: Any, target: Dict[str, Any]) -> Any:
     by = str((target or {}).get("by") or "text").lower()
     value = str((target or {}).get("value") or target.get("name") or "").strip()
     if by == "text" and value:
-        return await _first_visible(page.get_by_text(value, exact=False))
+        exact = await _first_visible(page.get_by_text(value, exact=True), skip_nav=True)
+        return exact or await _first_visible(page.get_by_text(value, exact=False), skip_nav=True)
     if by == "role" and value:
         role = str(target.get("role") or "button")
-        return await _first_visible(page.get_by_role(role, name=value, exact=False))
+        # 精确名优先：name="发布" 不该命中「作品发布」
+        exact = await _first_visible(page.get_by_role(role, name=value, exact=True), skip_nav=True)
+        return exact or await _first_visible(page.get_by_role(role, name=value, exact=False), skip_nav=True)
     if by == "selector" and value:
-        return await _first_visible(page.locator(value))
+        return await _first_visible(page.locator(value), skip_nav=True)
     return None
 
 async def run_browser_action(page: Any, action: Action, *, file_path: str = "") -> StepResult:
@@ -39,6 +81,20 @@ async def run_browser_action(page: Any, action: Action, *, file_path: str = "") 
     try:
         if name == "abort":
             return StepResult(False, "agent_abort")
+        if name == "goto":
+            url = str(target.get("value") or target.get("url") or action.text or "").strip()
+            if not url:
+                return StepResult(False, "empty_url")
+            if url.startswith("/"):
+                base = str(getattr(page, "url", "") or "")
+                parts = urlparse(base)
+                if not parts.scheme or not parts.netloc:
+                    return StepResult(False, "no_base_url")
+                url = f"{parts.scheme}://{parts.netloc}{url}"
+            if not _host_allowed(url):
+                return StepResult(False, "host_not_allowed")
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            return StepResult(True, "navigated")
         if name == "reload":
             await page.reload(wait_until="domcontentloaded", timeout=30000)
             return StepResult(True, "reloaded")
