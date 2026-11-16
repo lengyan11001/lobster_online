@@ -47,11 +47,13 @@ class OpSpec:
 
 
 OPS: Dict[str, OpSpec] = {}
+OP_FUNCS: Dict[str, Callable] = {}
 
 
 def spec(**kwargs: Any) -> Callable:
     def deco(fn: Callable) -> Callable:
         OPS[kwargs["name"]] = OpSpec(**kwargs)
+        OP_FUNCS[kwargs["name"]] = fn
         fn.__op_spec__ = OPS[kwargs["name"]]
         return fn
     return deco

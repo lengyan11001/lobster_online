@@ -541,6 +541,46 @@ def _send_allowlist() -> List[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+_SENDKEYS_SPECIAL = set("+^%~(){}[]")
+
+
+def type_text(text: str) -> bool:
+    """往当前焦点控件写文本。
+
+    坑：pywinauto/pywinauto.keyboard 的 SendKeys 语法里 + ^ % ~ ( ) { } [ ] 是特殊字符。
+    之前用 send_keys("agent+robot ...") 直接发，+ 被当成 SHIFT，消息内容被改坏，
+    于是"发出去了但回读校验不通过"。这里优先走剪贴板粘贴，中文/符号都原样。
+    """
+    body = str(text or "")
+    if not body:
+        return False
+    try:
+        import win32clipboard
+        import win32con
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, body)
+        finally:
+            win32clipboard.CloseClipboard()
+        from pywinauto import keyboard as _kb
+
+        _kb.send_keys("^v")
+        return True
+    except Exception as exc:
+        logger.debug("[agent] clipboard paste failed: %s", exc)
+    try:
+        from pywinauto import keyboard as _kb
+
+        escaped = "".join("{" + ch + "}" if ch in _SENDKEYS_SPECIAL else ch for ch in body)
+        _kb.send_keys(escaped, with_spaces=True)
+        return True
+    except Exception as exc:
+        logger.warning("[agent] type_text failed: %s", exc)
+        return False
+
+
 def _chat_input(window: Any) -> Any:
     """聊天输入框：优先用真机确认的 automation_id=chat_input_field。"""
     ctl = _find_control(window, "aid:chat_input_field")
@@ -590,7 +630,7 @@ def _guard_ok(window: Any, guard_name: str) -> bool:
 _STAGE_ALLOWED_ACTIONS = {
     "wechat_sessions": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "abort"},
     # 只有这个阶段允许打字，且只在白名单会话里
-    "wechat_send": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "type", "send", "abort"},
+    "wechat_send": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "type", "send", "op", "abort"},
 }
 
 
@@ -601,6 +641,16 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
     allowed = _STAGE_ALLOWED_ACTIONS.get(str(stage or "").lower())
     if allowed is not None and name not in allowed:
         return StepResult(False, f"action '{name}' blocked in stage '{stage}'")
+    if name == "op":
+        from publisher.robot.dispatch import run_op
+
+        op_name = str(target.get("name") or target.get("op") or "").strip()
+        params = dict(target.get("params") or {})
+        if not op_name:
+            return StepResult(False, "empty_op")
+        res = run_op(op_name, params, window=window)
+        err = "" if res.ok else f"{res.layer}:{res.error}"
+        return StepResult(bool(res.ok), err[:200], observed=str(res.evidence)[:400])
     if name == "press":
         key = str(target.get("value") or action.text or "").strip().upper()
         ok_keys = {"{ESC}", "ESC", "ESCAPE"}
@@ -638,11 +688,12 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
             if control is None:
                 return StepResult(False, "chat_input_not_found")
             control.click_input()
-            from pywinauto import keyboard
-            keyboard.send_keys("^a")
-            keyboard.send_keys("{DELETE}")
-            keyboard.send_keys(text, with_spaces=True)
-            keyboard.send_keys("{ENTER}")
+            from pywinauto import keyboard as _kb
+            _kb.send_keys("^a")
+            _kb.send_keys("{DELETE}")
+            if not type_text(text):
+                return StepResult(False, "paste_failed")
+            _kb.send_keys("{ENTER}")
             return StepResult(True, "sent")
         if str(target.get("by") or "").lower() == "point":
             from pywinauto import mouse
@@ -673,8 +724,8 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
             if control is None:
                 return StepResult(False, "target_not_found")
             control.click_input()
-            from pywinauto import keyboard
-            keyboard.send_keys(text, with_spaces=True)
+            if not type_text(text):
+                return StepResult(False, "paste_failed")
             return StepResult(True, "typed")
         return StepResult(False, "unsupported_action")
     except Exception as exc:

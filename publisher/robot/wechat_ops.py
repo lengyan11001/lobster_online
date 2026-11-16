@@ -179,22 +179,30 @@ def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0) -
         control.click_input()
         keyboard.send_keys("^a")
         keyboard.send_keys("{DELETE}")
-        keyboard.send_keys(body, with_spaces=True)
+        from publisher.agent.desktop import type_text
+
+        if not type_text(body):
+            res.layer, res.error = "action", "paste_failed"
+            return res
         keyboard.send_keys("{ENTER}")
     except Exception as exc:
         res.layer, res.error = "action", f"type_failed:{type(exc).__name__}"
         return res
-    probe = body.strip()[:16]
-    deadline = time.monotonic() + max(3.0, float(timeout))
+    probe = body.strip()[:12]
+    item_probe = body.strip()[:10]
+    deadline = time.monotonic() + max(6.0, float(timeout))
     while time.monotonic() < deadline:
         time.sleep(0.4)
         after = S.snapshot_desktop(win)
         msgs = after.anchors.get("messages") or []
-        new = [m for m in msgs if m not in before_msgs and probe in m]
-        if new:
+        new_msg = [m for m in msgs if m not in before_msgs and probe in m]
+        # 兜底证据：会话列那一行的预览也会变成刚发的文本（真机 22:13 那条就是这样）
+        row_hit = [it for it in after.items if it.startswith(chat[:6]) and item_probe in it]
+        if new_msg or row_hit:
             res.after = after.to_dict()
             res.ok = True
-            res.evidence["matched"] = new[-1][:80]
+            res.evidence["matched"] = (new_msg[-1] if new_msg else row_hit[0])[:90]
+            res.evidence["matched_via"] = "chat_message" if new_msg else "session_preview"
             return res
     res.after = S.snapshot_desktop(win).to_dict()
     res.layer, res.error = "verify", "message_not_found"

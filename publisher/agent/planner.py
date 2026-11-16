@@ -36,6 +36,8 @@ def _system_prompt() -> str:
         "Allowed actions: click,type,set_files,press,wait_for,scroll,close_overlay,reload,screenshot,goto,send,abort.\n"
         "send (desktop WeChat only): {action:'send', text:'消息内容'} — writes into the current chat input "
         "and presses Enter; only allowed for allowlisted contacts.\n"
+        "op: {action:'op', target:{name:'<op name from tools>', params:{...}}} — PREFER ops over raw clicks: "
+        "they check the interface (surface) first and verify with before/after snapshots.\n"
         "goto: {action:'goto', target:{value:'https://<platform host>/<path>'}} — only same-platform hosts, "
         "use it when you are on the wrong page.\n"
         "target supports {by:'text'|'role'|'selector'|'point', value, role, x, y}.\n"
@@ -134,7 +136,15 @@ def _headers(cfg: Dict[str, Any]) -> Dict[str, str]:
 
 def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
     obs = observation.to_llm_dict(include_image=False)
-    text = json.dumps({"goal": goal, "observation": obs, "history": history[-6:],
+    tools = []
+    try:
+        from publisher.robot.dispatch import list_ops
+
+        platform = "wechat" if str(obs.get("env")) == "desktop" else "douyin"
+        tools = list_ops(platform)
+    except Exception:
+        tools = []
+    text = json.dumps({"goal": goal, "tools": tools, "observation": obs, "history": history[-6:],
                        "budget": {"steps_left": max(0, budget.max_steps - budget.steps),
                                   "llm_calls_left": max(0, budget.max_llm_calls - budget.llm_calls)}},
                       ensure_ascii=False)

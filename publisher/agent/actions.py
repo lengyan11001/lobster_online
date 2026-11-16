@@ -1,6 +1,7 @@
 """Allowlisted browser actions (Playwright)."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict
 from urllib.parse import urlparse
@@ -81,6 +82,16 @@ async def run_browser_action(page: Any, action: Action, *, file_path: str = "") 
     try:
         if name == "abort":
             return StepResult(False, "agent_abort")
+        if name == "op":
+            from publisher.robot.dispatch import run_op_async
+
+            op_name = str(target.get("name") or target.get("op") or "").strip()
+            params = dict(target.get("params") or {})
+            if not op_name:
+                return StepResult(False, "empty_op")
+            res = await run_op_async(op_name, params, page=page)
+            err = "" if res.ok else f"{res.layer}:{res.error}"
+            return StepResult(bool(res.ok), err[:200], observed=json.dumps(res.evidence, ensure_ascii=False)[:400])
         if name == "goto":
             url = str(target.get("value") or target.get("url") or action.text or "").strip()
             if not url:
