@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 _ALLOWED_ACTIONS = Action.ALLOWED
 
 
-# mastra 对话（mastra_server/src/mastra/index.ts:52/1324）就是这么调的：
-#   createOpenAI({baseURL: <backend>/api/sutui-chat, apiKey: <user token>}).chat(LOBSTER_MASTRA_MODEL)
-#   默认模型 openai/gpt-5.6-sol → 服务端 _get_direct_route 命中 YYAPI 直连档（多模态，能读图）。
-# 文本档仍用服务端默认 deepseek-chat（便宜、够用）。
-VISION_MODEL_DEFAULT = "openai/gpt-5.6-sol"
+# 服务端模型编排是 server-owned（backend/app/api/sutui_chat_proxy.py:1296
+# _sutui_chat_model_candidates）：deepseek-flash 是文本+图片的主档（官方 deepseek-flash
+# 接口支持 image_url），后面依次 change2pro / YYAPI 的 gpt-5.6-sol 兜底。
+# 所以这边只发一个 model id，兜底交给服务端候选链，不自己做“换模型”。
+PRIMARY_MODEL_DEFAULT = "deepseek-flash"
 
 
 def _strip_sutui(raw: str) -> str:
@@ -32,19 +32,11 @@ def _vision_allowed() -> bool:
     return str(os.environ.get("LOBSTER_AGENT_VISION") or "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _model_name(vision: bool = False) -> str:
-    """LOBSTER_AGENT_MODEL 覆盖一切；否则视觉档用 mastra 的 gpt-5.6-sol，文本档用服务端默认。"""
+def _model_name() -> str:
     override = _strip_sutui(os.environ.get("LOBSTER_AGENT_MODEL") or "")
     if override:
         return override
-    if vision:
-        return _strip_sutui(os.environ.get("LOBSTER_AGENT_VISION_MODEL") or VISION_MODEL_DEFAULT)
-    try:
-        from backend.app.core.config import settings  # type: ignore
-
-        return (getattr(settings, "lobster_default_sutui_chat_model", None) or "deepseek-chat").strip() or "deepseek-chat"
-    except Exception:
-        return "deepseek-chat"
+    return _strip_sutui(os.environ.get("LOBSTER_AGENT_PRIMARY_MODEL") or PRIMARY_MODEL_DEFAULT)
 
 
 def _system_prompt() -> str:
@@ -130,7 +122,7 @@ def _chat_endpoint(cfg: Dict[str, Any]) -> str:
         return ""
 
 
-def _headers(cfg: Dict[str, Any], *, vision: bool = False) -> Dict[str, str]:
+def _headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     out = {"Content-Type": "application/json"}
     key = str(cfg.get("api_key") or "").strip()
     if key:
@@ -143,16 +135,13 @@ def _headers(cfg: Dict[str, Any], *, vision: bool = False) -> Dict[str, str]:
                 out["Authorization"] = f"Bearer {token}"
         except Exception:
             pass
-    if vision:
-        # 服务端只认这个头才把请求锁到 provider 自有的多模态档（gpt-5.6-sol），
-        # 否则会被用户级模型偏好替换掉，图片直接 4xx/超时。
-        out["X-Lobster-Image-Understand"] = "1"
     return out
 
 
 def _want_vision(observation: Observation, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> bool:
-    """先便宜后视觉：DOM 观察够清楚（节点多）就text-only；页面是画布/iframe/已经被打回一次，
-    才升级到 gpt-5.6-sol 读图。视觉按次计费（最低 10 算力），所以必须限量。"""
+    """先便宜后视觉：DOM 观察够清楚（节点多）就不带图；页面是画布/iframe/已经被打回一次，
+    才把截图一起发给 deepseek-flash（同一个 model，服务端候选链自己兜底到 gpt-5.6-sol）。
+    带图一次最低 10 算力，所以按次限量。"""
     if not _vision_allowed() or not observation.screenshot_b64:
         return False
     if str(cfg.get("api_key") or "").strip():
@@ -165,7 +154,7 @@ def _want_vision(observation: Observation, history: List[Dict[str, Any]], budget
 
 
 def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any], *, vision: bool = False) -> Dict[str, Any]:
-    model = str(cfg.get("model_name") or _model_name(vision))
+    model = str(cfg.get("model_name") or _model_name())
     obs = observation.to_llm_dict(include_image=False)
     text = json.dumps({"goal": goal, "observation": obs, "history": history[-6:],
                        "budget": {"steps_left": max(0, budget.max_steps - budget.steps),
@@ -207,7 +196,7 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
     vision = _want_vision(observation, history, budget, cfg)
     payload = _build_payload(observation, goal, history, budget, cfg, vision=vision)
     logger.info("[agent] llm model=%s vision=%s url=%s", payload.get("model"), vision, url)
-    data, status = await _post_chat(url, payload, _headers(cfg, vision=vision))
+    data, status = await _post_chat(url, payload, _headers(cfg))
     if status == 402:
         # 余额不足跟模型档无关，重试纯属浪费：直接收手，日志里能看见真实原因
         logger.warning("[agent] insufficient credit for LLM call (402) -> stop recovery")
