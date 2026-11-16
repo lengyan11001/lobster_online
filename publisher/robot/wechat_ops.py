@@ -232,6 +232,83 @@ def pending_friend_requests(window: Any = None) -> Result:
     return res
 
 
+@spec(name="wechat.moments_publish", platform="wechat", surface=S.WECHAT_MOMENTS,
+      summary="打开发表入口（dry_run 只验证入口可达并安全退出）",
+      precondition="朋友圈窗口已打开", postcondition="入口可达 + dry_run 后动态未变",
+      destructive=True, params=["text", "dry_run"])
+def moments_publish(text: str = "", dry_run: bool = True, window: Any = None) -> Result:
+    """微信 4.x 真机行为：点「发表」直接弹系统「选择文件」框（先选图，再写文案）。
+    所以这里先只做“入口可达 + 安全退出”的验证，不做真实发布。"""
+    res = Result(op="wechat.moments_publish")
+    win = window or find_sns_window()
+    if win is None:
+        res.layer, res.error = "precondition", "moments_window_not_found"
+        return res
+    activate_window(win)
+    before = _ensure_surface(win, S.WECHAT_MOMENTS, res)
+    if before is None:
+        return res
+    btn = _find_control(win, "发表")
+    if btn is None:
+        res.layer, res.error = "precondition", "publish_entry_not_found"
+        return res
+    try:
+        btn.click_input()
+    except Exception as exc:
+        res.layer, res.error = "action", f"click_failed:{type(exc).__name__}"
+        return res
+    dialog = _wait_file_dialog(timeout=5.0)
+    res.evidence["file_dialog"] = bool(dialog)
+    if dialog:
+        try:
+            import win32gui
+            from pywinauto import keyboard
+
+            win32gui.SetForegroundWindow(dialog)
+            keyboard.send_keys("{ESC}")
+        except Exception:
+            pass
+        time.sleep(0.8)
+        res.evidence["dialog_closed"] = _wait_file_dialog(timeout=2.0) is None
+    after = S.snapshot_desktop(win)
+    res.after = after.to_dict()
+    unchanged = after.digest == before.digest
+    res.evidence["feed_unchanged"] = unchanged
+    if not dry_run:
+        res.layer, res.error = "unsupported", "real_publish_not_implemented"
+        return res
+    res.ok = bool(res.evidence.get("dialog_closed") or not res.evidence["file_dialog"]) and unchanged
+    if not res.ok:
+        res.layer, res.error = "verify", "composer_not_clean"
+    return res
+
+
+def _wait_file_dialog(timeout: float = 5.0) -> Any:
+    """等系统「选择文件」框出现，返回 hwnd；没有返回 None。"""
+    import win32gui
+
+    deadline = time.monotonic() + max(0.5, float(timeout))
+    while time.monotonic() < deadline:
+        found = []
+        def _cb(hwnd: int, _p) -> bool:
+            try:
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+                cls = win32gui.GetClassName(hwnd)
+                title = win32gui.GetWindowText(hwnd)
+                if cls == "#32770" or "选择文件" in title:
+                    found.append(hwnd)
+            except Exception:
+                pass
+            return True
+
+        win32gui.EnumWindows(_cb, None)
+        if found:
+            return found[0]
+        time.sleep(0.25)
+    return None
+
+
 @spec(name="wechat.moments_feed", platform="wechat", surface=S.WECHAT_MOMENTS,
       summary="只读列朋友圈动态", precondition="朋友圈窗口已打开",
       postcondition="条目来自 SNS 窗口 ListItem", readonly=True, params=["limit"])

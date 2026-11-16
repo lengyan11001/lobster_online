@@ -32,6 +32,13 @@ def _call(name: str, params: Dict[str, Any], *, window: Any = None, page: Any = 
         res.layer, res.error = "dispatch", "unknown_op"
         return res
     kwargs = dict(params or {})
+    if not kwargs:
+        spec = OPS.get(str(name))
+        need = [p for p in (spec.params if spec else []) if p not in {"dry_run", "limit"}]
+        if need:
+            res = Result(op=str(name))
+            res.layer, res.error = "dispatch", "missing_param:" + ",".join(need)
+            return res
     try:
         sig = inspect.signature(fn)
         if "window" in sig.parameters and window is not None:
@@ -40,7 +47,12 @@ def _call(name: str, params: Dict[str, Any], *, window: Any = None, page: Any = 
             kwargs.setdefault("page", page)
     except Exception:
         pass
-    return fn(**kwargs)
+    try:
+        return fn(**kwargs)
+    except TypeError as exc:
+        res = Result(op=str(name))
+        res.layer, res.error = "dispatch", f"bad_params:{exc}"[:160]
+        return res
 
 
 def run_op(name: str, params: Optional[Dict[str, Any]] = None, *, window: Any = None,

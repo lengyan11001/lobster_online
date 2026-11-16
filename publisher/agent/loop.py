@@ -80,7 +80,7 @@ async def recover(
         signature = first.signature
         while budget.take_step():
             observation = await observe_browser(page, platform=platform, stage=stage)
-            action = await decide_async(observation, goal, history, budget)
+            action = await decide_async(observation, goal, history, budget, file_path=file_path)
             if action is None:
                 result.error = "no_action"
                 break

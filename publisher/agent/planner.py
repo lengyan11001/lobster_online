@@ -38,6 +38,7 @@ def _system_prompt() -> str:
         "and presses Enter; only allowed for allowlisted contacts.\n"
         "op: {action:'op', target:{name:'<op name from tools>', params:{...}}} — PREFER ops over raw clicks: "
         "they check the interface (surface) first and verify with before/after snapshots.\n"
+        "If context has input_file, use that exact absolute path for upload ops; never invent a path.\n"
         "goto: {action:'goto', target:{value:'https://<platform host>/<path>'}} — only same-platform hosts, "
         "use it when you are on the wrong page.\n"
         "target supports {by:'text'|'role'|'selector'|'point', value, role, x, y}.\n"
@@ -134,7 +135,7 @@ def _headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any], file_path: str = "") -> Dict[str, Any]:
     obs = observation.to_llm_dict(include_image=False)
     tools = []
     try:
@@ -144,7 +145,11 @@ def _build_payload(observation: Observation, goal: str, history: List[Dict[str, 
         tools = list_ops(platform)
     except Exception:
         tools = []
-    text = json.dumps({"goal": goal, "tools": tools, "observation": obs, "history": history[-6:],
+    payload_ctx: Dict[str, Any] = {"goal": goal, "tools": tools}
+    if file_path:
+        # 上传类 op 需要绝对路径；模型自己编路径会白烧一轮（真机踩过 /tmp/xxx.mp4）
+        payload_ctx["input_file"] = str(file_path)
+    text = json.dumps({**payload_ctx, "observation": obs, "history": history[-6:],
                        "budget": {"steps_left": max(0, budget.max_steps - budget.steps),
                                   "llm_calls_left": max(0, budget.max_llm_calls - budget.llm_calls)}},
                       ensure_ascii=False)
@@ -173,7 +178,7 @@ async def _post_chat(url: str, payload: Dict[str, Any], headers: Dict[str, str])
         return None, 0
 
 
-async def decide_async(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any) -> Optional[Action]:
+async def decide_async(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, file_path: str = "") -> Optional[Action]:
     if not budget.take_llm():
         return None
     cfg = _resolve_llm_config()
@@ -181,7 +186,7 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
     if not url:
         logger.info("[agent] no llm endpoint configured")
         return None
-    payload = _build_payload(observation, goal, history, budget, cfg)
+    payload = _build_payload(observation, goal, history, budget, cfg, file_path=file_path)
     logger.info("[agent] llm model=%s image=%s url=%s", payload.get("model"),
                 isinstance(payload["messages"][1]["content"], list), url)
     data, status = await _post_chat(url, payload, _headers(cfg))
