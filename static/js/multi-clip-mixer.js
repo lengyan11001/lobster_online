@@ -2222,6 +2222,7 @@
   function setResultVideo(result) {
     var surface = $('mcmResultSurface');
     if (!surface || !result) return Promise.resolve();
+    state.lastResultAssetId = String(result.asset_id || '').trim();
     if (state.resultObjectUrl) {
       URL.revokeObjectURL(state.resultObjectUrl);
       state.resultObjectUrl = '';
@@ -2251,6 +2252,8 @@
       if (actions) actions.hidden = false;
       var open = $('mcmOpenResultBtn');
       if (open) open.href = videoUrl;
+      var folderBtn = $('mcmOpenFolderBtn');
+      if (folderBtn) folderBtn.hidden = !state.lastResultAssetId;
       if ($('mcmTotalDuration') && result.duration) $('mcmTotalDuration').textContent = formatSeconds(result.duration);
     });
   }
@@ -3501,6 +3504,15 @@
       if (state.previewAudio) state.previewAudio.volume = value;
     });
     if ($('mcmGenerateBtn')) $('mcmGenerateBtn').addEventListener('click', generate);
+    if ($('mcmOpenFolderBtn')) $('mcmOpenFolderBtn').addEventListener('click', function() {
+      var assetId = String(state.lastResultAssetId || '').trim();
+      if (!assetId) return showMessage('还没有可打开的成片任务', true);
+      post('/api/multi-clip-mixer/open-folder', { asset_id: assetId }).then(function(data) {
+        showMessage('已打开任务文件夹：' + String((data && data.path) || ''), false);
+      }).catch(function(err) {
+        showMessage('打开文件夹失败：' + (err.message || err), true);
+      });
+    });
     if ($('mcmRetryTemplateBtn')) $('mcmRetryTemplateBtn').addEventListener('click', retryTemplate);
     if ($('mcmHistoryToggleBtn')) $('mcmHistoryToggleBtn').addEventListener('click', function() {
       if (!state.history.length) return showMessage('还没有历史记录，完成一次生成后会自动保留在这里。', false);

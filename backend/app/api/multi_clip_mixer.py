@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import re
@@ -23,11 +24,33 @@ from sqlalchemy.orm import Session
 from ..db import SessionLocal, get_db
 from ..models import Asset
 from ..services.media_edit_exec import find_ffmpeg, resolve_asset_path
-from .assets import _save_bytes_or_tos, _upload_bytes_to_auth_server
+from .assets import ASSETS_DIR, _save_bytes_or_tos, _upload_bytes_to_auth_server
 from .auth import _ServerUser, get_current_user_for_local
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_MCM_TASK_ROOT = Path(__file__).resolve().parents[3] / "data" / "multi_clip_mixer" / "tasks"
+
+
+def _prune_task_dirs(user_root: Path, keep: int = 30) -> None:
+    try:
+        dirs = [p for p in user_root.iterdir() if p.is_dir()]
+        dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in dirs[keep:]:
+            shutil.rmtree(old, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _new_task_dir(user_id: int) -> Path:
+    """每个生成任务一个本地文件夹，保留下来供「打开文件夹」查看与复用。"""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = _MCM_TASK_ROOT / f"u{int(user_id)}" / f"{stamp}_{uuid.uuid4().hex[:6]}"
+    path.mkdir(parents=True, exist_ok=True)
+    _prune_task_dirs(path.parent, keep=30)
+    return path
+
 _POSTER_CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "multi_clip_mixer_posters"
 _PLAYBACK_CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "multi_clip_mixer_playback"
 
@@ -525,7 +548,7 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
     )
     ffmpeg = find_ffmpeg()
     ffprobe = _find_ffprobe(ffmpeg)
-    work_dir = Path(tempfile.mkdtemp(prefix="multi_clip_mixer_"))
+    work_dir = _new_task_dir(user_id)
     resolved_paths: List[Path] = []
     download_dirs: set[Path] = set()
     normalized: List[Dict[str, Any]] = []
@@ -788,6 +811,7 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
 
         output_info = _probe_video(final_path, ffprobe)
         return {
+            "work_dir": str(work_dir),
             "data": final_path.read_bytes(),
             "segments": normalized,
             "duration": round(float(output_info["duration"]), 3),
@@ -801,7 +825,7 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
         db.close()
         for directory in download_dirs:
             shutil.rmtree(directory, ignore_errors=True)
-        shutil.rmtree(work_dir, ignore_errors=True)
+        # 2026-11-16：任务目录保留（每个任务一个文件夹，供「打开文件夹」查看）
 
 
 class MultiClipConcatBody(BaseModel):
@@ -880,6 +904,7 @@ async def concat_multi_clip_videos(
         meta={
             "title": (body.title or "剪辑大师").strip()[:80],
             "segments": rendered["segments"],
+            "work_dir": rendered.get("work_dir") or "",
             "concat_of": list(body.asset_ids),
             "output_ratio": body.output_ratio,
             "fill_mode": body.fill_mode,
@@ -1091,6 +1116,7 @@ async def render_multi_clip_video(
             "audio_source_asset_id": rendered.get("audio_source_asset_id") or "",
             "audio_source": rendered.get("audio_source") or "segments",
             "target_duration": rendered.get("target_duration"),
+            "work_dir": rendered.get("work_dir") or "",
             "clip_mode": (body.clip_mode or "fixed").strip()[:32],
             "output_index": body.output_index,
             "content_visibility": "intermediate" if body.intermediate else "",
@@ -1637,3 +1663,37 @@ def ai_trim_tools_status():
     with _AI_TRIM_LOCK:
         job = dict(_AI_TRIM_JOBS.get("tools") or {})
     return job or {"status": "idle", "progress": 0}
+
+
+class OpenTaskFolderBody(BaseModel):
+    asset_id: str = Field(..., max_length=64)
+
+
+@router.post("/api/multi-clip-mixer/open-folder")
+def open_multi_clip_task_folder(
+    body: OpenTaskFolderBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """打开某条成片对应的本地任务文件夹（一次任务一个目录）。"""
+    asset_id = str(body.asset_id or "").strip()
+    row = (
+        db.query(Asset)
+        .filter(Asset.user_id == current_user.id, Asset.asset_id == asset_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="没有找到这条成片记录")
+    meta = dict(row.meta or {}) if isinstance(row.meta, dict) else {}
+    work_dir = str(meta.get("work_dir") or "").strip()
+    target_dir: Optional[Path] = Path(work_dir) if work_dir else None
+    if target_dir is None or not target_dir.is_dir():
+        candidate = ASSETS_DIR / str(row.filename or "")
+        target_dir = candidate.parent if candidate.parent.is_dir() else None
+    if target_dir is None:
+        raise HTTPException(status_code=404, detail="任务目录不存在（可能已被清理）")
+    try:
+        subprocess.Popen(["explorer", str(target_dir)])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"打开文件夹失败：{exc}")
+    return {"ok": True, "path": str(target_dir)}
