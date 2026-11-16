@@ -201,14 +201,15 @@ _AUTH_SERVER_IMAGE_UPLOAD_JPEG_QUALITY = min(
     max(70, int(os.environ.get("AUTH_SERVER_IMAGE_UPLOAD_JPEG_QUALITY") or "88")),
 )
 _AUTH_SERVER_UPLOAD_TIMEOUT = httpx.Timeout(
-    connect=float(os.environ.get("AUTH_SERVER_UPLOAD_CONNECT_TIMEOUT") or "8"),
-    read=float(os.environ.get("AUTH_SERVER_UPLOAD_READ_TIMEOUT") or "45"),
-    write=float(os.environ.get("AUTH_SERVER_UPLOAD_WRITE_TIMEOUT") or "45"),
-    pool=float(os.environ.get("AUTH_SERVER_UPLOAD_POOL_TIMEOUT") or "8"),
+    connect=float(os.environ.get("AUTH_SERVER_UPLOAD_CONNECT_TIMEOUT") or "10"),
+    read=float(os.environ.get("AUTH_SERVER_UPLOAD_READ_TIMEOUT") or "90"),
+    # 视频素材几十 MB，公网写超时太短会写到一半 WriteTimeout（客户 2026-11-16 现场）
+    write=float(os.environ.get("AUTH_SERVER_UPLOAD_WRITE_TIMEOUT") or "240"),
+    pool=float(os.environ.get("AUTH_SERVER_UPLOAD_POOL_TIMEOUT") or "10"),
 )
 _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS = max(
     1,
-    min(3, int(os.environ.get("AUTH_SERVER_UPLOAD_MAX_ATTEMPTS") or "2")),
+    min(4, int(os.environ.get("AUTH_SERVER_UPLOAD_MAX_ATTEMPTS") or "3")),
 )
 
 
@@ -352,7 +353,7 @@ async def _upload_bytes_to_auth_server(
                 )
             elapsed_ms = int((time.monotonic() - started) * 1000)
             break
-        except (httpx.ReadTimeout, httpx.ReadError, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+        except (httpx.TimeoutException, httpx.ReadError, httpx.WriteError, httpx.ConnectError, httpx.RemoteProtocolError) as e:
             last_error = f"{type(e).__name__}: {e}"
             if attempt >= _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS:
                 return None, {
@@ -923,13 +924,36 @@ def _refresh_asset_source_url_from_local_file(
                 "RemoteProtocolError",
                 "Server disconnected",
                 "ReadTimeout",
+                "WriteTimeout",
                 "ConnectTimeout",
+                "handshake",
                 "Connection reset",
             )
         )
         if attempt >= _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS or not transient:
             break
         time.sleep(1.0 if attempt == 1 else 2.0)
+    if not public_url:
+        # 2026-11-16：云端 upload-temp 网络抖动（WriteTimeout/ConnectTimeout）时，
+        # 客户端本机有 TOS 配置就直接传 TOS，避免整条发布因为转存失败被拒。
+        try:
+            fallback_data = local_path.read_bytes()
+            fallback_ct = _content_type_for_asset_filename(filename)
+            tos_url = _upload_to_tos_guarded(
+                fallback_data,
+                f"assets/{filename}",
+                fallback_ct,
+            )
+            if tos_url:
+                public_url = tos_url
+                diag["fallback"] = "tos"
+                logger.info(
+                    "[assets] refresh source_url via TOS fallback asset_id=%s url=%s",
+                    row.asset_id,
+                    tos_url[:120],
+                )
+        except Exception as exc:
+            diag["tos_fallback_error"] = f"{type(exc).__name__}: {exc}"[:200]
     if not public_url:
         logger.warning("[assets] refresh source_url failed asset_id=%s reason=%s diag=%s", row.asset_id, reason, diag)
         try:

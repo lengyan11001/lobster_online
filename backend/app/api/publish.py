@@ -2537,13 +2537,17 @@ async def create_publish_task(
             """返回 (path_str, temp_path_to_delete)。优先用公网 source_url；本地素材先懒转存。"""
             url = await _ensure_publish_asset_public_url(a, current_user.id, request)
             if not url:
-                raise HTTPException(
-                    400,
-                    detail=(
-                        "素材没有公网链接，且自动转存失败。请确认本地素材文件存在、登录态有效、"
-                        "服务器 /api/assets/upload-temp 可用后重试。"
-                    ),
-                )
+                try:
+                    db.refresh(a)
+                except Exception:
+                    pass
+                meta = dict(getattr(a, "meta", {}) or {}) if isinstance(getattr(a, "meta", None), dict) else {}
+                last_err = str(meta.get("public_url_last_error") or "").strip()
+                detail = "素材没有公网链接，且自动转存失败。"
+                if last_err:
+                    detail += " 最近错误：" + last_err[:180]
+                detail += " 请确认本地素材文件存在、登录态有效、服务器 /api/assets/upload-temp 可用后重试。"
+                raise HTTPException(400, detail=detail)
             async with httpx.AsyncClient(timeout=120.0) as c:
                 r = await c.get(url)
             r.raise_for_status()

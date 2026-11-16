@@ -1831,7 +1831,12 @@ class WechatChannelsDriver(BaseDriver):
             if not attached:
                 _step("素材未挂载，重试上传", False)
                 try:
-                    retry_input = await _find_file_input(page, media_kind=media_kind) or file_input
+                    # 2026-11-16：第一次失败常见原因是 wujie 编辑器把旧 input 换掉了。
+                    # 重新打开一次发布编辑器，拿全新的 input 再传，而不是复用旧 handle。
+                    await _open_publish_editor(page, media_kind, _step)
+                    retry_input = await _find_file_input(page, media_kind=media_kind)
+                    if retry_input is None:
+                        retry_input = file_input
                     await _upload_media_file(page, retry_input, file_path)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("[WECHAT-CHANNELS] 重试上传失败: %s", str(exc)[:160])
