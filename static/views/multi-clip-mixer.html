@@ -85,11 +85,13 @@
           <div id="mcmVoiceModeRow" class="mcm-setting-row mcm-audio-mode-row">
             <span><strong>声音来源</strong><small id="mcmVoiceModeHint">口播文案 = 先 TTS 成语音，再用语音驱动成片；素材原声 = 用片段里标记的原声。</small></span>
             <div class="mcm-audio-mode-options">
-              <label><input type="radio" name="mcmVoiceMode" value="original" checked><span>素材原声</span></label>
               <label><input type="radio" name="mcmVoiceMode" value="speech"><span>口播文案（TTS）</span></label>
-              <label><input type="radio" name="mcmVoiceMode" value="bgm"><span>仅音乐/静音</span></label>
+              <label><input type="radio" name="mcmVoiceMode" value="original" checked><span>素材原声</span></label>
+              <label><input type="radio" name="mcmVoiceMode" value="bgm"><span>背景音乐</span></label>
+              <label id="mcmVoiceTemplateLabel"><input type="radio" name="mcmVoiceMode" value="template"><span>模板自带声音</span></label>
             </div>
           </div>
+          <div id="mcmVoiceHint" class="mcm-mode-hint"></div>
           <div id="mcmSpeechPanel" class="mcm-choice-panel" hidden>
             <div class="mcm-choice-toolbar">
               <div><strong>口播文案</strong><span id="mcmSpeechStatus">输入文案后生成口播音轨</span></div>
@@ -122,16 +124,6 @@
             </div>
             <div id="mcmMusicGrid" class="mcm-music-grid"></div>
           </div>
-
-          <div id="mcmFinalAudioRow" class="mcm-setting-row mcm-audio-mode-row">
-            <span><strong>套模板后用哪路声音</strong><small id="mcmFinalAudioHint">选择成片最终使用哪路声音。</small></span>
-            <div class="mcm-audio-mode-options">
-              <label id="mcmFinalAudioOriginalLabel"><input type="radio" name="mcmFinalAudioMode" value="original"><span>保留当前声音（口播/原声）</span></label>
-              <label id="mcmFinalAudioBgmLabel"><input type="radio" name="mcmFinalAudioMode" value="bgm"><span>背景音乐</span></label>
-              <label id="mcmFinalAudioTemplateLabel"><input type="radio" name="mcmFinalAudioMode" value="template" checked><span>用模板自带声音</span></label>
-            </div>
-          </div>
-
 
         </section>
 
