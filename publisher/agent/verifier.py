@@ -44,6 +44,9 @@ async def verify_expect(page: Any, expect: Optional[Dict[str, Any]], *, platform
             return (await page.locator(selector).count()) >= want
         except Exception:
             return False
+    if kind in {"state", "file_chooser_or_upload_started", "upload_started"}:
+        # 模型自造的状态断言：等价于“素材已挂载”
+        return await verify_expect(page, {"kind": "media_attached"}, platform=platform, stage=stage)
     if kind == "media_attached":
         try:
             if platform == "wechat_channels":
@@ -53,13 +56,20 @@ async def verify_expect(page: Any, expect: Optional[Dict[str, Any]], *, platform
             return (await page.get_by_text("删除", exact=True).count()) > 0
         except Exception:
             return False
-    return True
+    logger.warning("[agent] unknown expect kind=%s -> unverified", kind)
+    return False
 
 
 async def verify_stage(page: Any, platform: str, stage: str) -> bool:
     stage = str(stage or "").lower()
     if stage == "upload":
-        return await verify_expect(page, {"kind": "media_attached"}, platform=platform, stage=stage)
+        if await verify_expect(page, {"kind": "media_attached"}, platform=platform, stage=stage):
+            return True
+        # 抖音：素材已挂上并进入编辑页/解析中，等价于“已进入上传流程”
+        for text in ("重新上传", "上传成功", "文件解析中", "作品描述", "设置封面"):
+            if await _text_visible(page, text):
+                return True
+        return False
     if stage == "publish":
         for text in ("发布成功", "已发布", "作品管理", "审核中"):
             if await _text_visible(page, text):

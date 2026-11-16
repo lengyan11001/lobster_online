@@ -26,6 +26,11 @@ def _system_prompt() -> str:
         "Schema: {\"thought\":str,\"action\":str,\"target\":object,\"text\":str,\"expect\":object,\"confidence\":float}\n"
         "Allowed actions: click,type,set_files,press,wait_for,scroll,close_overlay,reload,screenshot,abort.\n"
         "target supports {by:'text'|'role'|'selector'|'point', value, role, x, y}.\n"
+        "To attach a video/image the ONLY correct action is set_files with "
+        "target {by:'selector', value:'input[type=file]'} (the file path is supplied by the caller).\n"
+        "expect.kind MUST be one of: text, role, url_contains, element_count, media_attached, any.\n"
+        "  text: {kind:'text', value:'visible text'} | role: {kind:'role', role:'button', name:'name'}\n"
+        "  element_count: {kind:'element_count', selector:'css', min:1} | media_attached: {kind:'media_attached'}\n"
         "Never publish/delete/pay/switch account/execute JS. Confidence below 0.6 => abort.\n"
         "Prefer semantic targets (text/role). Do not repeat the same failed action twice."
     )
@@ -112,8 +117,14 @@ def _headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     return {"Content-Type": "application/json"}
 
 
-def _supports_vision(model: str) -> bool:
-    name = str(model or "").lower()
+def _vision_enabled(cfg: Dict[str, Any]) -> bool:
+    """Vision is opt-in: the sutui proxy drops image payloads (ReadTimeout), so only
+    send images when a direct provider key exists and LOBSTER_AGENT_VISION=1."""
+    if str(os.environ.get("LOBSTER_AGENT_VISION") or "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    if not str(cfg.get("api_key") or "").strip():
+        return False
+    name = str(cfg.get("model_name") or _model_name()).lower()
     return any(k in name for k in ("gpt-4", "gpt-5", "vision", "qwen-vl", "gemini", "claude"))
 
 
@@ -124,7 +135,7 @@ def _build_payload(observation: Observation, goal: str, history: List[Dict[str, 
                        "budget": {"steps_left": max(0, budget.max_steps - budget.steps),
                                   "llm_calls_left": max(0, budget.max_llm_calls - budget.llm_calls)}},
                       ensure_ascii=False)
-    if _supports_vision(model) and observation.screenshot_b64:
+    if _vision_enabled(cfg) and observation.screenshot_b64:
         content = [
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + observation.screenshot_b64}},
             {"type": "text", "text": text},
@@ -147,7 +158,9 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=30, pool=10)) as client:
             resp = await client.post(url, json=payload, headers=_headers(cfg))
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                logger.warning("[agent] llm http %s: %s", resp.status_code, resp.text[:300])
+                return None
             data = resp.json()
         content = ""
         try:
@@ -156,7 +169,7 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
             content = ""
         return _parse_action(_extract_json(content))
     except Exception as exc:
-        logger.warning("[agent] llm decide failed: %s", exc)
+        logger.warning("[agent] llm decide failed: %s: %s", type(exc).__name__, exc or "(no message)")
         return None
 
 
@@ -171,7 +184,9 @@ def decide_sync(observation: Observation, goal: str, history: List[Dict[str, Any
     try:
         with httpx.Client(timeout=httpx.Timeout(connect=10, read=60, write=30, pool=10)) as client:
             resp = client.post(url, json=payload, headers=_headers(cfg))
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                logger.warning("[agent] llm http %s: %s", resp.status_code, resp.text[:300])
+                return None
             data = resp.json()
         content = ""
         try:
@@ -180,5 +195,5 @@ def decide_sync(observation: Observation, goal: str, history: List[Dict[str, Any
             content = ""
         return _parse_action(_extract_json(content))
     except Exception as exc:
-        logger.warning("[agent] llm decide(sync) failed: %s", exc)
+        logger.warning("[agent] llm decide(sync) failed: %s: %s", type(exc).__name__, exc or "(no message)")
         return None

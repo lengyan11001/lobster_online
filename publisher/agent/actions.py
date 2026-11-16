@@ -43,7 +43,11 @@ async def run_browser_action(page: Any, action: Action, *, file_path: str = "") 
             await page.reload(wait_until="domcontentloaded", timeout=30000)
             return StepResult(True, "reloaded")
         if name == "screenshot":
-            await page.screenshot(path=str(target.get("value") or "agent_shot.png"))
+            # 模型常把 target 写成 {by:'text', value:'body'} —— 截图只认文件路径
+            raw = str(target.get("path") or "").strip()
+            if not raw or not raw.lower().endswith((".png", ".jpg", ".jpeg")):
+                raw = "agent_shot.png"
+            await page.screenshot(path=raw)
             return StepResult(True, "screenshot")
         if name == "press":
             await page.keyboard.press(str(target.get("value") or action.text or "Escape"))

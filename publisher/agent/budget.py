@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 DEFAULT_MAX_STEPS = 12
 DEFAULT_TIMEOUT_SECONDS = 90.0
-DEFAULT_MAX_LLM_CALLS = 3
+DEFAULT_MAX_LLM_CALLS = 6
 
 
 def _env(name: str, default: str = "") -> str:
