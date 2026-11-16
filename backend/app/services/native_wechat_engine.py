@@ -11813,6 +11813,29 @@ def _sync_local_sessions_once(
             data["uia_error"] = str(uia_exc)
             return data
         except Exception as wx_exc:
+            # 2026-11-16：硬编码读取都失败时，交给桌面 Agent 把微信拉回聊天页再试一次
+            try:
+                from publisher.agent import recover_desktop
+
+                rec = recover_desktop(
+                    stage="wechat_sessions",
+                    goal="微信主窗口已回到「聊天」页，且左侧会话列表可见",
+                    max_steps=6,
+                    timeout_seconds=45.0,
+                )
+                if rec.ok:
+                    data = _sync_local_sessions_from_uia(
+                        account_id, passive=passive, recent_only=recent_only
+                    )
+                    data["agent_recovered"] = True
+                    return data
+                logger.warning(
+                    "[native-wechat] agent recovery failed: %s", str(rec.error or "")[:200]
+                )
+            except Exception as agent_exc:
+                logger.warning(
+                    "[native-wechat] agent recovery crashed: %s", str(agent_exc)[:200]
+                )
             raise RuntimeError(
                 f"未读取到微信左侧会话；UIA={uia_exc}；wxauto4 fallback={wx_exc}"
             ) from wx_exc

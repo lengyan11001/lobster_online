@@ -3411,6 +3411,25 @@ class DouyinDriver(BaseDriver):
                     attempts.append("chooser=" + str(e)[:60])
 
         if not video_uploaded:
+            # 2026-11-16：硬编码路径失败后，交给 Agent 观察页面并尝试恢复一次
+            try:
+                from publisher.agent import recover as _agent_recover
+
+                _rec = await _agent_recover(
+                    page,
+                    platform="douyin",
+                    stage="upload",
+                    goal="视频已进入上传并开始处理（出现上传进度或视频预览）",
+                    file_path=file_path,
+                )
+                if _rec.ok:
+                    video_uploaded = True
+                    attempts.append("agent=recovered")
+                    logger.info("[DOUYIN-VIDEO] agent recovered upload")
+            except Exception as _exc:
+                logger.warning("[DOUYIN-VIDEO] agent recovery failed: %s", _exc)
+
+        if not video_uploaded:
             # 失败诊断：dump file input 清单 + 截图，写进错误文案，便于下次直接定位
             diag = ""
             try:

@@ -58,3 +58,27 @@ class BaseDriver(abc.ABC):
             "message": "已打开商品创建页面，请手动填写并发布",
             "url": page.url,
         }
+
+
+async def recover_ui(
+    page: Any,
+    *,
+    platform: str,
+    stage: str,
+    goal: str,
+    file_path: str = "",
+) -> Any:
+    """通用 UI 恢复入口：driver 失败分支可调用，失败时返回 None（不改变原错误）。"""
+    try:
+        from publisher.agent import recover as _recover
+
+        return await _recover(
+            page,
+            platform=platform,
+            stage=stage,
+            goal=goal,
+            file_path=file_path,
+        )
+    except Exception:
+        return None
+

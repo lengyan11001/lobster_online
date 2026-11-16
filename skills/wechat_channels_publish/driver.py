@@ -1843,6 +1843,22 @@ class WechatChannelsDriver(BaseDriver):
                 await _delay(1.0, 2.0)
                 attached = await _wait_media_attached(page, media_kind, 40)
             if not attached:
+                # 2026-11-16：两次硬编码上传都失败，交给 Agent 观察页面并尝试恢复一次
+                try:
+                    from publisher.agent import recover as _agent_recover
+
+                    _rec = await _agent_recover(
+                        page,
+                        platform="wechat_channels",
+                        stage="upload",
+                        goal="视频素材已挂载（页面出现删除按钮，不再提示请上传视频）",
+                        file_path=file_path,
+                    )
+                    if _rec.ok and await _wait_media_attached(page, media_kind, 15):
+                        attached = True
+                except Exception as _exc:
+                    logger.warning("[WECHAT-CHANNELS] agent recovery failed: %s", _exc)
+            if not attached:
                 return {
                     "ok": False,
                     "error": "视频号页面仍提示请上传视频：素材没有真正挂上去，请重试（不是文案或账号问题）",
