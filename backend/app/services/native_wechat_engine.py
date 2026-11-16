@@ -11820,8 +11820,8 @@ def _sync_local_sessions_once(
                 rec = recover_desktop(
                     stage="wechat_sessions",
                     goal="微信主窗口已回到「聊天」页，且左侧会话列表可见",
-                    max_steps=6,
-                    timeout_seconds=45.0,
+                    max_steps=4,
+                    timeout_seconds=180.0,
                 )
                 if rec.ok:
                     data = _sync_local_sessions_from_uia(
