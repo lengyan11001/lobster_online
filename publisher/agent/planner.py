@@ -17,7 +17,19 @@ _ALLOWED_ACTIONS = Action.ALLOWED
 
 
 def _model_name() -> str:
-    return (os.environ.get("LOBSTER_AGENT_MODEL") or "gpt-4o").strip()
+    """与服务端在线对话同一个口径：sutui/<lobster_default_sutui_chat_model>，
+    默认 deepseek-chat（不是 gpt-4o）。LOBSTER_AGENT_MODEL 可覆盖，允许带 sutui/ 前缀。"""
+    raw = (os.environ.get("LOBSTER_AGENT_MODEL") or "").strip()
+    if raw.lower().startswith("sutui/"):
+        raw = raw.split("/", 1)[1].strip()
+    if raw:
+        return raw
+    try:
+        from backend.app.core.config import settings  # type: ignore
+
+        return (getattr(settings, "lobster_default_sutui_chat_model", None) or "deepseek-chat").strip() or "deepseek-chat"
+    except Exception:
+        return "deepseek-chat"
 
 
 def _system_prompt() -> str:
@@ -155,6 +167,7 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
         logger.info("[agent] no llm endpoint configured")
         return None
     payload = _build_payload(observation, goal, history, budget, cfg)
+    logger.info("[agent] llm model=%s url=%s", payload.get("model"), url)
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=30, pool=10)) as client:
             resp = await client.post(url, json=payload, headers=_headers(cfg))
