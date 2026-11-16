@@ -2534,7 +2534,22 @@ async def create_publish_task(
         from .assets import ASSETS_DIR
 
         async def _resolve_asset_path(a: Asset):
-            """返回 (path_str, temp_path_to_delete)。优先用公网 source_url；本地素材先懒转存。"""
+            """返回 (path_str, temp_path_to_delete)。
+
+            2026-11-16：发布是在本机浏览器里上传文件，本来只需要本地路径；
+            旧逻辑强制先转公网再下载回来，公网一抖动就直接 400（客户现场 WriteTimeout/ConnectTimeout）。
+            现在本地文件存在就直接用；只有本地文件缺失（云端素材）才走公网下载。
+            """
+            filename = str(getattr(a, "filename", "") or "").strip()
+            if filename and "/" not in filename and "\\" not in filename:
+                local_candidate = Path(ASSETS_DIR) / filename
+                if local_candidate.is_file() and local_candidate.stat().st_size > 0:
+                    logger.info(
+                        "[PUBLISH-API] 使用本地素材文件 filename=%s size=%s",
+                        filename,
+                        local_candidate.stat().st_size,
+                    )
+                    return str(local_candidate), None
             url = await _ensure_publish_asset_public_url(a, current_user.id, request)
             if not url:
                 try:
