@@ -126,6 +126,40 @@ def find_window(keyword: str = "微信") -> Any:
     return None
 
 
+def find_sns_window() -> Any:
+    """朋友圈是独立顶层窗口（class=Qt51514QWindowIcon，title=朋友圈）。"""
+    try:
+        import win32gui
+        from pywinauto import Desktop
+    except Exception:
+        return None
+    picked = []
+    def _cb(hwnd: int, _p) -> bool:
+        try:
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            title = win32gui.GetWindowText(hwnd).strip()
+            cls = win32gui.GetClassName(hwnd)
+            if title != "朋友圈" and "SNS" not in cls:
+                return True
+            l, t, r, b = win32gui.GetWindowRect(hwnd)
+            area = max(0, r - l) * max(0, b - t)
+            if area < 200 * 200:
+                return True
+            picked.append((area, hwnd))
+        except Exception:
+            pass
+        return True
+    try:
+        win32gui.EnumWindows(_cb, None)
+        if picked:
+            picked.sort(reverse=True)
+            return Desktop(backend="uia").window(handle=picked[0][1])
+    except Exception as exc:
+        logger.debug("[agent] find_sns_window failed: %s", exc)
+    return None
+
+
 def activate_window(window: Any) -> bool:
     """把窗口弄到前台：最小化 / 收到托盘 / 被别的窗口盖住时，点击和输入都不会真正生效。
     只靠 pywinauto.set_focus() 在微信这种 Qt 无边框窗口上不可靠，先走一遍 win32。"""
@@ -304,6 +338,10 @@ def _find_control(window: Any, name: str, *, region: str = "", exact_first: bool
         return None
     rect = _rect(window) or (0, 0, 0, 0)
     left, width = rect[0], rect[2] - rect[0]
+    # 控件类型优先级：可点/可输入的优先，避免命中同名 Text（微信里 "新的朋友" 既是 ListItem 又是 Text）
+    type_rank = {"Button": 0, "ListItem": 1, "Edit": 2, "TreeItem": 3, "MenuItem": 4, "Text": 9}
+    best = None
+    best_rank = 99
     loose = None
     for c, info in _iter_controls(window):
         try:
@@ -316,13 +354,19 @@ def _find_control(window: Any, name: str, *, region: str = "", exact_first: bool
                 rc = c.rectangle()
                 if _region(int(rc.left), left, width) != region:
                     continue
+            ctype = str(info.control_type or "")
+            rank = type_rank.get(ctype, 5)
             if exact_first and text == want:
-                return c
+                if rank < best_rank:
+                    best, best_rank = c, rank
+                    if rank == 0:
+                        return c
+                continue
             if loose is None and want in text:
                 loose = c
         except Exception:
             continue
-    return loose
+    return best if best is not None else loose
 
 
 def _session_rows(window: Any) -> List[Any]:
@@ -347,6 +391,47 @@ def _session_rows(window: Any) -> List[Any]:
 def verify_desktop_stage(window: Any, stage: str, *, expect_text: str = "", guard_name: str = "") -> bool:
     """阶段的硬条件，不能只看“某个动作执行成功”。"""
     stage = str(stage or "").lower()
+    if stage == "wechat_moments":
+        if not _window_visible(window):
+            return False
+        rect = _rect(window) or (0, 0, 0, 0)
+        rows = 0
+        for c, info in _iter_controls(window, limit=600):
+            try:
+                if str(info.control_type or "") == "ListItem" and _visible(c) and (c.rectangle().right - c.rectangle().left) > 200:
+                    rows += 1
+            except Exception:
+                continue
+        return rows >= 2
+    if stage == "wechat_moments_like":
+        if not _window_visible(window):
+            return False
+        return _find_control(window, "取消赞", region="") is not None
+    if stage == "wechat_moments_publish":
+        if not _window_visible(window):
+            return False
+        for text in ("这一刻的想法", "发表", "谁可以看"):
+            if _find_control(window, text) is not None:
+                return True
+        return False
+    if stage == "wechat_friend_requests":
+        if not _window_visible(window):
+            return False
+        rows = list_friend_requests(window)
+        if not rows:
+            return False
+        # 申请页的特征：行里有「已添加 / 验证语」，或带「接受」按钮
+        for item in rows:
+            if item["status"] == "accepted" or "验证" in item["raw"] or "请求" in item["raw"]:
+                return True
+        for c, info in _iter_controls(window, limit=600):
+            try:
+                nm = str(info.name or "")
+                if _visible(c) and ("接受" in nm or "通过验证" in nm):
+                    return True
+            except Exception:
+                continue
+        return False
     if stage == "wechat_send":
         if not _window_visible(window):
             return False
@@ -393,6 +478,37 @@ def verify_desktop_stage(window: Any, stage: str, *, expect_text: str = "", guar
                 continue
         return False
     return True
+
+
+def list_friend_requests(window: Any) -> List[Dict[str, str]]:
+    """只读枚举「新的朋友」页里的申请记录：已通过/待处理分开。
+
+    微信把申请记录做成 ListItem，文本形如「昵称 验证语 已添加」；
+    没有「已添加」的就是还没处理的（可能带「接受」按钮）。
+    """
+    out: List[Dict[str, str]] = []
+    for c, info in _iter_controls(window):
+        try:
+            if str(info.control_type or "") != "ListItem":
+                continue
+            if not _visible(c):
+                continue
+            name = str(info.name or "").strip()
+            if not name or len(name) < 2:
+                continue
+            raw = " ".join(name.split())
+            if raw in {"新的朋友", "群聊", "标签", "公众号", "服务号", "企业微信联系人", "我的企业"}:
+                continue
+            status = "accepted" if "已添加" in raw else "pending"
+            head = raw
+            for marker in ("已添加", "已过期", "等待验证"):
+                if marker in head:
+                    head = head.split(marker)[0]
+                    break
+            out.append({"name": head.strip()[:40], "status": status, "raw": raw[:120]})
+        except Exception:
+            continue
+    return out
 
 
 def verify_desktop(window: Any, expect: Optional[Dict[str, Any]]) -> bool:
