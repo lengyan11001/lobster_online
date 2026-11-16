@@ -16,14 +16,29 @@ logger = logging.getLogger(__name__)
 _ALLOWED_ACTIONS = Action.ALLOWED
 
 
-def _model_name() -> str:
-    """与服务端在线对话同一个口径：sutui/<lobster_default_sutui_chat_model>，
-    默认 deepseek-chat（不是 gpt-4o）。LOBSTER_AGENT_MODEL 可覆盖，允许带 sutui/ 前缀。"""
-    raw = (os.environ.get("LOBSTER_AGENT_MODEL") or "").strip()
-    if raw.lower().startswith("sutui/"):
-        raw = raw.split("/", 1)[1].strip()
-    if raw:
-        return raw
+# mastra 对话（mastra_server/src/mastra/index.ts:52/1324）就是这么调的：
+#   createOpenAI({baseURL: <backend>/api/sutui-chat, apiKey: <user token>}).chat(LOBSTER_MASTRA_MODEL)
+#   默认模型 openai/gpt-5.6-sol → 服务端 _get_direct_route 命中 YYAPI 直连档（多模态，能读图）。
+# 文本档仍用服务端默认 deepseek-chat（便宜、够用）。
+VISION_MODEL_DEFAULT = "openai/gpt-5.6-sol"
+
+
+def _strip_sutui(raw: str) -> str:
+    raw = (raw or "").strip()
+    return raw.split("/", 1)[1].strip() if raw.lower().startswith("sutui/") else raw
+
+
+def _vision_allowed() -> bool:
+    return str(os.environ.get("LOBSTER_AGENT_VISION") or "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _model_name(vision: bool = False) -> str:
+    """LOBSTER_AGENT_MODEL 覆盖一切；否则视觉档用 mastra 的 gpt-5.6-sol，文本档用服务端默认。"""
+    override = _strip_sutui(os.environ.get("LOBSTER_AGENT_MODEL") or "")
+    if override:
+        return override
+    if vision:
+        return _strip_sutui(os.environ.get("LOBSTER_AGENT_VISION_MODEL") or VISION_MODEL_DEFAULT)
     try:
         from backend.app.core.config import settings  # type: ignore
 
@@ -115,40 +130,49 @@ def _chat_endpoint(cfg: Dict[str, Any]) -> str:
         return ""
 
 
-def _headers(cfg: Dict[str, Any]) -> Dict[str, str]:
+def _headers(cfg: Dict[str, Any], *, vision: bool = False) -> Dict[str, str]:
+    out = {"Content-Type": "application/json"}
     key = str(cfg.get("api_key") or "").strip()
     if key:
-        return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    try:
-        from backend.app.services.creator_metrics_daily_runner import read_login_context  # type: ignore
-        token, _ = read_login_context()
-        if token:
-            return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    except Exception:
-        pass
-    return {"Content-Type": "application/json"}
+        out["Authorization"] = f"Bearer {key}"
+    else:
+        try:
+            from backend.app.services.creator_metrics_daily_runner import read_login_context  # type: ignore
+            token, _ = read_login_context()
+            if token:
+                out["Authorization"] = f"Bearer {token}"
+        except Exception:
+            pass
+    if vision:
+        # 服务端只认这个头才把请求锁到 provider 自有的多模态档（gpt-5.6-sol），
+        # 否则会被用户级模型偏好替换掉，图片直接 4xx/超时。
+        out["X-Lobster-Image-Understand"] = "1"
+    return out
 
 
-def _vision_enabled(cfg: Dict[str, Any]) -> bool:
-    """Vision is opt-in: the sutui proxy drops image payloads (ReadTimeout), so only
-    send images when a direct provider key exists and LOBSTER_AGENT_VISION=1."""
-    if str(os.environ.get("LOBSTER_AGENT_VISION") or "0").strip().lower() not in {"1", "true", "yes", "on"}:
+def _want_vision(observation: Observation, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> bool:
+    """先便宜后视觉：DOM 观察够清楚（节点多）就text-only；页面是画布/iframe/已经被打回一次，
+    才升级到 gpt-5.6-sol 读图。视觉按次计费（最低 10 算力），所以必须限量。"""
+    if not _vision_allowed() or not observation.screenshot_b64:
         return False
-    if not str(cfg.get("api_key") or "").strip():
+    if str(cfg.get("api_key") or "").strip():
+        return False  # 直连 provider 档没有 sutui 的图片路由，别把图塞过去
+    if not budget.take_vision():
         return False
-    name = str(cfg.get("model_name") or _model_name()).lower()
-    return any(k in name for k in ("gpt-4", "gpt-5", "vision", "qwen-vl", "gemini", "claude"))
+    if any(not h.get("ok") for h in history):
+        return True
+    return len(observation.nodes) <= 10
 
 
-def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    model = str(cfg.get("model_name") or _model_name())
+def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any], *, vision: bool = False) -> Dict[str, Any]:
+    model = str(cfg.get("model_name") or _model_name(vision))
     obs = observation.to_llm_dict(include_image=False)
     text = json.dumps({"goal": goal, "observation": obs, "history": history[-6:],
                        "budget": {"steps_left": max(0, budget.max_steps - budget.steps),
                                   "llm_calls_left": max(0, budget.max_llm_calls - budget.llm_calls)}},
                       ensure_ascii=False)
-    if _vision_enabled(cfg) and observation.screenshot_b64:
-        content = [
+    if vision and observation.screenshot_b64:
+        content: Any = [
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + observation.screenshot_b64}},
             {"type": "text", "text": text},
         ]
@@ -158,6 +182,20 @@ def _build_payload(observation: Observation, goal: str, history: List[Dict[str, 
             "messages": [{"role": "system", "content": _system_prompt()},
                          {"role": "user", "content": content}]}
 
+
+async def _post_chat(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Tuple[Optional[Dict[str, Any]], int]:
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=90, write=30, pool=10)) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.warning("[agent] llm http %s: %s", resp.status_code, resp.text[:300])
+                return None, resp.status_code
+            return resp.json(), resp.status_code
+    except Exception as exc:
+        logger.warning("[agent] llm decide failed: %s: %s", type(exc).__name__, exc or "(no message)")
+        return None, 0
+
+
 async def decide_async(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any) -> Optional[Action]:
     if not budget.take_llm():
         return None
@@ -166,24 +204,27 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
     if not url:
         logger.info("[agent] no llm endpoint configured")
         return None
-    payload = _build_payload(observation, goal, history, budget, cfg)
-    logger.info("[agent] llm model=%s url=%s", payload.get("model"), url)
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=60, write=30, pool=10)) as client:
-            resp = await client.post(url, json=payload, headers=_headers(cfg))
-            if resp.status_code >= 400:
-                logger.warning("[agent] llm http %s: %s", resp.status_code, resp.text[:300])
-                return None
-            data = resp.json()
-        content = ""
-        try:
-            content = data["choices"][0]["message"]["content"] or ""
-        except Exception:
-            content = ""
-        return _parse_action(_extract_json(content))
-    except Exception as exc:
-        logger.warning("[agent] llm decide failed: %s: %s", type(exc).__name__, exc or "(no message)")
+    vision = _want_vision(observation, history, budget, cfg)
+    payload = _build_payload(observation, goal, history, budget, cfg, vision=vision)
+    logger.info("[agent] llm model=%s vision=%s url=%s", payload.get("model"), vision, url)
+    data, status = await _post_chat(url, payload, _headers(cfg, vision=vision))
+    if status == 402:
+        # 余额不足跟模型档无关，重试纯属浪费：直接收手，日志里能看见真实原因
+        logger.warning("[agent] insufficient credit for LLM call (402) -> stop recovery")
         return None
+    if data is None and vision:
+        # 视觉档挂了（路由/超时/4xx）不能让整次恢复失败：退 text-only 再问一次
+        logger.warning("[agent] vision lane failed -> fallback text-only")
+        payload = _build_payload(observation, goal, history, budget, cfg, vision=False)
+        data, _ = await _post_chat(url, payload, _headers(cfg))
+    if data is None:
+        return None
+    content = ""
+    try:
+        content = data["choices"][0]["message"]["content"] or ""
+    except Exception:
+        content = ""
+    return _parse_action(_extract_json(content))
 
 
 def decide_sync(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any) -> Optional[Action]:

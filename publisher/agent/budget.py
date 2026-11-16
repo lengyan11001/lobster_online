@@ -8,6 +8,8 @@ from dataclasses import dataclass
 DEFAULT_MAX_STEPS = 12
 DEFAULT_TIMEOUT_SECONDS = 90.0
 DEFAULT_MAX_LLM_CALLS = 6
+# 视觉一次最低 10 算力（YYAPI gpt-5.6-sol 直连档），默认最多用 2 次
+DEFAULT_MAX_VISION_CALLS = 2
 
 
 def _env(name: str, default: str = "") -> str:
@@ -30,8 +32,10 @@ class Budget:
     max_steps: int = DEFAULT_MAX_STEPS
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_llm_calls: int = DEFAULT_MAX_LLM_CALLS
+    max_vision_calls: int = DEFAULT_MAX_VISION_CALLS
     steps: int = 0
     llm_calls: int = 0
+    vision_calls: int = 0
     started_at: float = 0.0
 
     def __post_init__(self) -> None:
@@ -52,6 +56,15 @@ class Budget:
         if self.elapsed() > self.timeout_seconds:
             return False
         self.llm_calls += 1
+        return True
+
+    def take_vision(self) -> bool:
+        """视觉额度：跟 mastra 一样走 YYAPI gpt-5.6-sol 直连档，按次计费，必须限量。"""
+        if self.vision_calls >= self.max_vision_calls:
+            return False
+        if self.elapsed() > self.timeout_seconds:
+            return False
+        self.vision_calls += 1
         return True
 
     def elapsed(self) -> float:
