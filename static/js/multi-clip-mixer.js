@@ -194,7 +194,8 @@
   }
 
   function hasOriginalSource() {
-    return !!markedAudioClip() || !!speechAudioAssetId();
+    if (markedAudioClip()) return true;
+    return currentVoiceMode() === 'speech' && !!speechAudioAssetId();
   }
 
   function hasSelectableBgm() {
@@ -2821,17 +2822,18 @@
     }
     var useTemplate = !!(($('mcmTemplateSwitch') || {}).checked);
     var useMusic = !!(($('mcmMusicSwitch') || {}).checked);
-    if (useTemplate && currentTemplateProvider() === 'shanjian') {
-      var audioMode = currentFinalAudioMode();
-      if (isShanjianRealmanScene() && !audioMode) {
-        return showMessage('真人模板需要真人讲话：请先在素材卡片点「用原声」，或开启背景音乐并选择一首。', true);
-      }
-      if (audioMode === 'original' && !markedAudioClip()) {
-        return showMessage('原声需要先在素材卡片点「用原声」标记一个原声源。', true);
-      }
-      if (audioMode === 'bgm' && !hasSelectableBgm()) {
-        return showMessage('背景音乐需要先开启音乐并选择一首。', true);
-      }
+    var voiceMode = currentVoiceMode();
+    if (voiceMode === 'speech' && !(state.speechAudio && state.speechAudio.assetId)) {
+      return showMessage('已选择口播文案，但还没有生成口播音轨，请先点「生成口播音轨」。', true);
+    }
+    if (voiceMode === 'original' && !markedAudioClip()) {
+      return showMessage('素材原声需要先在素材卡片点「用原声」标记一个原声源。', true);
+    }
+    if (voiceMode === 'bgm' && !hasSelectableBgm()) {
+      return showMessage('背景音乐需要先开启「添加同城爆款音乐」并选择一首。', true);
+    }
+    if (voiceMode === 'template' && !useTemplate) {
+      return showMessage('模板自带声音需要先开启「套用定制模板」。', true);
     }
     Promise.resolve().then(function() {
       // 计费预检查：每出一个最终成片 100 积分
