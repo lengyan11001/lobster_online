@@ -16,27 +16,17 @@ logger = logging.getLogger(__name__)
 _ALLOWED_ACTIONS = Action.ALLOWED
 
 
-# 服务端模型编排是 server-owned（backend/app/api/sutui_chat_proxy.py:1296
-# _sutui_chat_model_candidates）：deepseek-flash 是文本+图片的主档（官方 deepseek-flash
-# 接口支持 image_url），后面依次 change2pro / YYAPI 的 gpt-5.6-sol 兜底。
-# 所以这边只发一个 model id，兜底交给服务端候选链，不自己做“换模型”。
-PRIMARY_MODEL_DEFAULT = "deepseek-flash"
-
-
-def _strip_sutui(raw: str) -> str:
-    raw = (raw or "").strip()
-    return raw.split("/", 1)[1].strip() if raw.lower().startswith("sutui/") else raw
-
-
-def _vision_allowed() -> bool:
-    return str(os.environ.get("LOBSTER_AGENT_VISION") or "1").strip().lower() in {"1", "true", "yes", "on"}
+# 模型编排全在服务端（sutui_chat_proxy.py:1296 _sutui_chat_model_candidates）：
+# deepseek-flash 直连主档 → change2pro / YYAPI 的 gpt-5.6-sol 兜底，带不带图由服务端判定。
+# 客户端只管发请求，不选模型、不换档、不做兜底。
+DEFAULT_MODEL = "deepseek-flash"
 
 
 def _model_name() -> str:
-    override = _strip_sutui(os.environ.get("LOBSTER_AGENT_MODEL") or "")
-    if override:
-        return override
-    return _strip_sutui(os.environ.get("LOBSTER_AGENT_PRIMARY_MODEL") or PRIMARY_MODEL_DEFAULT)
+    raw = (os.environ.get("LOBSTER_AGENT_MODEL") or "").strip()
+    if raw.lower().startswith("sutui/"):
+        raw = raw.split("/", 1)[1].strip()
+    return raw or DEFAULT_MODEL
 
 
 def _system_prompt() -> str:
@@ -138,43 +128,27 @@ def _headers(cfg: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _want_vision(observation: Observation, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> bool:
-    """先便宜后视觉：DOM 观察够清楚（节点多）就不带图；页面是画布/iframe/已经被打回一次，
-    才把截图一起发给 deepseek-flash（同一个 model，服务端候选链自己兜底到 gpt-5.6-sol）。
-    带图一次最低 10 算力，所以按次限量。"""
-    if not _vision_allowed() or not observation.screenshot_b64:
-        return False
-    if str(cfg.get("api_key") or "").strip():
-        return False  # 直连 provider 档没有 sutui 的图片路由，别把图塞过去
-    if not budget.take_vision():
-        return False
-    if any(not h.get("ok") for h in history):
-        return True
-    return len(observation.nodes) <= 10
-
-
-def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any], *, vision: bool = False) -> Dict[str, Any]:
-    model = str(cfg.get("model_name") or _model_name())
+def _build_payload(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any, cfg: Dict[str, Any]) -> Dict[str, Any]:
     obs = observation.to_llm_dict(include_image=False)
     text = json.dumps({"goal": goal, "observation": obs, "history": history[-6:],
                        "budget": {"steps_left": max(0, budget.max_steps - budget.steps),
                                   "llm_calls_left": max(0, budget.max_llm_calls - budget.llm_calls)}},
                       ensure_ascii=False)
-    if vision and observation.screenshot_b64:
+    if observation.screenshot_b64:
         content: Any = [
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + observation.screenshot_b64}},
             {"type": "text", "text": text},
         ]
     else:
         content = text
-    return {"model": model, "temperature": 0.1, "max_tokens": 400,
+    return {"model": str(cfg.get("model_name") or _model_name()), "temperature": 0.1, "max_tokens": 400,
             "messages": [{"role": "system", "content": _system_prompt()},
                          {"role": "user", "content": content}]}
 
 
 async def _post_chat(url: str, payload: Dict[str, Any], headers: Dict[str, str]) -> Tuple[Optional[Dict[str, Any]], int]:
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=90, write=30, pool=10)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=240, write=30, pool=10)) as client:
             resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code >= 400:
                 logger.warning("[agent] llm http %s: %s", resp.status_code, resp.text[:300])
@@ -193,27 +167,25 @@ async def decide_async(observation: Observation, goal: str, history: List[Dict[s
     if not url:
         logger.info("[agent] no llm endpoint configured")
         return None
-    vision = _want_vision(observation, history, budget, cfg)
-    payload = _build_payload(observation, goal, history, budget, cfg, vision=vision)
-    logger.info("[agent] llm model=%s vision=%s url=%s", payload.get("model"), vision, url)
+    payload = _build_payload(observation, goal, history, budget, cfg)
+    logger.info("[agent] llm model=%s image=%s url=%s", payload.get("model"),
+                isinstance(payload["messages"][1]["content"], list), url)
     data, status = await _post_chat(url, payload, _headers(cfg))
     if status == 402:
-        # 余额不足跟模型档无关，重试纯属浪费：直接收手，日志里能看见真实原因
         logger.warning("[agent] insufficient credit for LLM call (402) -> stop recovery")
         return None
-    if data is None and vision:
-        # 视觉档挂了（路由/超时/4xx）不能让整次恢复失败：退 text-only 再问一次
-        logger.warning("[agent] vision lane failed -> fallback text-only")
-        payload = _build_payload(observation, goal, history, budget, cfg, vision=False)
-        data, _ = await _post_chat(url, payload, _headers(cfg))
     if data is None:
         return None
+    logger.info("[agent] llm served by model=%s", data.get("model") or "-")
     content = ""
     try:
         content = data["choices"][0]["message"]["content"] or ""
     except Exception:
         content = ""
-    return _parse_action(_extract_json(content))
+    action = _parse_action(_extract_json(content))
+    if action is None:
+        logger.warning("[agent] unparsable llm reply: %s", (content or "")[:300])
+    return action
 
 
 def decide_sync(observation: Observation, goal: str, history: List[Dict[str, Any]], budget: Any) -> Optional[Action]:

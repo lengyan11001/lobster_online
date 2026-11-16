@@ -30,7 +30,7 @@ async def recover(
     file_path: str = "",
     mode: Optional[str] = None,
     max_steps: int = 12,
-    timeout_seconds: float = 90.0,
+    timeout_seconds: float = 240.0,
     trace: Optional[TraceWriter] = None,
 ) -> RecoverResult:
     mode = (mode or agent_mode("browser")).lower()
@@ -94,8 +94,10 @@ async def recover(
             history.append({"action": action.action, "target": action.target, "ok": step.ok,
                             "verified": verified, "error": step.error})
             writer.event("step", action=action.action, ok=step.ok, verified=verified, error=step.error)
-            executed.append({"action": action.action, "target": action.target,
-                             "text": action.text, "expect": action.expect})
+            if verified:
+                # 记忆只收“真的生效并且验过”的步骤，免得把 wait_for 死等写进路线
+                executed.append({"action": action.action, "target": action.target,
+                                 "text": action.text, "expect": action.expect})
             if verified and await verify_stage(page, platform, stage):
                 result.ok = True
                 result.recovered = True
