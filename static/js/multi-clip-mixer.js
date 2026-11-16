@@ -188,6 +188,15 @@
     return state.clips.find(function(clip) { return !!clip.audioMaster; }) || null;
   }
 
+  function speechAudioAssetId() {
+    var speech = state.speechAudio;
+    return currentVoiceMode() === 'speech' && speech && speech.assetId ? String(speech.assetId) : '';
+  }
+
+  function hasOriginalSource() {
+    return !!markedAudioClip() || !!speechAudioAssetId();
+  }
+
   function hasSelectableBgm() {
     if (!$('mcmMusicSwitch') || !$('mcmMusicSwitch').checked) return false;
     if (isRandomLikeMode() && $('mcmRandomMusicSwitch') && $('mcmRandomMusicSwitch').checked) {
@@ -201,7 +210,7 @@
   }
 
   function finalAudioFallback() {
-    if (markedAudioClip()) return 'original';
+    if (hasOriginalSource()) return 'original';
     if (hasSelectableBgm()) return 'bgm';
     if (!isShanjianRealmanScene()) return 'template';
     return '';
@@ -211,7 +220,7 @@
     var checked = document.querySelector('input[name="mcmFinalAudioMode"]:checked');
     var mode = checked ? String(checked.value || '') : 'template';
     if (mode !== 'original' && mode !== 'bgm' && mode !== 'template') mode = 'template';
-    if (mode === 'original' && !markedAudioClip()) mode = '';
+    if (mode === 'original' && !hasOriginalSource()) mode = '';
     if (mode === 'bgm' && !hasSelectableBgm()) mode = '';
     if (mode === 'template' && isShanjianRealmanScene()) mode = '';
     if (!mode) return finalAudioFallback();
@@ -226,7 +235,7 @@
     var bgm = document.querySelector('input[name="mcmFinalAudioMode"][value="bgm"]');
     var template = document.querySelector('input[name="mcmFinalAudioMode"][value="template"]');
     if (!original || !bgm || !template) return;
-    var hasOriginal = !!markedAudioClip();
+    var hasOriginal = hasOriginalSource();
     var hasBgm = hasSelectableBgm();
     var realman = isShanjianRealmanScene();
     original.disabled = !hasOriginal;
@@ -257,6 +266,8 @@
         hint.textContent = '原声需先在素材卡片点「用原声」。';
       } else if (!hasBgm) {
         hint.textContent = '背景音乐需先开启音乐并选一首。';
+      } else if (currentVoiceMode() === 'speech') {
+        hint.textContent = '口播模式下：选「保留当前声音」会用你生成的口播音轨；选「用模板自带声音」会丢掉口播。';
       } else {
         hint.textContent = '原声/背景音乐会在数字人2.0生成后替换模板音轨；模板声音则静音送入模板。';
       }
@@ -3168,6 +3179,9 @@
         voice: body.voice
       };
       if (status) status.textContent = '口播音轨已生成' + (state.speechAudio.duration ? ('（约 ' + formatSeconds(state.speechAudio.duration) + '）') : '');
+      var keepRadio = document.querySelector('input[name="mcmFinalAudioMode"][value="original"]');
+      if (keepRadio) keepRadio.checked = true;
+      syncFinalAudioOptions();
     }).catch(function(err) {
       if (status) status.textContent = '生成失败：' + (err.message || err);
       showMessage('口播生成失败：' + (err.message || err), true);
@@ -3209,7 +3223,14 @@
       state.voiceMode = currentVoiceMode();
       var panel = $('mcmSpeechPanel');
       if (panel) panel.hidden = state.voiceMode !== 'speech';
-      if (state.voiceMode === 'speech') loadSpeechVoices();
+      if (state.voiceMode === 'speech') {
+        loadSpeechVoices();
+        if (state.speechAudio && state.speechAudio.assetId) {
+          var keepRadio = document.querySelector('input[name="mcmFinalAudioMode"][value="original"]');
+          if (keepRadio) keepRadio.checked = true;
+        }
+      }
+      syncFinalAudioOptions();
     }
     Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmVoiceMode"]'), function(radio) {
       radio.addEventListener('change', _syncVoiceMode);
