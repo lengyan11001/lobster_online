@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import os
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -174,6 +175,17 @@ def _window_visible(window: Any) -> bool:
         return True
 
 
+def _chat_left(window: Any, left: int, width: int) -> int:
+    """会话列右边界：优先用 session_list 控件的真实 rect，取不到再按比例估。"""
+    for c, info in _iter_controls(window, limit=600):
+        try:
+            if str(getattr(info, "automation_id", "") or "") == "session_list":
+                return int(c.rectangle().right)
+        except Exception:
+            continue
+    return int(left + width * 0.28)
+
+
 def _region(x: int, left: int, width: int) -> str:
     if width <= 0:
         return "other"
@@ -196,6 +208,7 @@ def observe_desktop_window(window: Any, *, stage: str) -> Observation:
         pass
     rect = _rect(window) or (0, 0, 0, 0)
     left, width = rect[0], rect[2] - rect[0]
+    chat_left = _chat_left(window, left, width)
     seen = set()
     try:
         controls = window.descendants()
@@ -221,7 +234,7 @@ def observe_desktop_window(window: Any, *, stage: str) -> Observation:
                 continue
             seen.add(key)
             nodes.append({
-                "region": _region(int(rc.left), left, width),
+                "region": ("chat" if int(rc.left) >= chat_left else _region(int(rc.left), left, width)),
                 "role": str(info.control_type or ""),
                 "text": name[:80],
                 "x": int(rc.left), "y": int(rc.top), "w": w, "h": h,
@@ -331,9 +344,21 @@ def _session_rows(window: Any) -> List[Any]:
     return rows
 
 
-def verify_desktop_stage(window: Any, stage: str) -> bool:
+def verify_desktop_stage(window: Any, stage: str, *, expect_text: str = "", guard_name: str = "") -> bool:
     """阶段的硬条件，不能只看“某个动作执行成功”。"""
     stage = str(stage or "").lower()
+    if stage == "wechat_send":
+        if not _window_visible(window):
+            return False
+        if expect_text:
+            for c, info in _iter_controls(window):
+                try:
+                    if expect_text in str(info.name or "") and _visible(c):
+                        return _guard_ok(window, guard_name)
+                except Exception:
+                    continue
+            return False
+        return _guard_ok(window, guard_name)
     if stage == "wechat_sessions":
         if not _window_visible(window):
             return False
@@ -395,12 +420,65 @@ def verify_desktop(window: Any, expect: Optional[Dict[str, Any]]) -> bool:
 
 # 接管场景的硬边界：只允许“把界面摆回聊天页”，不允许打字/回车。
 # 微信里往输入框打字再回车，等于以本人身份给客户发消息。
+def _send_allowlist() -> List[str]:
+    raw = os.environ.get("LOBSTER_WX_SEND_ALLOWLIST") or ""
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _chat_input(window: Any) -> Any:
+    """聊天输入框：优先用真机确认的 automation_id=chat_input_field。"""
+    ctl = _find_control(window, "aid:chat_input_field")
+    if ctl is not None:
+        return ctl
+    rect = _rect(window) or (0, 0, 0, 0)
+    left, width = rect[0], rect[2] - rect[0]
+    for c, info in _iter_controls(window):
+        try:
+            if str(info.control_type or "") != "Edit":
+                continue
+            rc = c.rectangle()
+            if _region(int(rc.left), left, width) == "chat" and (rc.right - rc.left) > 300 and _visible(c):
+                return c
+        except Exception:
+            continue
+    return None
+
+
+def _current_chat_name(window: Any) -> str:
+    ctl = _chat_input(window)
+    if ctl is None:
+        return ""
+    try:
+        return str(ctl.element_info.name or "").strip()
+    except Exception:
+        return ""
+
+
+def _guard_ok(window: Any, guard_name: str) -> bool:
+    guard = str(guard_name or "").strip()
+    if not guard:
+        guard = (_send_allowlist() or [""])[0]
+    allowed = _send_allowlist()
+    current = _current_chat_name(window)
+    if not current:
+        return False
+    if guard and current != guard and not current.startswith(guard):
+        logger.warning("[agent] send guard: 当前会话=%s 目标=%s", current, guard)
+        return False
+    if allowed and not any(current == a or current.startswith(a) for a in allowed):
+        logger.warning("[agent] send guard: 当前会话=%s 不在白名单 %s", current, allowed)
+        return False
+    return True
+
+
 _STAGE_ALLOWED_ACTIONS = {
     "wechat_sessions": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "abort"},
+    # 只有这个阶段允许打字，且只在白名单会话里
+    "wechat_send": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "type", "send", "abort"},
 }
 
 
-def run_desktop_action(window: Any, action: Action, *, stage: str = "") -> Any:
+def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_name: str = "") -> Any:
     from .models import StepResult
     name = action.action
     target = action.target or {}
@@ -409,8 +487,11 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "") -> Any:
         return StepResult(False, f"action '{name}' blocked in stage '{stage}'")
     if name == "press":
         key = str(target.get("value") or action.text or "").strip().upper()
-        if key not in {"{ESC}", "ESC", "ESCAPE"}:
-            return StepResult(False, "press blocked (only ESC)")
+        ok_keys = {"{ESC}", "ESC", "ESCAPE"}
+        if str(stage or "").lower() == "wechat_send":
+            ok_keys |= {"{ENTER}", "ENTER", "{~}", "RETURN"}
+        if key not in ok_keys:
+            return StepResult(False, f"press blocked ({key})")
     activate_window(window)
     try:
         if name == "abort":
@@ -428,6 +509,25 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "") -> Any:
             x, y = int(target.get("x") or 0), int(target.get("y") or 0)
             mouse.scroll(coords=(x, y), wheel_dist=int(target.get("value") or -3))
             return StepResult(True, "scrolled")
+        if name == "send":
+            # 一条动作做完“清空草稿 → 写入 → 回车发送”，只在白名单会话、只在 wechat_send 阶段
+            if str(stage or "").lower() != "wechat_send":
+                return StepResult(False, "send blocked outside wechat_send")
+            if not _guard_ok(window, guard_name):
+                return StepResult(False, "send_guard_blocked")
+            text = str(action.text or target.get("text") or "")
+            if not text:
+                return StepResult(False, "empty_text")
+            control = _chat_input(window)
+            if control is None:
+                return StepResult(False, "chat_input_not_found")
+            control.click_input()
+            from pywinauto import keyboard
+            keyboard.send_keys("^a")
+            keyboard.send_keys("{DELETE}")
+            keyboard.send_keys(text, with_spaces=True)
+            keyboard.send_keys("{ENTER}")
+            return StepResult(True, "sent")
         if str(target.get("by") or "").lower() == "point":
             from pywinauto import mouse
             mouse.click(coords=(int(target.get("x") or 0), int(target.get("y") or 0)))
@@ -444,9 +544,21 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "") -> Any:
             control.click_input()
             return StepResult(True, "clicked")
         if name == "type":
+            text = str(action.text or target.get("text") or "")
+            if not text:
+                return StepResult(False, "empty_text")
+            if str(stage or "").lower() == "wechat_send":
+                # 只往“当前会话的输入框”里写字，且当前会话必须在白名单里
+                if not _guard_ok(window, guard_name):
+                    return StepResult(False, "send_guard_blocked")
+                control = _chat_input(window)
+                if control is None:
+                    return StepResult(False, "chat_input_not_found")
+            if control is None:
+                return StepResult(False, "target_not_found")
             control.click_input()
             from pywinauto import keyboard
-            keyboard.send_keys(str(action.text or target.get("text") or ""), with_spaces=True)
+            keyboard.send_keys(text, with_spaces=True)
             return StepResult(True, "typed")
         return StepResult(False, "unsupported_action")
     except Exception as exc:
@@ -461,6 +573,8 @@ def recover_desktop(
     max_steps: int = 8,
     timeout_seconds: float = 60.0,
     mode: Optional[str] = None,
+    guard_name: str = "",
+    expect_text: str = "",
 ) -> RecoverResult:
     from . import memory
     mode = (mode or agent_mode("desktop")).lower()
@@ -485,7 +599,7 @@ def recover_desktop(
             writer.finish(False, 0, "observe_only")
             return result
         # 快速通道：阶段本来就正常就别调 LLM（每次决策最低 10 算力）
-        if verify_desktop_stage(win, stage):
+        if verify_desktop_stage(win, stage, expect_text=expect_text, guard_name=guard_name):
             result.ok = True
             result.recovered = False
             result.steps = 0
@@ -503,7 +617,7 @@ def recover_desktop(
             if action.action == "abort":
                 result.error = "agent_abort"
                 break
-            step = run_desktop_action(win, action, stage=stage)
+            step = run_desktop_action(win, action, stage=stage, guard_name=guard_name)
             verified = bool(step.ok) and verify_desktop(win, action.expect)
             history.append({"action": action.action, "target": action.target, "ok": step.ok,
                             "verified": verified, "error": step.error})
@@ -512,7 +626,7 @@ def recover_desktop(
                 executed.append({"action": action.action, "target": action.target,
                                  "text": action.text, "expect": action.expect})
             # 只有阶段硬条件满足才算恢复成功
-            if verify_desktop_stage(win, stage):
+            if verify_desktop_stage(win, stage, expect_text=expect_text, guard_name=guard_name):
                 result.ok = True
                 result.recovered = True
                 if executed:

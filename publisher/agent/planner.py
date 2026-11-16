@@ -33,7 +33,9 @@ def _system_prompt() -> str:
     return (
         "You are a browser/desktop automation assistant. Reply with ONE JSON object only, no prose.\n"
         "Schema: {\"thought\":str,\"action\":str,\"target\":object,\"text\":str,\"expect\":object,\"confidence\":float}\n"
-        "Allowed actions: click,type,set_files,press,wait_for,scroll,close_overlay,reload,screenshot,goto,abort.\n"
+        "Allowed actions: click,type,set_files,press,wait_for,scroll,close_overlay,reload,screenshot,goto,send,abort.\n"
+        "send (desktop WeChat only): {action:'send', text:'消息内容'} — writes into the current chat input "
+        "and presses Enter; only allowed for allowlisted contacts.\n"
         "goto: {action:'goto', target:{value:'https://<platform host>/<path>'}} — only same-platform hosts, "
         "use it when you are on the wrong page.\n"
         "target supports {by:'text'|'role'|'selector'|'point', value, role, x, y}.\n"

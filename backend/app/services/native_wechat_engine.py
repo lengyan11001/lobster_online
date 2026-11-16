@@ -22264,6 +22264,42 @@ def _send_text_local_slow_once(
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "pc_wechat_slow_typing"}
 
 
+def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
+    """确定性发送链路写不进输入框时（微信 4.x 自绘输入框读不回内容），
+    交给桌面 Agent：校验当前会话就是目标，再清空输入框→写入→回车，最后从聊天记录验证。
+    只在“已阻止点击发送”这种确认没发出去的情况下调用，避免重复发送。"""
+    try:
+        from publisher.agent import recover_desktop
+
+        expect = str(text or "").strip()[:16]
+        if not expect:
+            return None
+        rec = recover_desktop(
+            stage="wechat_send",
+            goal=(
+                "当前会话必须是「" + str(peer_id) + "」。用 send 动作把下面这条消息发出去，"
+                "发送后要能在聊天记录里看到：" + str(text)
+            ),
+            guard_name=str(peer_id),
+            expect_text=expect,
+            max_steps=4,
+            timeout_seconds=180.0,
+        )
+        if rec.ok:
+            logger.info("[native-wechat] agent 接管发送成功 peer=%s steps=%s", peer_id, rec.steps)
+            return {
+                "ok": True,
+                "driver": "agent_send",
+                "peer_id": peer_id,
+                "agent_steps": rec.steps,
+                "text": text,
+            }
+        logger.warning("[native-wechat] agent 发送未成功 peer=%s err=%s", peer_id, str(rec.error)[:160])
+    except Exception as exc:
+        logger.warning("[native-wechat] agent 发送兜底异常: %s", str(exc)[:200])
+    return None
+
+
 def _send_text_local_slow(
     account_id: str,
     peer_id: str,
@@ -22271,16 +22307,24 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
-    return _run_local_driver_operation(
-        account_id,
-        "发送微信自动回复",
-        lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
+    try:
+        return _run_local_driver_operation(
+            account_id,
+            "发送微信自动回复",
+            lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
         # Sending is verified from the visible chat record. If the UI driver
         # loses its COM/UIA handle mid-send, rebuild the driver and retry the
         # same operation instead of leaving the task stuck until the user
         # restarts WeChat.
-        retry_on_failure=True,
-    )
+            retry_on_failure=True,
+        )
+    except RuntimeError as exc:
+        # 明确“已阻止点击发送”= 这条消息没发出去，可以安全交给 Agent 再发一次
+        if "已阻止" in str(exc):
+            fallback = _agent_send_fallback(account_id, peer_id, text)
+            if fallback is not None:
+                return fallback
+        raise
 
 
 def _auto_reply_send_uses_current_chat() -> bool:
