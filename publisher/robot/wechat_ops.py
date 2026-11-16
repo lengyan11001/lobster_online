@@ -309,6 +309,138 @@ def _wait_file_dialog(timeout: float = 5.0) -> Any:
     return None
 
 
+def _run_engine_task(coro_factory: Any, *, wait_s: float = 180.0) -> Any:
+    """跑引擎里已经验证过的朋友圈任务流程（create_task + 轮询 get_task）。"""
+    import asyncio
+
+    from backend.app.services import native_wechat_engine as eng
+
+    async def _go() -> Any:
+        task = await coro_factory()
+        task_id = str((task or {}).get("id") or "")
+        if not task_id:
+            return task, task
+        deadline = time.monotonic() + max(10.0, float(wait_s))
+        latest = task
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1.5)
+            latest = eng.get_task(task_id) or latest
+            if str(latest.get("status") or "").lower() in {"success", "succeeded", "failed", "error", "cancelled", "canceled"}:
+                break
+        return task, latest
+
+    return asyncio.run(_go())
+
+
+@spec(name="wechat.moments_like", platform="wechat", surface=S.WECHAT_MOMENTS,
+      summary="给指定联系人的朋友圈点赞（复用引擎已验证的 task 流程）",
+      precondition="微信窗口可见；目标是白名单里的小号/指定联系人",
+      postcondition="任务终态为 succeeded 且 finding/liked 计数可读",
+      destructive=True, params=["targets", "dry_run"])
+def moments_like(targets: List[str], dry_run: bool = True, max_scrolls: int = 6,
+                 account_id: str = "pc-wechat-default", wait_s: float = 180.0) -> Result:
+    from backend.app.services import native_wechat_engine as eng
+
+    res = Result(op="wechat.moments_like")
+    win = find_window()
+    if win is None:
+        res.layer, res.error = "precondition", "wechat_window_not_found"
+        return res
+    activate_window(win)
+    snap = S.snapshot_desktop(win)
+    res.surface = snap.surface
+    if snap.surface not in {S.WECHAT_CHAT, S.WECHAT_MOMENTS}:
+        res.layer, res.error = "surface", "wrong_surface"
+        res.evidence["required_surface"] = f"{S.WECHAT_CHAT}|{S.WECHAT_MOMENTS}"
+        return res
+    names = [str(t).strip() for t in (targets or []) if str(t).strip()]
+    if not names:
+        res.layer, res.error = "precondition", "empty_targets"
+        return res
+    try:
+        created, latest = _run_engine_task(
+            lambda: eng.create_moments_like_task(account_id, names, dry_run=dry_run, max_scrolls=max_scrolls),
+            wait_s=wait_s,
+        )
+    except Exception as exc:
+        res.layer, res.error = "action", f"task_failed:{type(exc).__name__}:{exc}"[:160]
+        return res
+    payload = (latest or {}).get("payload") or {}
+    res.after = {"status": str((latest or {}).get("status") or ""), "payload": payload}
+    res.evidence["dry_run"] = bool(dry_run)
+    status = str((latest or {}).get("status") or "").lower()
+    if status not in {"success", "succeeded"}:
+        res.layer, res.error = "verify", "task_not_success"
+        res.evidence["error_message"] = str((latest or {}).get("error_message") or "")[:160]
+        return res
+    # 结果证据：payload 里的 found/liked/already/skipped（引擎任务自己统计的）
+    res.evidence["steps"] = len(payload.get("steps") or [])
+    res.evidence["error_message"] = str((latest or {}).get("error_message") or "")[:160]
+    res.ok = True
+    return res
+
+
+@spec(name="wechat.moments_comment", platform="wechat", surface=S.WECHAT_MOMENTS,
+      summary="给指定联系人的朋友圈评论（复用引擎已验证的 task 流程）",
+      precondition="微信窗口可见；目标是白名单里的小号/指定联系人",
+      postcondition="任务终态 succeeded 且评论计数可读",
+      destructive=True, params=["targets", "dry_run"])
+def moments_comment(targets: List[str], dry_run: bool = True, max_scrolls: int = 6,
+                    account_id: str = "pc-wechat-default", wait_s: float = 180.0) -> Result:
+    from backend.app.services import native_wechat_engine as eng
+
+    res = Result(op="wechat.moments_comment")
+    win = find_window()
+    if win is None:
+        res.layer, res.error = "precondition", "wechat_window_not_found"
+        return res
+    activate_window(win)
+    snap = S.snapshot_desktop(win)
+    res.surface = snap.surface
+    if snap.surface not in {S.WECHAT_CHAT, S.WECHAT_MOMENTS}:
+        res.layer, res.error = "surface", "wrong_surface"
+        return res
+    names = [str(t).strip() for t in (targets or []) if str(t).strip()]
+    if not names:
+        res.layer, res.error = "precondition", "empty_targets"
+        return res
+    # 评论文案是 LLM 生成的，引擎需要登录 token（和 API 里一样的用法）
+    token, uid = "", 0
+    try:
+        from backend.app.services.creator_metrics_daily_runner import read_login_context
+
+        token, uid = read_login_context()
+    except Exception:
+        token, uid = "", 0
+    if not token:
+        res.layer, res.error = "precondition", "missing_login_token"
+        return res
+    try:
+        created, latest = _run_engine_task(
+            lambda: eng.create_moments_comment_task(
+                account_id, names, dry_run=dry_run, max_scrolls=max_scrolls,
+                user_id=(int(uid) if str(uid).isdigit() else 0),
+                auth_context={"token": token, "user_id": (int(uid) if str(uid).isdigit() else 0)},
+            ),
+            wait_s=wait_s,
+        )
+    except Exception as exc:
+        res.layer, res.error = "action", f"task_failed:{type(exc).__name__}:{exc}"[:160]
+        return res
+    payload = (latest or {}).get("payload") or {}
+    status = str((latest or {}).get("status") or "").lower()
+    res.after = {"status": status, "payload": payload}
+    res.evidence["dry_run"] = bool(dry_run)
+    if status not in {"success", "succeeded"}:
+        res.layer, res.error = "verify", "task_not_success"
+        res.evidence["error_message"] = str((latest or {}).get("error_message") or "")[:160]
+        return res
+    res.evidence["steps"] = len(payload.get("steps") or [])
+    res.evidence["error_message"] = str((latest or {}).get("error_message") or "")[:160]
+    res.ok = True
+    return res
+
+
 @spec(name="wechat.moments_feed", platform="wechat", surface=S.WECHAT_MOMENTS,
       summary="只读列朋友圈动态", precondition="朋友圈窗口已打开",
       postcondition="条目来自 SNS 窗口 ListItem", readonly=True, params=["limit"])
