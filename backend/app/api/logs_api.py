@@ -30,7 +30,10 @@ _BASE = Path(__file__).resolve().parent.parent.parent.parent
 _LOG_FILE = (_BASE / "logs" / "app.log").resolve()
 _MAX_LINES = 5000
 _DEFAULT_TAIL = 2000
-_DIAGNOSTIC_TAIL_BYTES = 8 * 1024 * 1024   # 2026-09-30：原来 1.5MB 只覆盖几小时
+_DIAGNOSTIC_TAIL_BYTES = 2 * 1024 * 1024   # 2026-11-17：8MB×N 个文件会把包撑到几十 MB，
+                                           # 客户上传超时（用户机上 auto_reply.jsonl 已 45MB）
+_DIAGNOSTIC_TOTAL_BYTES = 12 * 1024 * 1024  # 整包原文预算：超了就停，剩下的只记在 summary 里
+_DIAGNOSTIC_JSONL_TAIL_BYTES = 1024 * 1024  # jsonl 明细日志只取最后 1MB
 _DIAGNOSTIC_CONFIG_BYTES = 256 * 1024
 
 _LOG_CANDIDATES = [
@@ -241,13 +244,20 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
         "files": [],
     }
     mem = io.BytesIO()
+    budget_left = _DIAGNOSTIC_TOTAL_BYTES
     with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rel in _LOG_CANDIDATES:
             path = (_BASE / rel).resolve()
             if not path.exists() or not path.is_file():
                 continue
+            if budget_left <= 0:
+                summary["files"].append({"path": rel, "skipped": "diagnostic_budget_exhausted"})
+                continue
+            take = _DIAGNOSTIC_JSONL_TAIL_BYTES if rel.endswith(".jsonl") else _DIAGNOSTIC_TAIL_BYTES
+            take = min(take, budget_left)
             try:
-                text, size, truncated = _read_tail_text(path, _DIAGNOSTIC_TAIL_BYTES)
+                text, size, truncated = _read_tail_text(path, take)
+                budget_left -= len(text.encode("utf-8", "ignore"))
             except OSError as e:
                 summary["files"].append({"path": rel, "error": str(e)})
                 continue
@@ -450,7 +460,11 @@ async def upload_logs_diagnostics(
     if not server_base:
         raise HTTPException(status_code=503, detail="AUTH_SERVER_BASE is not configured")
 
-    bundle_name, bundle_bytes, summary = _build_diagnostic_bundle()
+    # 2026-11-17：打包 + 脱敏是纯 CPU 活，原来直接在事件循环里跑，
+    # 客户机日志一大（auto_reply 45MB）就会把整个后端卡住几十秒，
+    # 表现就是"诊断传不上去 + 界面整体卡住"。放到线程池里做。
+    loop = asyncio.get_running_loop()
+    bundle_name, bundle_bytes, summary = await loop.run_in_executor(None, _build_diagnostic_bundle)
     headers = {"Authorization": auth}
     installation_id = (request.headers.get("X-Installation-Id") or "").strip()
     if installation_id:
@@ -460,7 +474,7 @@ async def upload_logs_diagnostics(
     resp = None
     last_error = None
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             for attempt in range(3):
                 try:
                     resp = await client.post(

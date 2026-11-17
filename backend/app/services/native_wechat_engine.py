@@ -48,13 +48,13 @@ NATIVE_WECHAT_AUTO_REPLY_LOG = LOG_DIR / "native_wechat_auto_reply.jsonl"
 NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER = LOG_DIR / "native_wechat_auto_reply.disabled"
 try:
     _native_wechat_log_max_bytes_env = int(
-        os.environ.get("LOBSTER_NATIVE_WECHAT_LOG_MAX_BYTES", str(50 * 1024 * 1024))
-        or 50 * 1024 * 1024
+        os.environ.get("LOBSTER_NATIVE_WECHAT_LOG_MAX_BYTES", str(8 * 1024 * 1024))
+        or 8 * 1024 * 1024
     )
 except (TypeError, ValueError):
-    _native_wechat_log_max_bytes_env = 50 * 1024 * 1024
+    _native_wechat_log_max_bytes_env = 8 * 1024 * 1024
 NATIVE_WECHAT_LOG_MAX_BYTES = max(1024 * 1024, _native_wechat_log_max_bytes_env)
-NATIVE_WECHAT_LOG_BACKUP_COUNT = 3
+NATIVE_WECHAT_LOG_BACKUP_COUNT = 2
 NATIVE_WECHAT_UPLOAD_DIR = ROOT_DIR / "temp_assets" / "native_wechat"
 NATIVE_WECHAT_DOWNLOAD_DIR = ROOT_DIR / "assets" / "native_wechat"
 NATIVE_WECHAT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -363,7 +363,16 @@ def _write_auto_reply_diagnostic(
         "account_id": str(account_id or ""),
         "run_id": str(run_id or ""),
     }
-    entry.update(_json_safe_value(fields, max_text=1200))
+    entry.update(_json_safe_value(fields, max_text=800))
+    # 整条事件也限长：异常 payload（例如整段会话/消息列表）不允许再撑爆文件
+    try:
+        if len(json.dumps(entry, ensure_ascii=False)) > 8192:
+            keep = {k: v for k, v in entry.items()
+                    if k in {"timestamp", "event", "account_id", "run_id", "error", "error_message", "replied", "processed", "failed", "skipped", "round", "consecutive"}}
+            keep["truncated"] = True
+            entry = keep
+    except Exception:
+        pass
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with _AUTO_REPLY_DIAGNOSTIC_LOCK:
@@ -429,7 +438,13 @@ def _json_safe_value(value: Any, *, max_text: int = 1200) -> Any:
     if isinstance(value, dict):
         return {str(k): _json_safe_value(v, max_text=max_text) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
-        return [_json_safe_value(v, max_text=max_text) for v in list(value)]
+        # 2026-11-17：用户机上这个 JSONL 涨到 45MB —— 一条事件里 items/rounds 可能几百条。
+        # 列表只保留前 12 条 + 计数，别把整批明细写进日志。
+        raw_list = list(value)
+        trimmed = [_json_safe_value(v, max_text=max_text) for v in raw_list[:12]]
+        if len(raw_list) > 12:
+            trimmed.append(f"...<{len(raw_list) - 12} more>")
+        return trimmed
     if isinstance(value, (str, int, float, bool)) or value is None:
         if isinstance(value, str) and len(value) > max_text:
             return value[:max_text] + "...<truncated>"
