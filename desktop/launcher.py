@@ -1641,7 +1641,7 @@ def start_services_blocking(
     mcp_proc = start_bat("MCP", "run_mcp.bat", env)
     backend_proc = None
     # 端口空闲就直接起后端；端口被占用时仍按原来的 2s 归属探测走（避免关机竞态）。
-    if not port_open("127.0.0.1", port, timeout=0.4) or not wait_for_own_backend(port, 2):
+    if not port_open("127.0.0.1", port, timeout=0.4) or not wait_for_own_backend(port, 8):
         set_startup_status("backend", "正在启动本地服务", detail=f"端口 {port}", percent=58)
         backend_proc = start_bat("Backend", "run_backend.bat", env)
     else:
@@ -2648,7 +2648,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
                 proc = runtime.get("backend_proc")
                 process_alive = isinstance(proc, subprocess.Popen) and proc.poll() is None
-                port_alive = process_alive and port_open("127.0.0.1", port, timeout=0.4)
+                # 2026-11-17：端口存活不能依赖"我们自己的子进程还活着"。
+                # 启动时如果端口已有健康后端，backend_proc 会是 None（接管模式），
+                # 旧写法 port_alive 恒为 False —— 只要健康探测慢一次（后端在做同步任务），
+                # watchdog 就会把**正在服务的**后端当成死的杀掉，然后反复重启（真机 18:39 的崩溃循环）。
+                port_alive = port_open("127.0.0.1", port, timeout=0.4)
                 probe_delayed = (
                     "timeouterror" in health_reason.lower()
                     or "timed out" in health_reason.lower()
