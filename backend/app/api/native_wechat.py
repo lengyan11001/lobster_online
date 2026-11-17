@@ -216,6 +216,29 @@ def _diagnostic_detail(operation: str, exc: Exception, *, account_id: str = "", 
     }
 
 
+# 本地微信不可用 ≠ 网关故障。以前这里一律 502，导致：
+#   1) 客户端日志里所有 native-wechat 失败都显示成 "502 Bad Gateway"；
+#   2) 调度器的 _friendly_cloud_error 看到 502 就把真实原因改写成
+#      "云端服务暂时不可用（HTTP 502）"，把本地问题伪装成云端故障。
+# 现在按原因分档：本地微信问题 → 409（不会被云端文案改写）；真上游网关错误 → 502。
+_LOCAL_WECHAT_HINTS = (
+    "未读取到微信", "微信主窗口", "微信窗口", "Find Control Timeout",
+    "微信已登录", "未登录", "wxauto", "pywin32", "微信会话", "微信不可用",
+    "资料卡", "群聊", "通讯录",
+)
+_UPSTREAM_HINTS = ("HTTP 502", "HTTP 503", "HTTP 504", "Bad Gateway", "云端服务")
+
+
+def _native_wechat_error_status(exc: Exception) -> int:
+    msg = str(exc or "")
+    low = msg.lower()
+    if any(h.lower() in low for h in _UPSTREAM_HINTS):
+        return 502
+    if any(h.lower() in low for h in _LOCAL_WECHAT_HINTS):
+        return 409
+    return 500
+
+
 def _raise_native_wechat_error(
     operation: str,
     exc: Exception,
@@ -223,10 +246,11 @@ def _raise_native_wechat_error(
     account_id: str = "",
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    raise HTTPException(
-        status_code=502,
-        detail=_diagnostic_detail(operation, exc, account_id=account_id, extra=extra),
-    ) from exc
+    status = _native_wechat_error_status(exc)
+    detail = _diagnostic_detail(operation, exc, account_id=account_id, extra=extra)
+    if isinstance(detail, dict):
+        detail = {**detail, "error_kind": "upstream" if status == 502 else "local_wechat"}
+    raise HTTPException(status_code=status, detail=detail) from exc
 
 
 def _attach_diagnostic_if_needed(

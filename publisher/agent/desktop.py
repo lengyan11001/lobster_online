@@ -790,12 +790,16 @@ def recover_desktop(
             obs = observe_desktop_window(win, stage=stage)
             action = decide_sync(obs, goal, history, budget)
             if action is None:
-                result.error = "no_action"
+                result.error = "no_action (模型未返回可执行动作/预算耗尽)"
                 break
             writer.event("decide", action=action.action, target=action.target,
                          confidence=action.confidence, thought=action.thought[:300])
             if action.action == "abort":
-                result.error = "agent_abort"
+                # 只写 agent_abort 等于黑盒：把模型的判断和置信度带上，日志里能直接看到为什么放弃
+                result.error = (
+                    "agent_abort"
+                    f" (conf={action.confidence:.2f}, thought={str(action.thought or '')[:120]})"
+                )
                 break
             step = run_desktop_action(win, action, stage=stage, guard_name=guard_name)
             verified = bool(step.ok) and verify_desktop(win, action.expect)

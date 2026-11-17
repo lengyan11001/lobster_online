@@ -82,12 +82,15 @@ async def recover(
             observation = await observe_browser(page, platform=platform, stage=stage)
             action = await decide_async(observation, goal, history, budget, file_path=file_path)
             if action is None:
-                result.error = "no_action"
+                result.error = "no_action (模型未返回可执行动作/预算耗尽)"
                 break
             writer.event("decide", action=action.action, target=action.target,
                          confidence=action.confidence, thought=action.thought[:300])
             if action.action == "abort":
-                result.error = "agent_abort"
+                result.error = (
+                    "agent_abort"
+                    f" (conf={action.confidence:.2f}, thought={str(getattr(action, 'thought', '') or '')[:120]})"
+                )
                 break
             step = await run_browser_action(page, action, file_path=file_path)
             verified = bool(step.ok) and await verify_expect(page, action.expect, platform=platform, stage=stage)

@@ -13305,14 +13305,15 @@ async def _run_native_wechat_takeover_session(
             output["failed"] += 1
             output["consecutive_driver_failures"] = consecutive_driver_failures
             output["rounds"].append({"round": round_number, "failed": 1, "error": str(exc)[:500]})
-            output["last_error"] = str(exc)[:500]
+            output["last_error"] = f"{type(exc).__name__}: {str(exc)[:480]}"
             next_wait = _native_wechat_driver_backoff_seconds(consecutive_driver_failures)
             output["driver_backoff_seconds"] = next_wait
             logger.warning(
-                "[SCHEDULED-TASK] native wechat driver read failed; retrying inside window round=%s consecutive=%s backoff=%.0fs error=%s",
+                "[SCHEDULED-TASK] native wechat driver read failed; retrying inside window round=%s consecutive=%s backoff=%.0fs error_type=%s error=%s",
                 round_number,
                 consecutive_driver_failures,
                 next_wait,
+                type(exc).__name__,
                 output["last_error"],
             )
             if cloud is not None and base and run_id:
@@ -13447,7 +13448,7 @@ async def _run_native_whatsapp_takeover_session(
             )
         except Exception as exc:
             output["failed"] += 1
-            output["last_error"] = str(exc)[:500]
+            output["last_error"] = f"{type(exc).__name__}: {str(exc)[:480]}"
             stop_reason = "local_whatsapp_error"
             break
     output["finished_at"] = datetime.utcnow().isoformat()
