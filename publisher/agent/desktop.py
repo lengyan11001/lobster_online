@@ -628,7 +628,7 @@ def _guard_ok(window: Any, guard_name: str) -> bool:
 
 
 _STAGE_ALLOWED_ACTIONS = {
-    "wechat_sessions": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "abort"},
+    "wechat_sessions": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "op", "abort"},
     # 只有这个阶段允许打字，且只在白名单会话里
     "wechat_send": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "type", "send", "op", "abort"},
 }
@@ -643,11 +643,17 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
         return StepResult(False, f"action '{name}' blocked in stage '{stage}'")
     if name == "op":
         from publisher.robot.dispatch import run_op
+        from publisher.robot.ops import OPS
 
         op_name = str(target.get("name") or target.get("op") or "").strip()
         params = dict(target.get("params") or {})
         if not op_name:
             return StepResult(False, "empty_op")
+        # 会话修复阶段只允许只读 op：这里绝不该出现"发消息/点赞"这种写操作
+        if str(stage or "").lower() == "wechat_sessions":
+            spec_ = OPS.get(op_name)
+            if spec_ is None or not spec_.readonly:
+                return StepResult(False, f"op '{op_name}' blocked in stage '{stage}'")
         res = run_op(op_name, params, window=window)
         err = "" if res.ok else f"{res.layer}:{res.error}"
         return StepResult(bool(res.ok), err[:200], observed=str(res.evidence)[:400])

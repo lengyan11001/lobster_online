@@ -3,7 +3,7 @@
 用法：
     python -m publisher.robot doctor     # 看当前界面识别结果 + 可用操作清单
 """
-from . import douyin_ops, wechat_ops  # noqa: F401  注册
+from . import channels_ops, douyin_ops, wechat_ops, xhs_ops  # noqa: F401  注册
 from .ops import OPS, Result, describe  # noqa: F401
 from .surface import (  # noqa: F401
     DOUYIN_EDITOR,
