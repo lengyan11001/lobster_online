@@ -22296,6 +22296,20 @@ def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[D
     return None
 
 
+def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
+    """robot 优先：用 open_chat + send_message（快照验证）先发一次。
+
+    只在能按"会话名"定位时启用（wxid 这种定位不到，交给老链路）。
+    """
+    import os as _os
+
+    if str(_os.environ.get("LOBSTER_WECHAT_SEND_ROBOT", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    if _looks_like_wechat_id(str(peer_id or "")):
+        return None
+    return _agent_send_fallback(account_id, peer_id, text)
+
+
 def _send_text_local_slow(
     account_id: str,
     peer_id: str,
@@ -22303,6 +22317,11 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
+    # 2026-11-17：robot 优先。微信 4.x 自绘输入框读不回内容，老链路会"打进去了但判定失败"，
+    # 反复重试还会把同一句话打多遍。robot 有快照回读，先走它。
+    _robot = _robot_send_first(account_id, peer_id, text)
+    if _robot is not None:
+        return _robot
     try:
         return _run_local_driver_operation(
             account_id,
