@@ -1875,41 +1875,133 @@
     }).join('');
   }
 
-  // 已同步数据里的「下载」：复用作品提取页的本机下载链路（保存到下载目录并打开文件夹）
+  // ── 视频号解密（与「作品提取」页同一套 WASM keystream 逻辑）──
+  var WCT_WASM_BASE = '/static/vendor/wechat-video-decode';
+  var WCT_KEYSTREAM_BYTES = 131072;
+  var wctState = { wasmPromise: null, keystreamCache: {} };
+
+  function wctBytesToBase64(bytes) {
+    var chunk = 0x8000, parts = [];
+    for (var i = 0; i < bytes.length; i += chunk) parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)));
+    return btoa(parts.join(''));
+  }
+
+  function wctEnsureWasm() {
+    if (window.Module && window.Module.WxIsaac64) return Promise.resolve(window.Module);
+    if (wctState.wasmPromise) return wctState.wasmPromise;
+    var base = localBase();
+    var wasmUrl = base + WCT_WASM_BASE + '/wasm_video_decode.wasm';
+    var scriptUrl = base + WCT_WASM_BASE + '/wasm_video_decode.js';
+    wctState.wasmPromise = new Promise(function(resolve, reject) {
+      var done = false, pollTimer = null, timeoutTimer = null;
+      function finish() {
+        if (done) return;
+        if (window.Module && window.Module.WxIsaac64) {
+          done = true;
+          if (pollTimer) clearInterval(pollTimer);
+          if (timeoutTimer) clearTimeout(timeoutTimer);
+          resolve(window.Module);
+        }
+      }
+      window.__wctIsaacBytes = null;
+      window.VTS_WASM_URL = wasmUrl;
+      window.wasm_isaac_generate = function(ptr, size) {
+        var heap = window.Module && window.Module.HEAPU8;
+        if (!heap) return;
+        var bytes = new Uint8Array(size);
+        bytes.set(heap.subarray(ptr, ptr + size));
+        bytes.reverse();
+        window.__wctIsaacBytes = bytes;
+      };
+      var module = window.Module && typeof window.Module === 'object' ? window.Module : {};
+      var previousInit = module.onRuntimeInitialized;
+      module.locateFile = function(path) { return String(path || '').endsWith('.wasm') ? wasmUrl : path; };
+      module.onRuntimeInitialized = function() {
+        if (typeof previousInit === 'function') { try { previousInit(); } catch (e) {} }
+        finish();
+      };
+      window.Module = module;
+      pollTimer = setInterval(finish, 100);
+      timeoutTimer = setTimeout(function() {
+        clearInterval(pollTimer);
+        if (!done) { done = true; reject(new Error('视频号解密模块加载超时')); }
+      }, 60000);
+      var script = document.createElement('script');
+      script.src = scriptUrl;
+      script.async = true;
+      script.onload = function() { finish(); setTimeout(finish, 300); };
+      script.onerror = function() {
+        if (pollTimer) clearInterval(pollTimer);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (!done) { done = true; reject(new Error('视频号解密模块加载失败')); }
+      };
+      document.head.appendChild(script);
+    });
+    wctState.wasmPromise = wctState.wasmPromise.catch(function(err) { wctState.wasmPromise = null; throw err; });
+    return wctState.wasmPromise;
+  }
+
+  function wctKeystream(decodeKey) {
+    var key = String(decodeKey || '').trim();
+    if (!key) return Promise.resolve('');
+    if (wctState.keystreamCache[key]) return Promise.resolve(wctState.keystreamCache[key]);
+    return wctEnsureWasm().then(function(Module) {
+      window.__wctIsaacBytes = null;
+      var instance = new Module.WxIsaac64(key);
+      instance.generate(WCT_KEYSTREAM_BYTES);
+      if (instance.delete) instance.delete();
+      var bytes = window.__wctIsaacBytes;
+      if (!bytes || bytes.length < WCT_KEYSTREAM_BYTES) throw new Error('视频号解密参数生成失败');
+      var b64 = wctBytesToBase64(bytes);
+      wctState.keystreamCache[key] = b64;
+      return b64;
+    });
+  }
+
+  // 已同步数据里的「下载」：抖音直链直接下；视频号先按 object_id 取 decode_key，再解密下载
   function downloadSourceItem(btn) {
     var id = btn.getAttribute('data-ip-download') || '';
     var item = (state.sourceById || {})[id];
     if (!item) return;
-    if (item.decode_key) {
-      setMsg('这条是视频号加密作品，请到「作品提取」页下载（那边会带解密键）。', true);
-      return;
-    }
-    // 视频号的 stodownload 直链是加密流（encfilekey），没有解密键下下来就是一堆乱码，
-    // 播不了。这类必须走「作品提取」页（那里能拿到 decode_key + 生成 keystream）。
-    if (/^https?:\/\/(?:finder\.video\.qq\.com|wxapp\.tc\.qq\.com)\//i.test(url)) {
-      setMsg('这条是视频号加密视频（stodownload 加密流），请在「作品提取」页下载；抖音作品用这里下载。', true);
-      return;
-    }
+    var isWx = String(item.platform || '') === 'wechat_channels';
     var url = String(item.video_url || '').trim();
-    if (!url) {
-      setMsg('这条没有可下载的视频地址（只有分享页链接）。', true);
-      return;
-    }
+    var decodeKey = String(item.decode_key || '').trim();
+
     var oldText = btn.textContent;
     btn.disabled = true;
     btn.textContent = '下载中…';
-    setMsg('正在下载：' + String(sourceTitle(item) || '').slice(0, 30));
-    localJson('/api/wechat-channels-transcript/local-download', {
-      method: 'POST',
-      body: {
-        video: {
-          video_url: url,
-          title: sourceTitle(item),
-          item_key: item.item_key || '',
-          platform: item.platform || ''
-        },
-        keystream_b64: ''
-      }
+
+    var prepare;
+    if (isWx && !decodeKey) {
+      setMsg('正在获取这条视频号的解密参数…');
+      prepare = cloudJson('/api/wechat-channels-transcript/video-decode', {
+        method: 'POST',
+        body: { object_id: item.item_key || '' }
+      }).then(function(data) {
+        return { url: String(data.video_url || url || ''), key: String(data.decode_key || '') };
+      });
+    } else {
+      prepare = Promise.resolve({ url: url, key: decodeKey });
+    }
+
+    prepare.then(function(arg) {
+      if (!arg.url) throw new Error('这条没有可下载的视频地址');
+      setMsg('正在下载：' + String(sourceTitle(item) || '').slice(0, 30));
+      return wctKeystream(arg.key).then(function(ksB64) {
+        return localJson('/api/wechat-channels-transcript/local-download', {
+          method: 'POST',
+          body: {
+            video: {
+              video_url: arg.url,
+              title: sourceTitle(item),
+              item_key: item.item_key || '',
+              platform: item.platform || '',
+              decode_key: arg.key || ''
+            },
+            keystream_b64: ksB64 || ''
+          }
+        });
+      });
     }).then(function(data) {
       setMsg('已下载到：' + (data.path || '') + (data.opened ? '（已打开文件夹）' : ''));
     }).catch(function(err) {
