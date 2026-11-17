@@ -222,12 +222,15 @@ def pending_friend_requests(window: Any = None) -> Result:
     snap = _ensure_surface(win, S.WECHAT_FRIEND_REQUESTS, res)
     if snap is None:
         return res
-    rows = snap.items
-    pending = [r for r in rows if "已添加" not in r]
+    from publisher.agent.desktop import list_friend_requests
+
+    # 用统一的解析（会过滤「新的朋友/群聊」这类页头行），别直接吃 snapshot 的原始 items
+    rows = list_friend_requests(win)
+    pending = [r for r in rows if r["status"] == "pending"]
     res.after = snap.to_dict()
     res.ok = True
     res.evidence.update({"total": len(rows), "pending": len(pending),
-                         "items": [{"text": r[:60], "status": "accepted" if "已添加" in r else "pending"}
+                         "items": [{"text": r["name"][:60], "status": r["status"]}
                                    for r in rows[:20]]})
     return res
 
@@ -460,4 +463,69 @@ def moments_feed(limit: int = 10, window: Any = None) -> Result:
     res.after = snap.to_dict()
     res.ok = True
     res.evidence.update({"count": len(snap.items), "posts": snap.items[:limit]})
+    return res
+
+
+@spec(name="wechat.accept_friend_request", platform="wechat", surface=S.WECHAT_FRIEND_REQUESTS,
+      summary="按名字通过一条好友申请（默认 dry_run，只认精确名字）",
+      precondition="停在「新的朋友」页；目标名必须在待处理列表里",
+      postcondition="该行状态变为 accepted", destructive=True, params=["name", "dry_run"])
+def accept_friend_request(name: str, dry_run: bool = True, window: Any = None,
+                          account_id: str = "pc-wechat-default") -> Result:
+    from publisher.agent.desktop import list_friend_requests
+
+    res = Result(op="wechat.accept_friend_request")
+    want = str(name or "").strip()
+    if not want:
+        res.layer, res.error = "precondition", "empty_name"
+        return res
+    win = window or find_window()
+    if win is None:
+        res.layer, res.error = "precondition", "wechat_window_not_found"
+        return res
+    activate_window(win)
+    snap = _ensure_surface(win, S.WECHAT_FRIEND_REQUESTS, res)
+    if snap is None:
+        return res
+    rows = list_friend_requests(win)
+    pending = [r for r in rows if r["status"] == "pending"]
+    res.evidence["pending"] = len(pending)
+    match = [r for r in pending if r["name"].startswith(want)]
+    if not match:
+        res.layer, res.error = "precondition", "request_not_found"
+        res.evidence["names"] = [r["name"][:24] for r in pending[:8]]
+        return res
+    res.evidence["target"] = match[0]["name"][:60]
+    if dry_run:
+        res.ok = True
+        res.evidence["dry_run"] = True
+        return res
+    # 真通过：复用引擎里那条“按可见项通过”的实现，只传被选中的那一个
+    try:
+        from backend.app.services import native_wechat_engine as eng
+
+        hwnd = int(getattr(win, "handle", 0) or 0)
+        visible = eng._visible_pending_friend_requests(win.wrapper_object() if hasattr(win, "wrapper_object") else win)
+        target_item = None
+        for item in visible or []:
+            nm = str(item.get("name") or item.get("display_name") or "")
+            if nm.startswith(want):
+                target_item = item
+                break
+        if target_item is None:
+            res.layer, res.error = "action", "engine_item_not_found"
+            return res
+        steps = eng._accept_visible_friend_request(hwnd, target_item)
+        res.evidence["steps"] = [str(s)[:40] for s in (steps or [])][:6]
+    except Exception as exc:
+        res.layer, res.error = "action", f"accept_failed:{type(exc).__name__}:{exc}"[:160]
+        return res
+    after = S.snapshot_desktop(win)
+    res.after = after.to_dict()
+    accepted = [r for r in list_friend_requests(win)
+                if r["name"].startswith(want) and r["status"] == "accepted"]
+    res.ok = bool(accepted)
+    res.evidence["accepted_rows"] = len(accepted)
+    if not res.ok:
+        res.layer, res.error = "verify", "not_accepted"
     return res

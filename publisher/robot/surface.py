@@ -118,12 +118,14 @@ def detect_wechat(window: Any) -> Surface:
     if "session_list" in aids:
         return Surface(WECHAT_CHAT, anchors={"session_list": True, "rows": len(rows)},
                        evidence={"aids": sorted(a for a in aids if "list" in a)[:6]})
+    # 「新的朋友」页：列表行里带“已添加/验证语/请求”，别只认 contact_list 这个 aid
+    #（真机上这个 aid 时有时无，之前因此被判定 unknown，所有 op 都被失败关闭）
+    requestish = [r for r in rows if ("已添加" in r or "验证" in r or "请求添加" in r or "接受" in r)]
+    if requestish:
+        return Surface(WECHAT_FRIEND_REQUESTS,
+                       anchors={"request_rows": len(requestish), "contact_list": "contact_list" in aids},
+                       evidence={"sample": requestish[0][:60]})
     if "contact_list" in aids:
-        requestish = [r for r in rows if ("已添加" in r or "接受" in r or "验证" in r or "请求" in r)]
-        if requestish:
-            return Surface(WECHAT_FRIEND_REQUESTS,
-                           anchors={"contact_list": True, "request_rows": len(requestish)},
-                           evidence={"sample": requestish[0][:60]})
         return Surface(WECHAT_CONTACTS, anchors={"contact_list": True, "rows": len(rows)})
     return Surface(UNKNOWN, evidence={"aids": sorted(aids)[:8], "rows": rows[:3]})
 

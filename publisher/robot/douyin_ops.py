@@ -169,3 +169,119 @@ async def publish(page: Any, timeout_s: float = 45.0, dry_run: bool = False) -> 
     res.after = {"url": str(getattr(page, "url", ""))}
     res.layer, res.error = "verify", "publish_not_confirmed"
     return res
+
+
+def _noop(*_a: Any, **_k: Any) -> None:
+    """驱动里的 _step 回调：op 层不需要再打日志。"""
+    return None
+
+
+@spec(name="douyin.set_cover", platform="douyin", surface=S.DOUYIN_EDITOR,
+      summary="走封面流程（横封面入口→竖封面→完成）", precondition="在编辑页",
+      postcondition="不再提示「横/竖双封面缺失」", params=["require"])
+async def set_cover(page: Any, require: bool = True) -> Result:
+    res = Result(op="douyin.set_cover")
+    if not _check(page, S.DOUYIN_EDITOR, res):
+        return res
+    from skills.douyin_publish import driver as dd
+
+    try:
+        ok = await dd._douyin_run_cover_flow(page, _noop, require=bool(require))
+    except Exception as exc:
+        res.layer, res.error = "action", f"cover_failed:{type(exc).__name__}"
+        return res
+    res.evidence["flow_ok"] = bool(ok)
+    try:
+        body = str(await page.inner_text("body"))[:6000]
+    except Exception:
+        body = ""
+    missing = "双封面缺失" in body
+    res.evidence["cover_missing_warning"] = missing
+    res.ok = bool(ok) and not missing
+    if not res.ok:
+        res.layer, res.error = "verify", "cover_not_set"
+    return res
+
+
+@spec(name="douyin.set_schedule", platform="douyin", surface=S.DOUYIN_EDITOR,
+      summary="设置定时发布（立即/定时二选一）", precondition="在编辑页",
+      postcondition="页面出现定时发布时间", params=["when"])
+async def set_schedule(page: Any, when: str) -> Result:
+    res = Result(op="douyin.set_schedule")
+    if not _check(page, S.DOUYIN_EDITOR, res):
+        return res
+    value = str(when or "").strip()
+    if not value:
+        res.layer, res.error = "precondition", "empty_time"
+        return res
+    from skills.douyin_publish import driver as dd
+
+    try:
+        ok = await dd._douyin_apply_publish_time(page, {"publish_time": value}, _noop)
+    except Exception as exc:
+        res.layer, res.error = "action", f"schedule_failed:{type(exc).__name__}"
+        return res
+    try:
+        body = str(await page.inner_text("body"))[:8000]
+    except Exception:
+        body = ""
+    hit = ("定时发布" in body) and (value[-5:] in body or value[:10] in body)
+    res.evidence.update({"applied": bool(ok), "time": value, "page_hit": hit})
+    res.ok = bool(ok) and hit
+    if not res.ok:
+        res.layer, res.error = "verify", "schedule_not_confirmed"
+    return res
+
+
+@spec(name="douyin.set_declaration", platform="douyin", surface=S.DOUYIN_EDITOR,
+      summary="设置自主声明（AI 生成/自行声明/无需）", precondition="在编辑页",
+      postcondition="页面出现所选声明文本", params=["mode", "text"])
+async def set_declaration(page: Any, mode: str = "ai", text: str = "") -> Result:
+    res = Result(op="douyin.set_declaration")
+    if not _check(page, S.DOUYIN_EDITOR, res):
+        return res
+    from skills.douyin_publish import driver as dd
+
+    opts: Dict[str, Any] = {"douyin_declaration_mode": str(mode or "ai")}
+    if text:
+        opts["douyin_declaration_text"] = str(text)
+    try:
+        applied = await dd._douyin_apply_self_declaration(page, opts, _noop, "op")
+    except Exception as exc:
+        res.layer, res.error = "action", f"declaration_failed:{type(exc).__name__}"
+        return res
+    try:
+        body = str(await page.inner_text("body"))[:8000]
+    except Exception:
+        body = ""
+    chosen = str(text or "内容由AI生成")
+    res.evidence.update({"applied": applied, "text": chosen})
+    res.ok = (applied is not False) and (chosen[:4] in body)
+    if not res.ok:
+        res.layer, res.error = "verify", "declaration_not_confirmed"
+    return res
+
+
+@spec(name="douyin.verify_in_manage", platform="douyin", surface=S.DOUYIN_MANAGE,
+      summary="作品管理页回读：这条标题真的发出来了", precondition="在作品管理页",
+      postcondition="列表里能找到该标题", readonly=True, params=["title"])
+async def verify_in_manage(page: Any, title: str) -> Result:
+    res = Result(op="douyin.verify_in_manage")
+    if not _check(page, S.DOUYIN_MANAGE, res):
+        return res
+    want = str(title or "").strip()
+    if not want:
+        res.layer, res.error = "precondition", "empty_title"
+        return res
+    try:
+        body = str(await page.inner_text("body"))
+    except Exception:
+        body = ""
+    idx = body.find(want)
+    res.evidence["found"] = idx >= 0
+    if idx >= 0:
+        res.evidence["row_excerpt"] = body[max(0, idx - 20): idx + 60].replace("\n", " ")
+        res.ok = True
+        return res
+    res.layer, res.error = "verify", "title_not_found"
+    return res
