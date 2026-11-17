@@ -1881,7 +1881,13 @@
     var item = (state.sourceById || {})[id];
     if (!item) return;
     if (item.decode_key) {
-      setMsg('这条是视频号加密作品，请到「作品提取」页下载（需要解密键）。', true);
+      setMsg('这条是视频号加密作品，请到「作品提取」页下载（那边会带解密键）。', true);
+      return;
+    }
+    // 视频号的 stodownload 直链是加密流（encfilekey），没有解密键下下来就是一堆乱码，
+    // 播不了。这类必须走「作品提取」页（那里能拿到 decode_key + 生成 keystream）。
+    if (/^https?:\/\/(?:finder\.video\.qq\.com|wxapp\.tc\.qq\.com)\//i.test(url)) {
+      setMsg('这条是视频号加密视频（stodownload 加密流），请在「作品提取」页下载；抖音作品用这里下载。', true);
       return;
     }
     var url = String(item.video_url || '').trim();
