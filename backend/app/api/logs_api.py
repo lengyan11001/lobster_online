@@ -479,7 +479,14 @@ def _save_pending_bundle(bundle_name: str, bundle_bytes: bytes) -> str:
 
 
 @router.post("/api/logs/export-diagnostics", summary="Build a diagnostic bundle locally (no upload)")
-async def export_logs_diagnostics() -> dict:
+async def export_logs_diagnostics(request: Request) -> dict:
+    # 只允许本机调用：不联网也要能取到诊断包，但不能被外部直接触发打包
+    try:
+        client_host = str(getattr(getattr(request, "client", None), "host", "") or "")
+    except Exception:
+        client_host = ""
+    if client_host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="本机接口，仅允许 127.0.0.1 调用")
     loop = asyncio.get_running_loop()
     bundle_name, bundle_bytes, summary = await loop.run_in_executor(None, _build_diagnostic_bundle)
     path = _save_pending_bundle(bundle_name, bundle_bytes)

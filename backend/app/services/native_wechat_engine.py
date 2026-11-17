@@ -22345,18 +22345,57 @@ def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[D
     return None
 
 
+def _peer_display_name(account_id: str, peer_id: str) -> str:
+    """把 wxid 换成会话里显示的名字（robot 只能按名字定位会话）。"""
+    key = str(peer_id or "").strip()
+    if not key:
+        return ""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "select display_name from wechat_peers where account_id=? and peer_id=? limit 1",
+                (str(account_id or ""), key),
+            ).fetchone()
+            if row and str(row[0] or "").strip():
+                return str(row[0]).strip()
+            row = conn.execute(
+                "select display_name from wechat_peers where peer_id=? or display_name=? limit 1",
+                (key, key),
+            ).fetchone()
+            if row and str(row[0] or "").strip():
+                return str(row[0]).strip()
+            row = conn.execute(
+                "select display_name from wechat_contacts where contact_key=? or wx_no=? limit 1",
+                (key, key),
+            ).fetchone()
+            if row and str(row[0] or "").strip():
+                return str(row[0]).strip()
+    except Exception as exc:
+        logger.debug("[native-wechat] resolve display name failed: %s", exc)
+    return ""
+
+
 def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
     """robot 优先：用 open_chat + send_message（快照验证）先发一次。
 
-    只在能按"会话名"定位时启用（wxid 这种定位不到，交给老链路）。
+    2026-11-17：以前遇到 wxid 直接放弃 robot（"按会话名定位不到"），
+    结果自动回复全部落回老链路 —— 老链路在微信 4.x 写不进输入框，
+    于是每轮都是 "回复文本未能写入微信聊天输入框，已阻止点击发送"，
+    用户侧就是"个微不回复"。现在先把 wxid 换成显示名再试 robot。
     """
     import os as _os
 
     if str(_os.environ.get("LOBSTER_WECHAT_SEND_ROBOT", "1")).strip().lower() in {"0", "false", "no", "off"}:
         return None
-    if _looks_like_wechat_id(str(peer_id or "")):
-        return None
-    return _agent_send_fallback(account_id, peer_id, text)
+    target = str(peer_id or "").strip()
+    if _looks_like_wechat_id(target):
+        resolved = _peer_display_name(account_id, target)
+        if not resolved:
+            logger.info("[native-wechat] robot 跳过：wxid 未能解析成显示名 peer=%s", target)
+            return None
+        logger.info("[native-wechat] robot 按显示名发送 peer=%s -> %s", target, resolved)
+        target = resolved
+    return _agent_send_fallback(account_id, target, text)
 
 
 def _send_text_local_slow(
