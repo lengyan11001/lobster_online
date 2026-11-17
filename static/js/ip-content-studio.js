@@ -1849,6 +1849,8 @@
       list.innerHTML = '<div class="ip-content-empty">' + (type === 'keyword' ? '暂无关键词榜单数据。' : '暂无同行作品数据。') + '</div>';
       return;
     }
+    state.sourceById = state.sourceById || {};
+    rows.forEach(function(item) { state.sourceById[String(item.id)] = item; });
     list.innerHTML = rows.map(function(item) {
       var meta = item.source_meta || {};
       var badges = '';
@@ -1868,9 +1870,56 @@
         (item.used_for && item.used_for.length ? '<small>使用记录：' + esc(item.used_for.map(taskLabel).join('、')) + '</small>' : '') +
         '<div class="ip-content-item-actions">' +
         (item.public_url ? '<a class="btn btn-ghost btn-sm" href="' + escAttr(item.public_url) + '" target="_blank" rel="noopener">打开</a>' : '') +
+        (item.video_url ? '<button type="button" class="btn btn-ghost btn-sm" data-ip-download="' + escAttr(String(item.id)) + '">下载</button>' : '') +
         '</div></div>';
     }).join('');
   }
+
+  // 已同步数据里的「下载」：复用作品提取页的本机下载链路（保存到下载目录并打开文件夹）
+  function downloadSourceItem(btn) {
+    var id = btn.getAttribute('data-ip-download') || '';
+    var item = (state.sourceById || {})[id];
+    if (!item) return;
+    if (item.decode_key) {
+      setMsg('这条是视频号加密作品，请到「作品提取」页下载（需要解密键）。', true);
+      return;
+    }
+    var url = String(item.video_url || '').trim();
+    if (!url) {
+      setMsg('这条没有可下载的视频地址（只有分享页链接）。', true);
+      return;
+    }
+    var oldText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '下载中…';
+    setMsg('正在下载：' + String(sourceTitle(item) || '').slice(0, 30));
+    localJson('/api/wechat-channels-transcript/local-download', {
+      method: 'POST',
+      body: {
+        video: {
+          video_url: url,
+          title: sourceTitle(item),
+          item_key: item.item_key || '',
+          platform: item.platform || ''
+        },
+        keystream_b64: ''
+      }
+    }).then(function(data) {
+      setMsg('已下载到：' + (data.path || '') + (data.opened ? '（已打开文件夹）' : ''));
+    }).catch(function(err) {
+      setMsg('下载失败：' + (err && err.message ? err.message : '未知错误'), true);
+    }).finally(function() {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    });
+  }
+
+  document.addEventListener('click', function(ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('[data-ip-download]') : null;
+    if (!btn) return;
+    ev.preventDefault();
+    downloadSourceItem(btn);
+  });
 
   function loadSources(filter) {
     filter = filter || {};
