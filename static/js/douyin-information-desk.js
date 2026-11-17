@@ -591,6 +591,9 @@
   }
 
   function openCopyHistory(silent) {
+    // 这个函数被直接当 click 处理器用，传进来的是 MouseEvent（truthy），
+    // 以前会被当成 silent=true → 弹窗永远不打开，表现就是「点历史记录没反应」。
+    silent = silent === true;
     clearCopyHistoryPoll();
     if (!silent) {
       openCopyModal('历史记录', '<div class="douyin-desk-empty">正在读取生成历史…</div>');
