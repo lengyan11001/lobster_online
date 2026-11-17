@@ -265,7 +265,7 @@ async def set_declaration(page: Any, mode: str = "ai", text: str = "") -> Result
 @spec(name="douyin.verify_in_manage", platform="douyin", surface=S.DOUYIN_MANAGE,
       summary="作品管理页回读：这条标题真的发出来了", precondition="在作品管理页",
       postcondition="列表里能找到该标题", readonly=True, params=["title"])
-async def verify_in_manage(page: Any, title: str) -> Result:
+async def verify_in_manage(page: Any, title: str, timeout_s: float = 25.0) -> Result:
     res = Result(op="douyin.verify_in_manage")
     if not _check(page, S.DOUYIN_MANAGE, res):
         return res
@@ -273,15 +273,29 @@ async def verify_in_manage(page: Any, title: str) -> Result:
     if not want:
         res.layer, res.error = "precondition", "empty_title"
         return res
-    try:
-        body = str(await page.inner_text("body"))
-    except Exception:
-        body = ""
-    idx = body.find(want)
-    res.evidence["found"] = idx >= 0
-    if idx >= 0:
-        res.evidence["row_excerpt"] = body[max(0, idx - 20): idx + 60].replace("\n", " ")
-        res.ok = True
-        return res
+    # 新作品进列表有延迟：轮询 + 偶尔刷新，别一上来就判失败
+    deadline = asyncio.get_event_loop().time() + max(5.0, float(timeout_s))
+    attempt = 0
+    last_body = ""
+    while asyncio.get_event_loop().time() < deadline:
+        attempt += 1
+        try:
+            last_body = str(await page.inner_text("body"))
+        except Exception:
+            last_body = ""
+        idx = last_body.find(want)
+        if idx >= 0:
+            res.evidence.update({"found": True, "attempts": attempt,
+                                 "row_excerpt": last_body[max(0, idx - 20): idx + 60].replace("\n", " ")})
+            res.ok = True
+            return res
+        if attempt in (3, 6):
+            try:
+                await page.reload(wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(2.0)
+            except Exception:
+                pass
+        await asyncio.sleep(2.0)
+    res.evidence["found"] = False
     res.layer, res.error = "verify", "title_not_found"
     return res

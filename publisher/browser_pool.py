@@ -2570,6 +2570,17 @@ async def collect_douyin_video_customers_protocol(
         return {"ok": False, "message": str(e), "comments": [], "customers": [], "aweme_id": aweme_id}
 
 
+def _robot_publish_enabled(options: Optional[Dict[str, Any]]) -> bool:
+    """robot 发布链开关：环境变量优先，其次 options.robot_publish，默认开。"""
+    env = (os.environ.get("LOBSTER_ROBOT_PUBLISH") or "").strip().lower()
+    if env in {"0", "false", "no", "off"}:
+        return False
+    opts = options or {}
+    if "robot_publish" in opts:
+        return bool(opts.get("robot_publish"))
+    return True
+
+
 async def run_publish_task(
     profile_dir: str,
     platform: str,
@@ -2677,6 +2688,82 @@ async def run_publish_task(
             platform, file_path, title, description, tags
         )
         _publish_log_url(page, "5_before_driver_publish")
+
+        # 2026-11-17：抖音优先走 robot 能力链（upload/cover/declaration/schedule/publish + 管理页回读），
+        # 任何一层失败自动回退到老 driver，对外契约不变。
+        if platform == "douyin" and _robot_publish_enabled(options):
+            try:
+                from .robot.publish_flow import douyin_publish_flow
+
+                flow_opts = options or {}
+                flow = await douyin_publish_flow(
+                    page,
+                    file_path=file_path,
+                    title=title_n,
+                    description=desc_n,
+                    schedule=str(
+                        flow_opts.get("douyin_publish_time")
+                        or flow_opts.get("publish_time")
+                        or flow_opts.get("schedule_time")
+                        or ""
+                    ),
+                    declaration=str(
+                        flow_opts.get("douyin_declaration_text")
+                        or flow_opts.get("self_declaration_text")
+                        or ""
+                    ),
+                    cover=bool(flow_opts.get("robot_cover", True)),
+                    dry_run=bool(flow_opts.get("robot_dry_run", False)),
+                )
+            except Exception as robot_exc:
+                logger.warning("[PUBLISH][ROBOT] 能力链异常，回退老 driver: %s", robot_exc)
+                flow = {"ok": False, "path": "robot", "error": type(robot_exc).__name__}
+            logger.info("[PUBLISH][ROBOT] flow ok=%s path=%s layer=%s",
+                        flow.get("ok"), flow.get("path"), flow.get("layer"))
+            if flow.get("ok"):
+                robot_result = {
+                    "ok": True,
+                    "status": "success",
+                    "url": str(getattr(page, "url", "") or ""),
+                    "path": "robot",
+                    "applied": {
+                        "path": "robot",
+                        "dry_run": bool(flow.get("dry_run")),
+                        "steps": [{"action": st.get("op"), "ok": st.get("ok")}
+                                  for st in (flow.get("steps") or [])],
+                    },
+                }
+                try:
+                    robot_result = log_and_attach_warnings(robot_result, field_warnings)
+                except Exception:
+                    pass
+                _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+                return robot_result
+            if flow.get("published"):
+                _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+                logger.warning("[PUBLISH][ROBOT] 已发布但回读未确认，不回退（避免重复发布）")
+                return {
+                    "ok": True,
+                    "status": "success",
+                    "path": "robot",
+                    "verified": bool(flow.get("verified")),
+                    "url": str(getattr(page, "url", "") or ""),
+                    "applied": {"path": "robot", "verified": bool(flow.get("verified")),
+                                "steps": [{"action": st.get("op"), "ok": st.get("ok")}
+                                          for st in (flow.get("steps") or [])]},
+                }
+            if bool((options or {}).get("robot_dry_run", False)):
+                # 调用方要的是"只验证不发布"，绝不能回退到会真发的老 driver
+                _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+                return {
+                    "ok": False,
+                    "status": "dry_run_failed",
+                    "path": "robot",
+                    "error": f"robot_dry_run_failed:{flow.get('layer') or flow.get('error') or 'unknown'}",
+                    "url": str(getattr(page, "url", "") or ""),
+                }
+            logger.info("[PUBLISH][ROBOT] 回退到 driver.publish（layer=%s）", flow.get("layer"))
+
         logger.info("[PUBLISH] calling driver.publish()...")
         result = await driver.publish(
             page=page,
