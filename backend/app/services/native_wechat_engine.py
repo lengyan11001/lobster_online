@@ -11778,6 +11778,35 @@ def _sync_local_sessions_from_uia(
     }
 
 
+def _agent_recover_wechat_ui() -> bool:
+    """把微信拉回聊天页（桌面 Agent，surface 闸门 + 快照校验）。
+
+    2026-11-17：自动回复走的是 _AUTO_REPLY_TIME_SCAN_ACCOUNTS 的 wxauto4 快扫分支，
+    那条分支**绕过了**原来的 agent 兜底，所以用户看到的就是
+    "读取微信会话失败…Find Control Timeout: right_v_view.user_info_center_view"
+    而日志里一个 agent 事件都没有。这里抽成公用函数，两条分支都用。
+    """
+    try:
+        from publisher.agent import recover_desktop
+
+        rec = recover_desktop(
+            stage="wechat_sessions",
+            goal="微信主窗口已回到「聊天」页，且左侧会话列表可见",
+            max_steps=4,
+            timeout_seconds=180.0,
+        )
+        if rec.ok:
+            logger.info(
+                "[native-wechat] agent 已把微信拉回聊天页 steps=%s recovered=%s",
+                rec.steps, rec.recovered,
+            )
+            return True
+        logger.warning("[native-wechat] agent 恢复失败: %s", str(rec.error or "")[:160])
+    except Exception as exc:
+        logger.warning("[native-wechat] agent 恢复异常: %s", str(exc)[:200])
+    return False
+
+
 def _sync_local_sessions_once(
     account_id: str,
     *,
@@ -11798,11 +11827,26 @@ def _sync_local_sessions_once(
     if account_id in _AUTO_REPLY_TIME_SCAN_ACCOUNTS and not passive and not recent_only:
         # Do not fall back to UIA's calendar labels here: automatic takeover
         # must only process rows with a precise wxauto4 timestamp.
-        return _sync_recent_sessions_from_wxauto4(
-            account_id,
-            max_pages=12,
-            capture_auto_reply=capture_auto_reply,
-        )
+        try:
+            return _sync_recent_sessions_from_wxauto4(
+                account_id,
+                max_pages=12,
+                capture_auto_reply=capture_auto_reply,
+            )
+        except Exception as wx4_exc:
+            if passive:
+                raise
+            # 2026-11-17：这条分支以前没有兜底 —— 微信停在非聊天页/资料卡读不到时，
+            # 自动回复直接整轮失败（用户侧表现就是"个微不回复"）。
+            if _agent_recover_wechat_ui():
+                data = _sync_recent_sessions_from_wxauto4(
+                    account_id,
+                    max_pages=12,
+                    capture_auto_reply=capture_auto_reply,
+                )
+                data["agent_recovered"] = True
+                return data
+            raise
     try:
         return _sync_local_sessions_from_uia(account_id, passive=passive, recent_only=recent_only)
     except Exception as uia_exc:
@@ -11815,23 +11859,13 @@ def _sync_local_sessions_once(
         except Exception as wx_exc:
             # 2026-11-16：硬编码读取都失败时，交给桌面 Agent 把微信拉回聊天页再试一次
             try:
-                from publisher.agent import recover_desktop
-
-                rec = recover_desktop(
-                    stage="wechat_sessions",
-                    goal="微信主窗口已回到「聊天」页，且左侧会话列表可见",
-                    max_steps=4,
-                    timeout_seconds=180.0,
-                )
-                if rec.ok:
+                if _agent_recover_wechat_ui():
                     data = _sync_local_sessions_from_uia(
                         account_id, passive=passive, recent_only=recent_only
                     )
                     data["agent_recovered"] = True
                     return data
-                logger.warning(
-                    "[native-wechat] agent recovery failed: %s", str(rec.error or "")[:200]
-                )
+                logger.warning("[native-wechat] agent recovery 未成功，继续抛原始错误")
             except Exception as agent_exc:
                 logger.warning(
                     "[native-wechat] agent recovery crashed: %s", str(agent_exc)[:200]
