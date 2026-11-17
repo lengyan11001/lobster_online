@@ -66,7 +66,13 @@ def find_window(keyword: str = "微信") -> Any:
                     pass
                 r = win.rectangle()
                 area = max(0, (r.right - r.left)) * max(0, (r.bottom - r.top))
-                if area < 300 * 300:
+                try:
+                    iconic = bool(win.is_minimized())
+                except Exception:
+                    iconic = False
+                # 最小化窗口的 rect 是 (-32000,...)，不能再按面积筛，
+                # 否则"微信最小化"时 agent 连窗口都找不到（真机 21:0x 就是这样）。
+                if not iconic and area < 300 * 300:
                     continue
                 score = area / 1e6
                 if "MainWindow" in cls or "mmui" in cls:
@@ -108,11 +114,12 @@ def find_window(keyword: str = "微信") -> Any:
                     pid = 0
                 if pid and not _is_personal_wechat(pid):
                     return True
+                iconic = bool(win32gui.IsIconic(hwnd))
                 l, t, r, b = win32gui.GetWindowRect(hwnd)
                 area = max(0, r - l) * max(0, b - t)
-                if area < 300 * 300:
+                if not iconic and area < 300 * 300:
                     return True
-                picked.append((area, hwnd))
+                picked.append((area if not iconic else 300 * 300, hwnd))
             except Exception:
                 pass
             return True
