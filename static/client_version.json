@@ -1,7 +1,7 @@
 {
-  "version": "2.0.279",
-  "build": 585,
-  "applied_at": "2026-11-17T11:47:17+08:00",
-  "note": "robot 能力层：抖音发布 robot 优先 / 微信发送 robot 优先 / 能力 op 化（仅本地打包，未发布）",
-  "bundle_sha256": "5d08c081f82db63511452f36a430a9464e84ee94549ec08c7d6f9bccabefa850"
+  "version": "2.0.282",
+  "build": 588,
+  "applied_at": "2026-11-17T17:43:03+08:00",
+  "note": "纯代码：robot 能力层 + main 合并（无资源，未发布）",
+  "bundle_sha256": "b4aef24b57a8a7d8e2f98554574374f149782143e0a610d909ae37ecbb7b5fcb"
 }
