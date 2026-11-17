@@ -22411,22 +22411,22 @@ def _send_text_local_slow(
     if _robot is not None:
         return _robot
     try:
+        # 2026-11-17：发送不再自动重试 3 次。
+        # 老链路在微信 4.x 读不回输入框内容，每次"重试"都会把同一句话重新打一遍
+        # （客户看到的就是"连续输入几遍但不发送"）。失败一次就直接交给 robot：
+        # robot 会清空输入框、打一遍、回车，并用聊天记录验证。
         return _run_local_driver_operation(
             account_id,
             "发送微信自动回复",
             lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
-        # Sending is verified from the visible chat record. If the UI driver
-        # loses its COM/UIA handle mid-send, rebuild the driver and retry the
-        # same operation instead of leaving the task stuck until the user
-        # restarts WeChat.
-            retry_on_failure=True,
+            retry_on_failure=False,
         )
     except RuntimeError as exc:
-        # 明确“已阻止点击发送”= 这条消息没发出去，可以安全交给 Agent 再发一次
-        if "已阻止" in str(exc):
-            fallback = _agent_send_fallback(account_id, peer_id, text)
-            if fallback is not None:
-                return fallback
+        # 老链路失败：robot 会先确认当前会话就是目标，再清空/输入/回车/回读，
+        # 不会重复打字；只有 robot 也失败才把原始错误抛出去。
+        fallback = _agent_send_fallback(account_id, peer_id, text)
+        if fallback is not None:
+            return fallback
         raise
 
 
