@@ -283,8 +283,8 @@ def resolve_root() -> Path:
 
 ROOT = resolve_root()
 LOG_PATH = ROOT / "desktop_launcher.log"
-_LOG_ROTATE_MAX_BYTES = 50 * 1024 * 1024
-_LOG_ROTATE_BACKUP_COUNT = 3
+_LOG_ROTATE_MAX_BYTES = 8 * 1024 * 1024
+_LOG_ROTATE_BACKUP_COUNT = 2
 _LOG_ROTATE_LOCK = threading.Lock()
 APP_ICON_PATH: Path | None = None
 LOADING_MARK_PATH: Path | None = None
@@ -2633,6 +2633,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             """Restart only an unexpectedly exited local backend while the window is open."""
             stop_event = runtime["watchdog_stop"]
             failures = 0
+            # 2026-11-17：延迟探针按时间节流（5 分钟一条）。
+            # 旧写法在 delayed 分支里把 failures 归零，导致 `failures in (0,3,10)` 永远命中，
+            # 于是每 7 秒写一行，日志一天涨 5MB（客户机上一天就 10MB+）。
+            last_delayed_log = 0.0
+            _DELAYED_LOG_INTERVAL = 300.0
             health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
             # 2026-10-05：心跳从 2s 放到 5s。2s 时客户机 backend.log 里
             # 89.5% 的行都是这条探针（15 小时 2.2 万条），看着一直在刷新；
@@ -2663,11 +2668,13 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     # event loop while the backend remains healthy enough to
                     # continue the active task. Do not turn that delay into a
                     # recovery attempt or carry it into the next probe.
-                    if failures in (0, 3, 10) or failures % 30 == 0:
+                    now_mono = time.monotonic()
+                    if now_mono - last_delayed_log >= _DELAYED_LOG_INTERVAL:
+                        last_delayed_log = now_mono
                         log(
                             "Backend watchdog: health probe delayed; backend process and port are alive "
-                            "reason=%s elapsed_ms=%.1f pid=%s"
-                            % (health_reason, health_elapsed_ms, getattr(proc, "pid", None))
+                            "reason=%s elapsed_ms=%.1f pid=%s failures_since_start=%s"
+                            % (health_reason, health_elapsed_ms, getattr(proc, "pid", None), failures)
                         )
                     failures = 0
                     continue
