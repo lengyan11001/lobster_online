@@ -12,7 +12,7 @@ import threading
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -449,6 +449,38 @@ async def get_logs(
 
 
 _PENDING_DIAG_DIR = (_BASE / "logs" / "pending_diagnostics").resolve()
+# 2026-11-17：打包单飞 + 硬超时。
+# 之前用户连点几次上传，每次都起一个"读几十 MB 日志 + 脱敏 + 压缩"的任务，
+# 默认线程池被占满后，导出接口就一直挂着（客户端看到的就是"命令没反应"）。
+_DIAG_BUILD_LOCK: Optional[asyncio.Lock] = None
+_DIAG_BUILD_TIMEOUT = 60.0
+
+
+def _diag_build_lock() -> asyncio.Lock:
+    global _DIAG_BUILD_LOCK
+    if _DIAG_BUILD_LOCK is None:
+        _DIAG_BUILD_LOCK = asyncio.Lock()
+    return _DIAG_BUILD_LOCK
+
+
+async def _build_bundle_guarded() -> tuple:
+    """单飞 + 60s 超时；超时给出可执行的本地兜底路径，而不是无限挂起。"""
+    lock = _diag_build_lock()
+    if lock.locked():
+        raise HTTPException(status_code=429, detail="诊断包正在打包中，请稍候再试（不要重复点击）")
+    async with lock:
+        loop = asyncio.get_running_loop()
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, _build_diagnostic_bundle),
+                timeout=_DIAG_BUILD_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=503,
+                detail=("诊断打包超过 60 秒（日志文件被占用或过大）。"
+                        "可在本机执行：python scripts\\export_diagnostics.py 直接生成包"),
+            )
 _PENDING_DIAG_KEEP = 5
 _PENDING_DIAG_MAX_BYTES = 50 * 1024 * 1024
 
@@ -487,8 +519,7 @@ async def export_logs_diagnostics(request: Request) -> dict:
         client_host = ""
     if client_host not in {"127.0.0.1", "::1", "localhost"}:
         raise HTTPException(status_code=403, detail="本机接口，仅允许 127.0.0.1 调用")
-    loop = asyncio.get_running_loop()
-    bundle_name, bundle_bytes, summary = await loop.run_in_executor(None, _build_diagnostic_bundle)
+    bundle_name, bundle_bytes, summary = await _build_bundle_guarded()
     path = _save_pending_bundle(bundle_name, bundle_bytes)
     return {"ok": bool(path), "path": path, "size": len(bundle_bytes), "files": summary.get("files", [])}
 
@@ -507,9 +538,8 @@ async def upload_logs_diagnostics(
 
     # 2026-11-17：打包 + 脱敏是纯 CPU 活，原来直接在事件循环里跑，
     # 客户机日志一大（auto_reply 45MB）就会把整个后端卡住几十秒，
-    # 表现就是"诊断传不上去 + 界面整体卡住"。放到线程池里做。
-    loop = asyncio.get_running_loop()
-    bundle_name, bundle_bytes, summary = await loop.run_in_executor(None, _build_diagnostic_bundle)
+    # 表现就是"诊断传不上去 + 界面整体卡住"。放到线程池里做，并单飞 + 超时。
+    bundle_name, bundle_bytes, summary = await _build_bundle_guarded()
     headers = {"Authorization": auth}
     installation_id = (request.headers.get("X-Installation-Id") or "").strip()
     if installation_id:
