@@ -448,6 +448,44 @@ async def get_logs(
     )
 
 
+_PENDING_DIAG_DIR = (_BASE / "logs" / "pending_diagnostics").resolve()
+_PENDING_DIAG_KEEP = 5
+_PENDING_DIAG_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _save_pending_bundle(bundle_name: str, bundle_bytes: bytes) -> str:
+    """上传失败时把诊断包留在本地：只要文件还在，客服就能让用户拷出来。
+
+    保留最近 5 个 / 总量 50MB，避免又变成磁盘炸弹。
+    """
+    try:
+        _PENDING_DIAG_DIR.mkdir(parents=True, exist_ok=True)
+        target = _PENDING_DIAG_DIR / bundle_name
+        target.write_bytes(bundle_bytes)
+        files = sorted(_PENDING_DIAG_DIR.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+        total = 0
+        for idx, f in enumerate(files):
+            size = f.stat().st_size
+            total += size
+            if idx >= _PENDING_DIAG_KEEP or total > _PENDING_DIAG_MAX_BYTES:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+        return str(target)
+    except Exception as exc:
+        logger.warning("[diagnostics] keep local bundle failed: %s", exc)
+        return ""
+
+
+@router.post("/api/logs/export-diagnostics", summary="Build a diagnostic bundle locally (no upload)")
+async def export_logs_diagnostics() -> dict:
+    loop = asyncio.get_running_loop()
+    bundle_name, bundle_bytes, summary = await loop.run_in_executor(None, _build_diagnostic_bundle)
+    path = _save_pending_bundle(bundle_name, bundle_bytes)
+    return {"ok": bool(path), "path": path, "size": len(bundle_bytes), "files": summary.get("files", [])}
+
+
 @router.post("/api/logs/upload-diagnostics", summary="Build and upload a redacted diagnostic bundle")
 async def upload_logs_diagnostics(
     request: Request,
@@ -492,11 +530,20 @@ async def upload_logs_diagnostics(
                         raise
                 await asyncio.sleep(1.0 if attempt == 0 else 2.0)
     except httpx.HTTPError as e:
-        logger.warning("[diagnostics] upload failed after retries url=%s err=%s", url, last_error or e)
-        raise HTTPException(status_code=502, detail=f"diagnostic upload failed: {e}") from e
+        local_path = _save_pending_bundle(bundle_name, bundle_bytes)
+        logger.warning("[diagnostics] upload failed after retries url=%s err=%s local=%s",
+                       url, last_error or e, local_path)
+        raise HTTPException(
+            status_code=502,
+            detail=f"diagnostic upload failed: {e}; 本地已保留诊断包：{local_path or '(保存失败)'}",
+        ) from e
 
     if resp is None:
-        raise HTTPException(status_code=502, detail=f"diagnostic upload failed: {last_error or 'no response'}")
+        local_path = _save_pending_bundle(bundle_name, bundle_bytes)
+        raise HTTPException(
+            status_code=502,
+            detail=f"diagnostic upload failed: {last_error or 'no response'}; 本地已保留诊断包：{local_path or '(保存失败)'}",
+        )
 
     try:
         payload = resp.json()
@@ -504,7 +551,11 @@ async def upload_logs_diagnostics(
         payload = {"detail": resp.text[:1000]}
     if resp.status_code >= 400:
         detail = payload.get("detail") if isinstance(payload, dict) else None
-        raise HTTPException(status_code=resp.status_code, detail=detail or "diagnostic upload rejected")
+        local_path = _save_pending_bundle(bundle_name, bundle_bytes)
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"{detail or 'diagnostic upload rejected'}; 本地已保留诊断包：{local_path or '(保存失败)'}",
+        )
 
     logger.info(
         "[diagnostics] uploaded bundle=%s size=%s diagnostic_id=%s",

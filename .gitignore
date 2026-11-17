@@ -122,3 +122,6 @@ static/hifly_avatars/
 
 # CutCLI template fonts: TOS/build artifacts, not Git
 static/fonts/
+
+publisher/agent_traces/
+logs/pending_diagnostics/

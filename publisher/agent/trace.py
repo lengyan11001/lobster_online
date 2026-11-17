@@ -12,6 +12,53 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parents[2] / "publisher" / "agent_traces"
+# 2026-11-17：trace 会写 jsonl + 截图，之前没有保留策略，长期会无限增长
+#（也会被打进客户端代码包/诊断包）。只保留最近 7 天、总量不超过 200MB。
+_TRACE_KEEP_DAYS = 7
+_TRACE_MAX_BYTES = 200 * 1024 * 1024
+
+
+def _prune_traces() -> None:
+    try:
+        if not _ROOT.is_dir():
+            return
+        cutoff = datetime.now().timestamp() - _TRACE_KEEP_DAYS * 86400
+        days = [d for d in _ROOT.iterdir() if d.is_dir()]
+        for d in days:
+            try:
+                if d.stat().st_mtime < cutoff:
+                    for f in d.glob("*"):
+                        try:
+                            f.unlink()
+                        except OSError:
+                            pass
+                    d.rmdir()
+            except OSError:
+                continue
+        # 总量兜底：从最旧的开始删
+        days = sorted([d for d in _ROOT.iterdir() if d.is_dir()], key=lambda d: d.name)
+        total = 0
+        for d in days:
+            try:
+                total += sum(f.stat().st_size for f in d.glob("*") if f.is_file())
+            except OSError:
+                continue
+        for d in days:
+            if total <= _TRACE_MAX_BYTES:
+                break
+            try:
+                size = sum(f.stat().st_size for f in d.glob("*") if f.is_file())
+                for f in d.glob("*"):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+                d.rmdir()
+                total -= size
+            except OSError:
+                continue
+    except Exception:
+        pass
 
 
 class TraceWriter:
@@ -24,6 +71,7 @@ class TraceWriter:
         self.dir = _ROOT / self.started_at.strftime("%Y%m%d")
         self.path = self.dir / f"{self.trace_id}.jsonl"
         try:
+            _prune_traces()
             self.dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             self.path = Path("")

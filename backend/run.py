@@ -48,8 +48,8 @@ try:
     _file_handler = RotatingFileHandler(
         _log_file,
         mode="a",
-        maxBytes=50 * 1024 * 1024,
-        backupCount=3,
+        maxBytes=20 * 1024 * 1024,
+        backupCount=2,
         encoding="utf-8",
     )
     _file_handler.setLevel(_log_level)
