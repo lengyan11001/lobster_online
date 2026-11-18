@@ -22377,7 +22377,20 @@ def _agent_send_fallback(account_id: str, peer_id: str, text: str, *, search_key
                 peer_id, opened.layer, opened.error,
             )
             return None
-        sent = W.send_message(str(text), to=str(peer_id))
+        # 2026-11-18：验证口径统一 —— 用引擎自己的可见消息快照，
+        # 不再靠 robot 轮询聊天区文本（两套判定会得出不同结论）。
+        _verify_hook = None
+        try:
+            _wx = _get_wxauto4_client(account_id)
+            _before = _wxauto_visible_message_snapshot(_wx)
+
+            def _verify_hook(probe: str) -> bool:  # type: ignore[misc]
+                return _wxauto_snapshot_has_new_outbound(
+                    _before, _wxauto_visible_message_snapshot(_wx), probe
+                )
+        except Exception as _exc:
+            logger.debug("[native-wechat] engine snapshot verifier unavailable: %s", str(_exc)[:120])
+        sent = W.send_message(str(text), to=str(peer_id), verify_hook=_verify_hook)
         # 2026-11-18：robot 的结果必须落进 native_wechat_send.jsonl，
         # 否则用户说"没收到"时，日志里只有"robot 按显示名发送"，没有结果可查。
         try:
@@ -22415,26 +22428,35 @@ def _peer_display_name(account_id: str, peer_id: str) -> str:
     key = str(peer_id or "").strip()
     if not key:
         return ""
+    def _usable(value: Any) -> str:
+        text = str(value or "").strip()
+        # 2026-11-18：历史脏数据里存在 display_name == wxid 的 peer 行
+        # （例如 eiaiyuangong -> eiaiyuangong），那不是会话标题，不能拿去做
+        # 「打开后核对会话名」，否则 robot 永远判定 chat_name_mismatch。
+        if not text or text.casefold() == key.casefold():
+            return ""
+        return text
+
     try:
         with _connect() as conn:
             row = conn.execute(
                 "select display_name from wechat_peers where account_id=? and peer_id=? limit 1",
                 (str(account_id or ""), key),
             ).fetchone()
-            if row and str(row[0] or "").strip():
-                return str(row[0]).strip()
+            if row and _usable(row[0]):
+                return _usable(row[0])
             row = conn.execute(
                 "select display_name from wechat_peers where peer_id=? or display_name=? limit 1",
                 (key, key),
             ).fetchone()
-            if row and str(row[0] or "").strip():
-                return str(row[0]).strip()
+            if row and _usable(row[0]):
+                return _usable(row[0])
             row = conn.execute(
-                "select display_name from wechat_contacts where contact_key=? or wx_no=? limit 1",
+                "select display_name, contact_key from wechat_contacts where contact_key=? or wx_no=? limit 1",
                 (key, key),
             ).fetchone()
-            if row and str(row[0] or "").strip():
-                return str(row[0]).strip()
+            if row:
+                return _usable(row[0]) or _usable(row[1])
     except Exception as exc:
         logger.debug("[native-wechat] resolve display name failed: %s", exc)
     return ""
@@ -22470,14 +22492,29 @@ def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict
     target = str(peer_id or "").strip()
     if not target:
         return None
+    # 2026-11-18 用户口径：微信 ID 唯一，禁止按昵称搜索。
+    # 传进来是显示名时，先用本地通讯录做唯一映射；映射不出来就跳过，
+    # 由上层报"缺微信号"，绝不按昵称盲搜（同名群：军争 / 军争、单鹏程 / 单鹏程）。
     if _looks_like_wechat_id(target):
-        resolved = _peer_display_name(account_id, target)
-        if not resolved:
-            logger.info("[native-wechat] robot 跳过：wxid 未能解析成显示名 peer=%s", target)
+        wxid = target
+        resolved = _peer_display_name(account_id, wxid) or wxid
+    else:
+        wxid = _resolve_unique_local_contact_wx_no(account_id, target)
+        resolved = target
+        if not _looks_like_wechat_id(wxid):
+            logger.info("[native-wechat] robot 跳过：显示名未唯一映射到微信号 name=%s", target)
+            try:
+                _send_path_debug(
+                    account_id,
+                    stage="robot_skip_no_wxid",
+                    driver="robot_send",
+                    target=target,
+                )
+            except Exception:
+                pass
             return None
-        logger.info("[native-wechat] robot 用 wxid 搜、按显示名核对 peer=%s -> %s", target, resolved)
-        return _robot_call(account_id, resolved, text, search_key=target)
-    return _robot_call(account_id, target, text)
+    logger.info("[native-wechat] robot 用 wxid 搜、按显示名核对 peer=%s -> %s", wxid, resolved)
+    return _robot_call(account_id, resolved, text, search_key=wxid)
 
 
 def _send_text_local_slow(
@@ -22487,6 +22524,31 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
+    raw_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+    driver_name = str(raw_meta.get("driver") or "").strip()
+    peer_id = str(peer_id or "").strip()
+    # 2026-11-18：发送身份统一成微信号。传进来是显示名时先在本地通讯录做唯一映射；
+    # 映射不到就明确报错，绝不按昵称搜索（同名群会发错人）。
+    if (
+        peer_id
+        and not use_current_chat
+        and driver_name != "native_wechat_group_welcome"
+        and not _looks_like_wechat_id(peer_id)
+    ):
+        resolved_wxid = _resolve_unique_local_contact_wx_no(account_id, peer_id)
+        if _looks_like_wechat_id(resolved_wxid):
+            _write_auto_reply_diagnostic(
+                "send_identity_resolved",
+                account_id=account_id,
+                target_display_name=peer_id,
+                wechat_id=resolved_wxid,
+                reason="local_contact_unique_mapping",
+            )
+            peer_id = resolved_wxid
+        else:
+            raise RuntimeError(
+                f"未找到「{peer_id}」对应的微信号，已跳过发送（禁止按昵称搜索；请先同步通讯录）"
+            )
     # 2026-11-17：robot 优先。微信 4.x 自绘输入框读不回内容，老链路会"打进去了但判定失败"，
     # 反复重试还会把同一句话打多遍。robot 有快照回读，先走它。
     _robot = _robot_send_first(account_id, peer_id, text)
@@ -22506,7 +22568,14 @@ def _send_text_local_slow(
     except RuntimeError as exc:
         # 老链路失败：robot 会先确认当前会话就是目标，再清空/输入/回车/回读，
         # 不会重复打字；只有 robot 也失败才把原始错误抛出去。
-        fallback = _agent_send_fallback(account_id, peer_id, text)
+        # peer_id 已在上游统一成 wxid：robot 的 open_chat 需要「显示名 + wxid 搜索键」
+        # 两个参数，直接把 wxid 当显示名传进去会永远核对不上会话标题。
+        fallback = _agent_send_fallback(
+            account_id,
+            _peer_display_name(account_id, peer_id) or peer_id,
+            text,
+            search_key=peer_id,
+        )
         if fallback is not None:
             return fallback
         raise

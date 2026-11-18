@@ -1,6 +1,7 @@
 """微信操作：每个 Op 都先过 surface 闸门，再用快照差异验证。"""
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -191,16 +192,21 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: s
     #   轮询窗口放到 timeout*1.5（默认 12s）→ 仍不行就点第一条匹配的搜索结果。
     # 2026-11-18：按用户口径，微信 ID 是唯一的 —— 先用 wxid 搜；
     # 搜不到（老号/未同步 wxid）再退回按显示名搜。两轮都走"只点联系人分组"的兜底。
-    # 2026-11-18：微信 ID 唯一 —— 先按 wxid 搜；wxid 搜不到再退回显示名。
-    # 只按名字搜会撞到同名群聊（军争 / 军争、单鹏程 / 单鹏程、军争…），
-    # 所以 wxid 永远是第一选择，打开后统一按显示名核对。
-    _sq = str(search_key or "").strip()
-    rounds: List[str] = []
-    if _sq and _sq != target:
-        rounds = [_sq, target]
-    else:
-        rounds = [target]
-
+    # 2026-11-18：微信 ID 唯一 —— 有 wxid 就只按 wxid 搜，**不再退回去搜昵称**
+    # （按昵称会撞同名群：军争 / 军争、单鹏程 / 单鹏程、军争…）。
+    # 点结果这件事直接用引擎里那套已验证的实现：
+    #   _find_local_contact_search_result(root, target) 只认「联系人」分组的第一条，
+    #   避开「搜索网络结果」和群聊。
+    # 2026-11-18：没有 wxid 就不搜。只有 search_key（或 target 本身）
+    # 长得像微信号时才允许输入搜索框；显示名一律拒绝，避免同名群/同名好友。
+    query = str(search_key or "").strip()
+    if not query and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{5,27}", target):
+        query = target
+    if not query:
+        res.layer, res.error = "precondition", "wxid_required"
+        _trace("robot_open_failed", target=target, error="wxid_required")
+        return res
+    hwnd = int(getattr(win, "handle", 0) or 0)
     box = _find_control(win, "搜索", region="sessions") or _find_control(win, "搜索")
     if box is not None:
         try:
@@ -218,52 +224,77 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: s
             res.layer, res.error = "precondition", "window_not_foreground"
             _trace("robot_open_failed", target=target, error="window_not_foreground")
             return res
+        typed = False
+        try:
+            from pywinauto import keyboard
+            from publisher.agent.desktop import type_text
 
-        for round_idx, query in enumerate(rounds):
-            if round_idx > 0:
-                _trace("robot_search_retry_display_name", target=target, query=query)
+            box.click_input()
+            time.sleep(0.15)
+            keyboard.send_keys("^a")
+            keyboard.send_keys("{DELETE}")
+            typed = bool(type_text(query))
+        except Exception:
             typed = False
+        if not typed:
             try:
                 from pywinauto import keyboard
-                from publisher.agent.desktop import type_text
 
-                box.click_input()
-                time.sleep(0.15)
-                keyboard.send_keys("^a")
-                keyboard.send_keys("{DELETE}")
-                typed = bool(type_text(query))
+                keyboard.send_keys(query, with_spaces=True)
             except Exception:
-                typed = False
-            if not typed:
-                try:
-                    from pywinauto import keyboard
+                pass
+        _trace("robot_search_typed", target=target, query=query, typed=typed)
 
-                    keyboard.send_keys(query, with_spaces=True)
+        # 1) 优先用引擎的实现：只点「联系人」分组第一条
+        node = None
+        try:
+            from backend.app.services.native_wechat_engine import (  # type: ignore
+                _find_local_contact_search_result,
+                _uia_click,
+                _uia_main_root,
+            )
+
+            deadline = time.monotonic() + max(4.0, float(timeout))
+            while time.monotonic() < deadline:
+                node = _find_local_contact_search_result(_uia_main_root(hwnd), target)
+                if node is not None:
+                    break
+                time.sleep(0.25)
+            if node is not None:
+                _uia_click(node)
+                wait_until = time.monotonic() + max(3.0, float(timeout))
+                while time.monotonic() < wait_until:
+                    time.sleep(0.2)
+                    if _current_chat_name(win) == target:
+                        res.after = S.snapshot_desktop(win).to_dict()
+                        res.ok = True
+                        res.evidence.update({"via": "engine_contact_first", "query": query})
+                        _trace("robot_open_ok", target=target, via="engine_contact_first", query=query)
+                        return res
+        except Exception as exc:
+            _trace("robot_engine_search_failed", target=target, error=str(exc)[:120])
+
+        # 2) 引擎那条没成：仍按 wxid 回车（最多 3 次），但**不换昵称**
+        deadline = time.monotonic() + max(4.0, float(timeout))
+        next_enter = time.monotonic() + 0.8
+        pressed = 0
+        while time.monotonic() < deadline:
+            if pressed < 3 and time.monotonic() >= next_enter:
+                try:
+                    from pywinauto import keyboard as _kb
+
+                    _kb.send_keys("{ENTER}")
                 except Exception:
                     pass
-            _trace("robot_search_typed", target=target, query=query, typed=typed)
-            deadline = time.monotonic() + max(6.0, float(timeout) * 1.5)
-            next_enter = time.monotonic() + 1.0
-            pressed = 0
-            while time.monotonic() < deadline:
-                if pressed < 3 and time.monotonic() >= next_enter:
-                    try:
-                        from pywinauto import keyboard as _kb
-
-                        _kb.send_keys("{ENTER}")
-                    except Exception:
-                        pass
-                    pressed += 1
-                    next_enter = time.monotonic() + 2.0
-                time.sleep(0.2)
-                if _current_chat_name(win) == target:
-                    res.after = S.snapshot_desktop(win).to_dict()
-                    res.ok = True
-                    res.evidence["via"] = "search_enter"
-                    res.evidence["enter_presses"] = pressed
-                    res.evidence["query"] = query
-                    _trace("robot_open_ok", target=target, via="search_enter", presses=pressed, query=query)
-                    return res
+                pressed += 1
+                next_enter = time.monotonic() + 2.0
+            time.sleep(0.2)
+            if _current_chat_name(win) == target:
+                res.after = S.snapshot_desktop(win).to_dict()
+                res.ok = True
+                res.evidence.update({"via": "search_enter", "enter_presses": pressed, "query": query})
+                _trace("robot_open_ok", target=target, via="search_enter", presses=pressed, query=query)
+                return res
 
         # 兜底 1：只在"联系人"分组里点（这是以前那个流程）
         try:
@@ -345,7 +376,8 @@ def read_recent(limit: int = 8, window: Any = None) -> Result:
 @spec(name="wechat.send_message", platform="wechat", surface=S.WECHAT_CHAT,
       summary="在已确认的会话里发一条文本", precondition="当前会话 == 目标名",
       postcondition="快照 messages 新增该文本", destructive=True, params=["text", "to"])
-def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0) -> Result:
+def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0,
+                 verify_hook: Any = None) -> Result:
     res = Result(op="wechat.send_message")
     body = str(text or "")
     if not body.strip():
@@ -374,6 +406,12 @@ def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0) -
         res.layer, res.error = "precondition", "chat_input_not_found"
         return res
     before_msgs = set(snap.anchors.get("messages") or [])
+    if callable(verify_hook):
+        # 让调用方在"打字之前"抓基线（引擎用自己的可见消息快照做 before/after）
+        try:
+            verify_hook(None)
+        except Exception:
+            pass
     try:
         from pywinauto import keyboard
 
@@ -389,11 +427,22 @@ def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0) -
     except Exception as exc:
         res.layer, res.error = "action", f"type_failed:{type(exc).__name__}"
         return res
-    probe = body.strip()[:12]
+    probe = body.strip()
     item_probe = body.strip()[:10]
     deadline = time.monotonic() + max(6.0, float(timeout))
     while time.monotonic() < deadline:
         time.sleep(0.4)
+        if callable(verify_hook):
+            # 2026-11-18：验证交给调用方（引擎用自己的可见消息快照，判定口径与老链路一致）
+            try:
+                if verify_hook(probe):
+                    res.ok = True
+                    res.evidence["matched_text"] = probe
+                    res.evidence["matched_via"] = "engine_snapshot"
+                    return res
+            except Exception:
+                pass
+            continue
         after = S.snapshot_desktop(win)
         msgs = after.anchors.get("messages") or []
         new_msg = [m for m in msgs if m not in before_msgs and probe in m]
