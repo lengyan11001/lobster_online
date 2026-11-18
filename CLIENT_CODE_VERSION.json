@@ -1,7 +1,7 @@
 {
-  "version": "2.0.301",
-  "build": 608,
-  "applied_at": "2026-11-18T13:55:32+08:00",
-  "note": "wxid 优先 + 昵称兜底（默认 wxid 搜不到）；robot 发送身份统一",
-  "bundle_sha256": "8e7d6a7ebb75c1120e9b32bd0803313273afae3876def1b7e19ebca4b5a652c1"
+  "version": "2.0.302",
+  "build": 609,
+  "applied_at": "2026-11-18T14:08:58+08:00",
+  "note": "单行会话抓取失败不拖垮整轮；wxid 优先 + 默认 wxid 昵称兜底",
+  "bundle_sha256": "826d739dc2f64d2d98ecf80603fdc356149d2b979783c4782a4a312310a936da"
 }
