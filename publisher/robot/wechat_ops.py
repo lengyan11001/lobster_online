@@ -84,6 +84,49 @@ def _window_hung(window: Any) -> bool:
     except Exception:
         return False
 
+def _click_contact_group_result(window: Any, expect_name: str, *, tries: int = 3) -> bool:
+    """只点"联系人"分组里的结果行（对齐引擎里 selection_scope=联系人:first_matching_result）。
+
+    搜索结果里同名群聊一堆（军争、单鹏程 / 单鹏程、军争…），按名字点很容易落到群里。
+    这里按 UIA 里的顺序找"联系人"分组标题，然后只在该分组内的前几行里点，并核对会话名。
+    """
+    from publisher.agent.desktop import _chat_left, _iter_controls, _rect, _visible
+
+    rect = _rect(window) or (0, 0, 0, 0)
+    chat_left = _chat_left(window, rect[0], rect[2] - rect[0])
+    rows = []
+    for c, info in _iter_controls(window):
+        try:
+            if str(info.control_type or "") != "ListItem" or not _visible(c):
+                continue
+            if int(c.rectangle().left) >= chat_left:
+                continue
+            rows.append((c, " ".join(str(info.name or "").split())))
+        except Exception:
+            continue
+    start = None
+    for idx, (_c, name) in enumerate(rows):
+        if name == "联系人":
+            start = idx + 1
+            break
+    if start is None:
+        return False
+    tried = 0
+    for c, name in rows[start:]:
+        if name in {"群聊", "会话", "公众号", "服务号", "聊天记录"}:
+            break  # 已经走出"联系人"分组
+        if tried >= tries:
+            break
+        tried += 1
+        try:
+            c.click_input()
+            time.sleep(1.0)
+            if _current_chat_name(window) == expect_name:
+                return True
+        except Exception:
+            continue
+    return False
+
 def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: str = "") -> Result:
     res = Result(op="wechat.open_chat")
     target = str(name or "").strip()
@@ -209,7 +252,16 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: s
                 res.evidence["enter_presses"] = pressed
                 _trace("robot_open_ok", target=target, via="search_enter", presses=pressed)
                 return res
-        # 兜底：点搜索结果里第一条匹配的行
+        # 兜底 1：只在"联系人"分组里点（这是以前那个流程）
+        try:
+            if _click_contact_group_result(win, target):
+                res.ok = True
+                res.evidence["via"] = "contact_group_click"
+                _trace("robot_open_ok", target=target, via="contact_group_click")
+                return res
+        except Exception:
+            pass
+        # 兜底 2：点搜索结果里第一条匹配的行
         try:
             from publisher.agent.desktop import _chat_left, _iter_controls, _visible
 
