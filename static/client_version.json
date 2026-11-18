@@ -1,7 +1,7 @@
 {
-  "version": "2.0.314",
-  "build": 621,
-  "applied_at": "2026-11-18T17:46:00+08:00",
-  "note": "watchdog 不再杀启动中的后端（白屏3分半根因）",
-  "bundle_sha256": "daccb0bf20a6571d39597749ef39a64188b49d198e6602f378aa072450106f67"
+  "version": "2.0.315",
+  "build": 623,
+  "applied_at": "2026-11-18T18:19:45+08:00",
+  "note": "过滤小白窗口 + 启动前清理旧 launcher",
+  "bundle_sha256": "99ffcd017f0d46aae5853f9e4196086a42195606cc0898e62452256d0b071e2e"
 }
