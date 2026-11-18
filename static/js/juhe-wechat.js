@@ -2164,7 +2164,18 @@
       );
       if (input) input.focus();
       if (payload.auto_submit && state.momentsFiles.length) {
-        setTimeout(function() { submitMomentsPublish(); }, 150);
+        var tryAutoSubmit = function(attempt) {
+          if (state.momentsPreparing) {
+            if (attempt < 40) setTimeout(function() { tryAutoSubmit(attempt + 1); }, 250);
+            return;
+          }
+          if (!activeAccountId() && attempt < 20) {
+            setTimeout(function() { tryAutoSubmit(attempt + 1); }, 250);
+            return;
+          }
+          submitMomentsPublish();
+        };
+        setTimeout(function() { tryAutoSubmit(0); }, 150);
       }
     }).catch(function(err) {
       state.momentsPreparing = false;
