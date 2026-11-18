@@ -81,38 +81,89 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
             except Exception:
                 pass
             break
+    # 轮询用便宜的"当前会话名"检查；整页快照只在命中后取一次
+    # （整页快照要扫 800 个控件 + 消息列表，真机上单次就要 1 秒多，
+    #   放在轮询里会把 2 秒的切换拖成 14 秒）
+    from publisher.agent.desktop import _current_chat_name
+
     deadline = time.monotonic() + max(3.0, float(timeout))
     while time.monotonic() < deadline:
-        after = S.snapshot_desktop(win)
-        if after.anchors.get("chat") == target:
-            res.after = after.to_dict()
+        if _current_chat_name(win) == target:
+            res.after = S.snapshot_desktop(win).to_dict()
             res.ok = True
-            res.evidence["via"] = "session_row" if snap.items else "unknown"
+            res.evidence["via"] = "session_row"
             return res
-        time.sleep(0.3)
-    # 搜索 + 回车
+        time.sleep(0.2)
+    # 搜索 + 回车（2026-11-18 加固）
+    # 真机实测：微信搜索索引慢时，按一次回车 + 固定等 1.5s 会直接超时判失败
+    # （表现为 chat_name_mismatch，客户侧就是"没回复"）。现在：
+    #   剪贴板输入（名字里有空格/表情不会被打歪）→ 最多按 3 次回车 →
+    #   轮询窗口放到 timeout*1.5（默认 12s）→ 仍不行就点第一条匹配的搜索结果。
     box = _find_control(win, "搜索", region="sessions") or _find_control(win, "搜索")
     if box is not None:
+        typed = False
         try:
             from pywinauto import keyboard
+            from publisher.agent.desktop import type_text
 
             box.click_input()
+            time.sleep(0.15)
             keyboard.send_keys("^a")
             keyboard.send_keys("{DELETE}")
-            keyboard.send_keys(target, with_spaces=True)
-            time.sleep(1.5)
-            keyboard.send_keys("{ENTER}")
+            typed = bool(type_text(target))
         except Exception:
-            pass
-        deadline = time.monotonic() + max(3.0, float(timeout))
+            typed = False
+        if not typed:
+            try:
+                from pywinauto import keyboard
+
+                keyboard.send_keys(target, with_spaces=True)
+            except Exception:
+                pass
+        deadline = time.monotonic() + max(6.0, float(timeout) * 1.5)
+        next_enter = time.monotonic() + 1.0
+        pressed = 0
         while time.monotonic() < deadline:
-            after = S.snapshot_desktop(win)
-            if after.anchors.get("chat") == target:
-                res.after = after.to_dict()
+            if pressed < 3 and time.monotonic() >= next_enter:
+                try:
+                    from pywinauto import keyboard as _kb
+
+                    _kb.send_keys("{ENTER}")
+                except Exception:
+                    pass
+                pressed += 1
+                next_enter = time.monotonic() + 2.0
+            time.sleep(0.2)
+            if _current_chat_name(win) == target:
+                res.after = S.snapshot_desktop(win).to_dict()
                 res.ok = True
                 res.evidence["via"] = "search_enter"
+                res.evidence["enter_presses"] = pressed
                 return res
-            time.sleep(0.3)
+        # 兜底：点搜索结果里第一条匹配的行
+        try:
+            from publisher.agent.desktop import _chat_left, _iter_controls, _visible
+
+            rect = _rect(win) or (0, 0, 0, 0)
+            chat_left = _chat_left(win, rect[0], rect[2] - rect[0])
+            for c, info in _iter_controls(win):
+                try:
+                    if str(info.control_type or "") != "ListItem" or not _visible(c):
+                        continue
+                    if int(c.rectangle().left) >= chat_left:
+                        continue
+                    if str(info.name or "").strip().startswith(target):
+                        c.click_input()
+                        time.sleep(1.2)
+                        if S.snapshot_desktop(win).anchors.get("chat") == target:
+                            res.ok = True
+                            res.evidence["via"] = "search_result_click"
+                            return res
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
     after = S.snapshot_desktop(win)
     res.after = after.to_dict()
     res.layer, res.error = "verify", "chat_name_mismatch"
