@@ -1024,11 +1024,14 @@ async def replace_multi_clip_audio(
             audio_path, _, media_type = resolve_asset_path(
                 db, current_user.id, str(body.audio_asset_id).strip()
             )
-            if media_type != "video":
-                raise HTTPException(status_code=400, detail="原声源不是视频")
-            audio_info = _probe_video(audio_path, ffprobe)
-            if not bool(audio_info["has_audio"]):
-                raise HTTPException(status_code=400, detail="原声源视频没有音频")
+            if media_type not in {"video", "audio"}:
+                raise HTTPException(status_code=400, detail="原声源不是视频或音频")
+            if media_type == "audio":
+                audio_info = _probe_audio(audio_path, ffprobe)
+            else:
+                audio_info = _probe_video(audio_path, ffprobe)
+                if not bool(audio_info["has_audio"]):
+                    raise HTTPException(status_code=400, detail="原声源视频没有音频")
         else:
             bgm_path = _download_bgm(str(body.bgm_url).strip(), work_dir)
 
