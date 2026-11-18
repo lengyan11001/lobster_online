@@ -30,3 +30,13 @@ def test_douyin_tag_list_splits_legacy_hash_and_caps():
     assert _douyin_tag_list("#热点 #干货, 测评") == ["热点", "干货", "测评"]
     assert _douyin_tag_list("a, a, b") == ["a", "b"]
     assert _douyin_tag_list("a,b,c,d,e,f") == ["a", "b", "c", "d", "e"]
+
+
+def test_douyin_merge_description_tags_keeps_total_at_5():
+    import re
+
+    from skills.douyin_publish.driver import _douyin_merge_description_tags
+
+    text = _douyin_merge_description_tags("正文 #已有1 #已有2", "a,b,c,d")
+    assert len(re.findall(r"#[^\s#]+", text)) == 5
+    assert text.endswith("#a #b #c")

@@ -53,6 +53,19 @@ def _douyin_tag_list(tags: str) -> List[str]:
     return out
 
 
+def _douyin_merge_description_tags(description: str, tags: str) -> str:
+    """把标签合并进描述，并保证整段描述的话题总数不超过平台上限 5 个。"""
+    text = str(description or "")
+    existing = len(re.findall(r"#[^\s#]+", text))
+    remaining = max(0, _DOUYIN_MAX_TAGS - existing)
+    tag_list = _douyin_tag_list(tags)[:remaining]
+    if tag_list:
+        text = (text.rstrip() + " " + " ".join(f"#{t}" for t in tag_list)).strip()
+    if existing:
+        logger.info("[DOUYIN] 描述已含 %d 个话题，本次最多再追加 %d 个标签", existing, remaining)
+    return text
+
+
 def _douyin_video_wait_rounds(file_size: int) -> int:
     """大视频上传/跳转、转码等待更久：约每 8MB 多一轮，每轮 2s，上限 120 轮（约 4 分钟）。"""
     return min(120, 30 + int(max(0, file_size) / (8 * 1024 * 1024)))
@@ -3233,11 +3246,7 @@ class DouyinDriver(BaseDriver):
             _step("填写标题", False, found=bool(title_input))
 
         # ── Fill description ──
-        text = description or title or ""
-        if tags:
-            tag_list = _douyin_tag_list(tags)
-            if tag_list:
-                text += " " + " ".join(f"#{t}" for t in tag_list)
+        text = _douyin_merge_description_tags(description or title or "", tags)
 
         content_editor = await _scroll_and_find(page, [
             '.zone-container[contenteditable="true"]',
@@ -3630,11 +3639,7 @@ class DouyinDriver(BaseDriver):
                 _step("填写标题", False)
 
         # ── Description ──
-        text = description or ""
-        if tags:
-            tag_list = _douyin_tag_list(tags)
-            if tag_list:
-                text += " " + " ".join(f"#{t}" for t in tag_list)
+        text = _douyin_merge_description_tags(description or "", tags)
 
         zone = await _scroll_and_find(page, [
             '.zone-container[contenteditable="true"]',
