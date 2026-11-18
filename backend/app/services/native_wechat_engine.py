@@ -5040,9 +5040,15 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
             # keep the explicit action for callers that use the prefilter
             # independently.
             return {"action": "stop", "reason": "last_message_over_24h"}
-    known_type = _normalize_local_chat_type(
-        session.get("chat_type") or _known_local_peer_chat_type(account_id, peer_id)
-    )
+    # 2026-11-18：扫描阶段经常给 "unknown"（wxauto4 不提供类型时不猜）。
+    # 以前 "unknown" 是 truthy，直接把库里的 friend 覆盖掉了 → 下游只能靠文本猜 → 误判成群。
+    # 现在把 unknown/空 当作"没有信息"，回落到本地库（wechat_peers / 通讯录同步结果）。
+    session_chat_type = _normalize_local_chat_type(session.get("chat_type"))
+    if session_chat_type in {"", "unknown", "none", "null"}:
+        session_chat_type = _normalize_local_chat_type(
+            _known_local_peer_chat_type(account_id, peer_id)
+        )
+    known_type = session_chat_type
     # 2026-11-18：区分"确定的群/公众号"和"只是预览看起来像群消息"。
     # 现场：军争 最后一条是 "robot自开会话 12:27:48"，冒号让 _looks_like_group_session
     # 判成群 → 直接 skip_group → 客户侧"不回复"。
