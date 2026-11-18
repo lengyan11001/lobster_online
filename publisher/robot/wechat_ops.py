@@ -29,6 +29,10 @@ def list_sessions(window: Any = None, limit: int = 20) -> Result:
         res.layer, res.error = "precondition", "wechat_window_not_found"
         return res
     activate_window(win)
+    if _window_hung(win):
+        res.layer, res.error = "precondition", "wechat_window_hung"
+        _trace("robot_open_failed", target=target, error="wechat_window_hung")
+        return res
     snap = _ensure_surface(win, S.WECHAT_CHAT, res)
     if snap is None:
         return res
@@ -44,6 +48,42 @@ def list_sessions(window: Any = None, limit: int = 20) -> Result:
 @spec(name="wechat.open_chat", platform="wechat", surface=S.WECHAT_CHAT,
       summary="切到指定会话", precondition="当前在聊天页",
       postcondition="快照 anchors.chat == 目标名", params=["name"])
+def _trace(cap: str, **fields: Any) -> None:
+    """robot 每一步都落一行，避免再出现"日志停在 reply_send_started"的黑盒。"""
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+        from pathlib import Path as _Path
+
+        log = _Path(__file__).resolve().parents[2] / "logs" / "native_wechat_send.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        row = {"ts": _dt.now().strftime("%Y-%m-%dT%H:%M:%S"), "stage": cap, "driver": "robot"}
+        for k, v in fields.items():
+            if isinstance(v, (int, float, bool, type(None))):
+                row[k] = v
+            else:
+                row[k] = str(v)[:200]
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+def _window_hung(window: Any) -> bool:
+    """微信主窗口无响应时，任何 UIA/COM 调用都会长时间阻塞。
+
+    客户机上反复出现的就是这个：本机能发（窗口正常响应），
+    客户机卡在一个 COM 调用上几分钟不动。这里先判一次，避免把整轮拖死。
+    """
+    try:
+        import win32gui
+
+        hwnd = int(getattr(window, "handle", 0) or 0)
+        if not hwnd:
+            return False
+        return bool(win32gui.IsHungAppWindow(hwnd))
+    except Exception:
+        return False
+
 def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
     res = Result(op="wechat.open_chat")
     target = str(name or "").strip()
@@ -55,6 +95,10 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
         res.layer, res.error = "precondition", "wechat_window_not_found"
         return res
     activate_window(win)
+    if _window_hung(win):
+        res.layer, res.error = "precondition", "wechat_window_hung"
+        _trace("robot_open_failed", target=target, error="wechat_window_hung")
+        return res
     snap = _ensure_surface(win, S.WECHAT_CHAT, res)
     if snap is None:
         return res
@@ -62,7 +106,9 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
         res.after = snap.to_dict()
         res.ok = True
         res.evidence["already_open"] = True
+        _trace("robot_open_already", target=target)
         return res
+    _trace("robot_open_start", target=target, current=snap.anchors.get("chat"), rows=snap.count)
     # 可视行
     for item in snap.items:
         if item.startswith(target):
@@ -92,6 +138,7 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
             res.after = S.snapshot_desktop(win).to_dict()
             res.ok = True
             res.evidence["via"] = "session_row"
+            _trace("robot_open_ok", target=target, via="session_row")
             return res
         time.sleep(0.2)
     # 搜索 + 回车（2026-11-18 加固）
@@ -101,6 +148,23 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
     #   轮询窗口放到 timeout*1.5（默认 12s）→ 仍不行就点第一条匹配的搜索结果。
     box = _find_control(win, "搜索", region="sessions") or _find_control(win, "搜索")
     if box is not None:
+        # 2026-11-18：微信不在前台时，剪贴板粘贴/回车会打到别的窗口上——
+        # 本机能发、客户机发不出去，最常见的就是这一条。
+        try:
+            active = bool(win.is_active())
+        except Exception:
+            active = False
+        if not active:
+            activate_window(win)
+            try:
+                active = bool(win.is_active())
+            except Exception:
+                active = False
+        _trace("robot_search_focus", target=target, active=active)
+        if not active:
+            res.layer, res.error = "precondition", "window_not_foreground"
+            _trace("robot_open_failed", target=target, error="window_not_foreground")
+            return res
         typed = False
         try:
             from pywinauto import keyboard
@@ -120,6 +184,7 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
                 keyboard.send_keys(target, with_spaces=True)
             except Exception:
                 pass
+        _trace("robot_search_typed", target=target, typed=typed)
         deadline = time.monotonic() + max(6.0, float(timeout) * 1.5)
         next_enter = time.monotonic() + 1.0
         pressed = 0
@@ -139,6 +204,7 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
                 res.ok = True
                 res.evidence["via"] = "search_enter"
                 res.evidence["enter_presses"] = pressed
+                _trace("robot_open_ok", target=target, via="search_enter", presses=pressed)
                 return res
         # 兜底：点搜索结果里第一条匹配的行
         try:
@@ -158,6 +224,7 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
                         if S.snapshot_desktop(win).anchors.get("chat") == target:
                             res.ok = True
                             res.evidence["via"] = "search_result_click"
+                            _trace("robot_open_ok", target=target, via="search_result_click")
                             return res
                         break
                 except Exception:
@@ -167,6 +234,7 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
     after = S.snapshot_desktop(win)
     res.after = after.to_dict()
     res.layer, res.error = "verify", "chat_name_mismatch"
+    _trace("robot_open_failed", target=target, current=S.snapshot_desktop(win).anchors.get("chat"), error="chat_name_mismatch")
     return res
 
 
@@ -180,6 +248,10 @@ def read_recent(limit: int = 8, window: Any = None) -> Result:
         res.layer, res.error = "precondition", "wechat_window_not_found"
         return res
     activate_window(win)
+    if _window_hung(win):
+        res.layer, res.error = "precondition", "wechat_window_hung"
+        _trace("robot_open_failed", target=target, error="wechat_window_hung")
+        return res
     snap = _ensure_surface(win, S.WECHAT_CHAT, res)
     if snap is None:
         return res
@@ -210,6 +282,10 @@ def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0) -
         res.layer, res.error = "precondition", "wechat_window_not_found"
         return res
     activate_window(win)
+    if _window_hung(win):
+        res.layer, res.error = "precondition", "wechat_window_hung"
+        _trace("robot_open_failed", target=target, error="wechat_window_hung")
+        return res
     snap = _ensure_surface(win, S.WECHAT_CHAT, res)
     if snap is None:
         return res

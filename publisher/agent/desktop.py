@@ -589,7 +589,21 @@ def type_text(text: str) -> bool:
 
 
 def _chat_input(window: Any) -> Any:
-    """聊天输入框：优先用真机确认的 automation_id=chat_input_field。"""
+    """聊天输入框：优先用真机确认的 automation_id=chat_input_field。
+
+    2026-11-18：先只枚举 Edit 控件（通常 2~5 个），比全量扫 1200 个控件快一个数量级。
+    open_chat 的轮询里每次都要取会话名，慢的这一层会把"2 秒切会话"拖成 13 秒。
+    """
+    try:
+        edits = window.descendants(control_type="Edit")
+        for c in edits[:20]:
+            try:
+                if str(getattr(c.element_info, "automation_id", "") or "") == "chat_input_field":
+                    return c
+            except Exception:
+                continue
+    except Exception:
+        pass
     ctl = _find_control(window, "aid:chat_input_field")
     if ctl is not None:
         return ctl

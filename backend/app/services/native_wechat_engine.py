@@ -22410,19 +22410,8 @@ def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict
             return None
         logger.info("[native-wechat] robot 按显示名发送 peer=%s -> %s", target, resolved)
         target = resolved
-    # 2026-11-18：当前会话不是目标时，先让老链路去"开会话"（它的 ChatWith 更稳），
-    # robot 只在会话已经对上时负责"发送"。否则 robot 要自己搜索切会话，
-    # 真机实测一次 13.6 秒 —— 几十条消息就会拖成几十分钟。
-    try:
-        from publisher.robot.wechat_ops import _win as _robot_win
-        from publisher.agent.desktop import _current_chat_name as _cur_chat
-
-        current = _cur_chat(_robot_win())
-        if current and not (current == target or current.startswith(target)):
-            logger.info("[native-wechat] robot 跳过（当前会话=%s，目标=%s）", current, target)
-            return None
-    except Exception:
-        pass
+    # 2026-11-18：robot 自己负责"开会话 + 发送"（不再因为会话没对上就甩回老链路）。
+    # 老链路在微信 4.x 本来就写不进输入框，甩回去等于不解决问题。
     # 2026-11-18：robot 这一步必须有硬超时。
     # 现场出现过：robot 卡在 open_chat/发送里，reply_send_started 之后几分钟没有任何后续日志，
     # 整轮自动回复被它拖住（客户看到的就是"还是不回复"）。
