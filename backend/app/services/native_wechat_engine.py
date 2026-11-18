@@ -5592,7 +5592,38 @@ async def run_auto_reply_once(
                     )
                     continue
                 else:
-                    if not scanned_wechat_id:
+                    if not scanned_wechat_id and str(session.get("source") or "").startswith("pc_wechat_uia_sessions"):
+                        # wxauto 漏了这条；UIA 可见行还在。按 UIA 行点击打开，
+                        # 再读当前会话（老路由的 UIA 会话读取方式）。
+                        nickname_identity = True
+                        collection_target = peer_id
+                        collection_target_source = "uia_session_row"
+                        log_event(
+                            "session_open_uia_row",
+                            peer_id=peer_id,
+                            display_name=display_name,
+                        )
+                        sync_result = await _run_local_wechat_async(
+                            sync_local_messages,
+                            account_id,
+                            peer_id,
+                            load_more_pages=0,
+                            select_via_uia=True,
+                            uia_session_max_rounds=1,
+                            current_selected=False,
+                            read_chat_info=True,
+                            download_attachments=False,
+                            diagnostic_context={
+                                "account_id": account_id,
+                                "run_id": run_id,
+                                "stage": "collect",
+                                "session_preview": session.get("last_content") or "",
+                                "expected_display_name": display_name,
+                                "nickname_identity": True,
+                                "collection_target_source": "uia_session_row",
+                            },
+                        )
+                    elif not scanned_wechat_id:
                         # 本轮没抓到这一行的页面快照，也没有可用的 wxid。
                         # 不按昵称盲搜（会点错同名会话），跳过这个候选人，
                         # 让下一轮重新扫描；不能因此把整轮自动回复判失败。
@@ -5609,10 +5640,11 @@ async def run_auto_reply_once(
                             reason="scan_capture_missing",
                         )
                         continue
-                    sync_result = await _run_local_wechat_async(
-                        sync_local_messages,
-                        account_id,
-                        scanned_wechat_id,
+                    else:
+                        sync_result = await _run_local_wechat_async(
+                            sync_local_messages,
+                            account_id,
+                            scanned_wechat_id,
                         load_more_pages=0,
                         select_via_uia=not scanned_wechat_id and "@@uia-" in peer_id,
                         uia_session_max_rounds=20,
@@ -10962,7 +10994,6 @@ def _sync_recent_sessions_from_wxauto4(
     capture_attempted: set[str] = set()
     try:
         _ui_progress_tick("scan:go_top")
-        _force_session_list_top(account_id)
         try:
             box.go_top()
             time.sleep(0.15)
@@ -11173,6 +11204,28 @@ def _sync_recent_sessions_from_wxauto4(
                 raise RuntimeError(
                     "微信会话列表读取为空，但界面可见 %d 个会话（wxauto 驱动疑似失效）" % empty_scan_visible
                 )
+        # wxauto GetSession() 在部分窗口/特殊昵称下只返回少量旧会话；
+        # UIA 能看到完整可见行。两者数量对不上时，直接用 UIA 可见会话兜底，
+        # 否则新私聊永远进不了自动回复候选。
+        uia_visible = _uia_visible_session_count(account_id)
+        if uia_visible and len(items) < uia_visible:
+            try:
+                uia = _sync_local_sessions_from_uia(account_id, passive=False, recent_only=True)
+                if uia.get("items"):
+                    for _item in uia.get("items") or []:
+                        if isinstance(_item, dict):
+                            _item["source"] = "pc_wechat_uia_sessions_recent"
+                            _item["_uia_visible_fallback"] = True
+                    uia["fallback"] = "uia_visible_sessions"
+                    uia["time_scan"] = False
+                    uia["uia_visible_count"] = uia_visible
+                    logger.info(
+                        "[native-wechat] wxauto sessions=%s < uia=%s, use uia visible rows",
+                        len(items), uia_visible,
+                    )
+                    return uia
+            except Exception as exc:
+                logger.info("[native-wechat] uia session fallback failed: %s", str(exc)[:200])
         return {
             "ok": True,
             "items": items,
@@ -22621,67 +22674,16 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
-    raw_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
-    driver_name = str(raw_meta.get("driver") or "").strip()
-    peer_id = str(peer_id or "").strip()
-    # 2026-11-18：发送身份优先用微信号。传进来是显示名时先在本地通讯录做唯一映射；
-    # 映射不到就保留显示名兜底（微信默认 wxid 搜不到），由 robot 只点「联系人」分组
-    # 并拒绝同名群，避免串到群里。
-    if (
-        peer_id
-        and not use_current_chat
-        and driver_name != "native_wechat_group_welcome"
-        and not _looks_like_wechat_id(peer_id)
-    ):
-        resolved_wxid = _resolve_unique_local_contact_wx_no(account_id, peer_id)
-        if _looks_like_wechat_id(resolved_wxid):
-            _write_auto_reply_diagnostic(
-                "send_identity_resolved",
-                account_id=account_id,
-                target_display_name=peer_id,
-                wechat_id=resolved_wxid,
-                reason="local_contact_unique_mapping",
-            )
-            peer_id = resolved_wxid
-        else:
-            # 微信默认 wxid 搜不到、通讯录也没号：保留显示名兜底（老流程口径）。
-            # open_chat 只会点「联系人」分组第一条并拒绝同名群，不会串到群里。
-            _write_auto_reply_diagnostic(
-                "send_identity_nickname_fallback",
-                account_id=account_id,
-                target_display_name=peer_id,
-                reason="no_wxid_unique_mapping",
-            )
-    # 2026-11-17：robot 优先。微信 4.x 自绘输入框读不回内容，老链路会"打进去了但判定失败"，
-    # 反复重试还会把同一句话打多遍。robot 有快照回读，先走它。
-    _robot = _robot_send_first(account_id, peer_id, text)
-    if _robot is not None:
-        return _robot
-    try:
-        # 2026-11-17：发送不再自动重试 3 次。
-        # 老链路在微信 4.x 读不回输入框内容，每次"重试"都会把同一句话重新打一遍
-        # （客户看到的就是"连续输入几遍但不发送"）。失败一次就直接交给 robot：
-        # robot 会清空输入框、打一遍、回车，并用聊天记录验证。
-        return _run_local_driver_operation(
-            account_id,
-            "发送微信自动回复",
-            lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
-            retry_on_failure=False,
-        )
-    except RuntimeError as exc:
-        # 老链路失败：robot 会先确认当前会话就是目标，再清空/输入/回车/回读，
-        # 不会重复打字；只有 robot 也失败才把原始错误抛出去。
-        # peer_id 已在上游统一成 wxid：robot 的 open_chat 需要「显示名 + wxid 搜索键」
-        # 两个参数，直接把 wxid 当显示名传进去会永远核对不上会话标题。
-        fallback = _agent_send_fallback(
-            account_id,
-            _peer_display_name(account_id, peer_id) or peer_id,
-            text,
-            search_key=peer_id,
-        )
-        if fallback is not None:
-            return fallback
-        raise
+    # 2026-11-18：恢复 2.0.278 的旧发送路由：不经过 robot，直接走引擎
+    # 已验证的「打开会话 -> 粘贴 -> 点击发送按钮 -> 回读」链路。
+    # 老代码 retry_on_failure=True 会在验证失败时重复打字，这里保持 False，
+    # 避免一次失败把同一句话打多遍。
+    return _run_local_driver_operation(
+        account_id,
+        "发送微信自动回复",
+        lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
+        retry_on_failure=False,
+    )
 
 
 def _auto_reply_send_uses_current_chat() -> bool:
