@@ -4359,13 +4359,30 @@ async def _wechat_moments_attachments_from_draft(
     for item in raw_attachments:
         if not isinstance(item, dict):
             continue
-        local_path = str(item.get("local_path") or item.get("path") or "").strip()
-        if local_path:
-            files.append(item)
-            continue
         attachment_asset_id = str(item.get("asset_id") or "").strip()
         attachment_url = str(item.get("source_url") or item.get("url") or "").strip()
         attachment_media_type = str(item.get("media_type") or item.get("kind") or draft.get("media_type") or "").strip()
+        local_path = str(item.get("local_path") or item.get("path") or "").strip()
+        if local_path:
+            candidate = Path(local_path).expanduser()
+            upload_root = native_wechat_engine.native_wechat_upload_dir().resolve()
+            try:
+                inside = candidate.resolve().is_relative_to(upload_root)
+            except AttributeError:
+                inside = str(candidate.resolve()).lower().startswith(str(upload_root).lower() + os.sep)
+            if candidate.is_file() and inside:
+                files.append(item)
+                continue
+            # 旧版本/旧任务可能留下 native_wechat/<uuid>/moments-N.png 这类路径；
+            # 文件已经不存在时绝不能直接丢给微信文件框（用户看到“找不到文件”）。
+            logger.warning(
+                "[H5-WORKFLOW] stale moments attachment path asset_id=%s path=%s",
+                attachment_asset_id[:64], local_path[:240],
+            )
+            if not attachment_asset_id and not attachment_url:
+                raise RuntimeError(
+                    f"朋友圈素材文件不存在：{candidate.name}（旧任务路径已失效，请重新生成或发布）"
+                )
         if attachment_asset_id:
             local = _local_asset_to_native_wechat_attachment(attachment_asset_id)
             if local:
@@ -4458,6 +4475,17 @@ async def _submit_local_publish_draft(
         attachments = await _wechat_moments_attachments_from_draft(draft, headers)
         if not content and not attachments:
             raise RuntimeError("朋友圈发布缺少正文或素材")
+        missing = [
+            str(item.get("filename") or item.get("local_path") or "")
+            for item in attachments
+            if not str(item.get("local_path") or "").strip()
+            or not Path(str(item.get("local_path"))).is_file()
+        ]
+        if missing:
+            raise RuntimeError(
+                "朋友圈素材文件不存在：" + "、".join(name for name in missing if name) +
+                "（旧任务路径已失效，请重新生成或发布）"
+            )
         body = {
             "account_id": str(draft.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
             "content": content,
