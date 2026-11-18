@@ -231,6 +231,33 @@ def _wechat_contact_sync_summary() -> dict:
     return info
 
 
+def _collect_wechat_uia_probe(_nwe: Any) -> list:
+    """只收集窗口/进程/版本这类便宜信息。
+
+    2026-11-18：这里原来会调 _probe_tree_backends(hwnd) 做 UIA 树探测。
+    微信窗口卡住时它会阻塞几十秒（诊断包"打包超时"的元凶）；
+    放到子线程里跑还会因为 COM 线程模型不对直接 0xC0000005 崩溃。
+    诊断包要的是"一定能生成"，所以去掉树探测。
+    """
+    out = []
+    try:
+        items = (_nwe._scan_local_wechat_windows(max_age_seconds=0) or [])[:3]
+    except Exception:
+        return out
+    for item in items:
+        hwnd = int(item.get("hwnd") or 0)
+        if not hwnd:
+            continue
+        out.append(
+            {
+                "hwnd": hwnd,
+                "process_name": item.get("process_name") or "",
+                "version": item.get("version") or "",
+            }
+        )
+    return out
+
+
 def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
     created_at = _utc_iso()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -304,19 +331,7 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
         try:
             from ..services import native_wechat_engine as _nwe
 
-            probe_windows = []
-            for item in (_nwe._scan_local_wechat_windows(max_age_seconds=0) or [])[:3]:
-                hwnd = int(item.get("hwnd") or 0)
-                if not hwnd:
-                    continue
-                probe_windows.append(
-                    {
-                        "hwnd": hwnd,
-                        "process_name": item.get("process_name") or "",
-                        "version": item.get("version") or "",
-                        "probe": _nwe._probe_tree_backends(hwnd),
-                    }
-                )
+            probe_windows = _collect_wechat_uia_probe(_nwe)
             probe_payload = {"created_at": created_at, "windows": probe_windows}
             zf.writestr(
                 "wechat_uia_probe.json",
@@ -453,7 +468,19 @@ _PENDING_DIAG_DIR = (_BASE / "logs" / "pending_diagnostics").resolve()
 # 之前用户连点几次上传，每次都起一个"读几十 MB 日志 + 脱敏 + 压缩"的任务，
 # 默认线程池被占满后，导出接口就一直挂着（客户端看到的就是"命令没反应"）。
 _DIAG_BUILD_LOCK: Optional[asyncio.Lock] = None
-_DIAG_BUILD_TIMEOUT = 60.0
+_DIAG_BUILD_TIMEOUT = 20.0
+# 专用线程池：不要用 loop 的默认 executor。
+# 默认池会被素材同步/转码这类长任务占满，诊断打包排不上队 → 客户端看到"打包超时"。
+_DIAG_EXECUTOR: Optional[Any] = None
+
+
+def _diag_executor() -> Any:
+    global _DIAG_EXECUTOR
+    if _DIAG_EXECUTOR is None:
+        import concurrent.futures as _cf
+
+        _DIAG_EXECUTOR = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="diag-bundle")
+    return _DIAG_EXECUTOR
 
 
 def _diag_build_lock() -> asyncio.Lock:
@@ -469,10 +496,9 @@ async def _build_bundle_guarded() -> tuple:
     if lock.locked():
         raise HTTPException(status_code=429, detail="诊断包正在打包中，请稍候再试（不要重复点击）")
     async with lock:
-        loop = asyncio.get_running_loop()
         try:
             return await asyncio.wait_for(
-                loop.run_in_executor(None, _build_diagnostic_bundle),
+                asyncio.get_running_loop().run_in_executor(_diag_executor(), _build_diagnostic_bundle),
                 timeout=_DIAG_BUILD_TIMEOUT,
             )
         except asyncio.TimeoutError:

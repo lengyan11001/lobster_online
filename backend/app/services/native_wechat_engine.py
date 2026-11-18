@@ -3605,8 +3605,20 @@ def _looks_like_group_session(item: Dict[str, Any]) -> bool:
         return True
     preview = str(item.get("last_content") or "").strip()
     first_line = next((line.strip() for line in preview.splitlines() if line.strip()), "")
-    if re.match(r"^[^:：]{1,40}[:：]", first_line):
-        return True
+    m = re.match(r"^([^:：]{1,40})[:：]", first_line)
+    if m:
+        head = m.group(1).strip()
+        # 2026-11-18：真机误判——单聊最后一条是 "robot自开会话 12:27:48"，
+        # 冒号前的 "robot自开会话 12" 被当成"群成员名: 内容"，整个单聊被 skip_group 跳过，
+        # 客户侧就是"不回复"。
+        # 时间戳、URL、纯数字/纯符号前缀都不算"群成员名"。
+        looks_like_time = bool(re.match(r"^\d{1,2}:\d{2}(:\d{2})?$", head)) or bool(
+            re.search(r"\d{1,2}:\d{2}", head)
+        )
+        looks_like_url = "http" in head.lower() or "www." in head.lower()
+        has_name_shape = bool(re.search(r"[A-Za-z\u4e00-\u9fff]", head))
+        if not looks_like_time and not looks_like_url and has_name_shape:
+            return True
     return False
 
 
@@ -5031,12 +5043,17 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
     known_type = _normalize_local_chat_type(
         session.get("chat_type") or _known_local_peer_chat_type(account_id, peer_id)
     )
-    if (
+    # 2026-11-18：库/快照已经确认是好友单聊时，不要再用"预览文本像群消息"去否定它。
+    # 现场：军争 的最后一条是 "robot自开会话 12:27:48"，冒号让 _looks_like_group_session
+    # 判成群 → skip_group → 客户侧"不回复"。
+    known_private = known_type in _LOCAL_PRIVATE_CHAT_TYPES
+    looks_group = (
         _local_chat_type_is_group(known_type)
         or known_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
-        or _looks_like_group_session({**session, "chat_type": known_type})
+        or (not known_private and _looks_like_group_session({**session, "chat_type": known_type}))
         or _is_non_private_session_entry(session)
-    ):
+    )
+    if looks_group:
         return {"action": "skip_group", "reason": "known_non_private", "chat_type": known_type}
     if (
         not session.get("session_snapshot_fresh")
