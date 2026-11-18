@@ -1,7 +1,7 @@
 {
-  "version": "2.0.315",
-  "build": 623,
-  "applied_at": "2026-11-18T18:19:45+08:00",
-  "note": "过滤小白窗口 + 启动前清理旧 launcher",
-  "bundle_sha256": "99ffcd017f0d46aae5853f9e4196086a42195606cc0898e62452256d0b071e2e"
+  "version": "2.0.316",
+  "build": 624,
+  "applied_at": "2026-11-18T18:53:48+08:00",
+  "note": "清理旧 launcher 不树杀 WebView2（白屏修复）",
+  "bundle_sha256": "8cf0db7dc3f593f0bad5102ebbad3bcf9c2477f34822b33c713fd0bb9dbe601a"
 }
