@@ -3957,7 +3957,8 @@ def _clean_publish_tags(value: Any) -> str:
         out.append(tag[:20])
         if len(out) >= 8:
             break
-    return " ".join(f"#{tag}" for tag in out)
+    # 统一成「逗号分隔、不带 #」：发布驱动会自行拼 #，避免出现 ##标签。
+    return ",".join(out)
 
 
 def _platform_publish_rules(platform: str) -> str:
@@ -4026,8 +4027,9 @@ async def _generate_scheduled_publish_copy(
             temperature=0.55,
         )
         data = _extract_json_object_text(text)
-        title = " ".join(str(data.get("title") or fallback_title).split())[:60]
-        desc = str(data.get("description") or data.get("desc") or fallback_desc).strip()[:1200]
+        # 不做硬截断：长度按平台规则控制，稍微超一点没关系。
+        title = " ".join(str(data.get("title") or fallback_title).split())
+        desc = str(data.get("description") or data.get("desc") or fallback_desc).strip()
         tags = _clean_publish_tags(data.get("tags") or fallback_tags)
         final_title = "" if _is_wechat_moments_platform(platform) else (title or fallback_title)
         return {"title": final_title, "description": desc or fallback_desc, "tags": tags}

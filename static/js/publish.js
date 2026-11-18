@@ -3246,7 +3246,7 @@ function _submitAssetPublishModal() {
     return _assetPublishMsgShow('添加标签仅支持抖音账号。', true);
   }
   var sourcePrompt = _assetPublishSourcePrompt(asset);
-  var autoCopy = !userTitle && !userDesc && !userTags;
+  var autoCopy = !userTitle && !userDesc;
 
   _assetPublishSetBusy(true);
   _closeAssetPublishModal(true);
@@ -3267,7 +3267,7 @@ function _submitAssetPublishModal() {
     if (autoCopy) {
       payload.ai_publish_copy = true;
       payload.description = sourcePrompt.slice(0, 2000) || String(asset.title || asset.filename || '作品发布').slice(0, 240);
-      payload.tags = _assetContentTags(asset);
+      payload.tags = userTags || _assetContentTags(asset);
     }
     if (labelOptions) payload.options.douyin_label = labelOptions;
     if (target.saved_from_url) payload.options._saved_from_url = String(target.source_url || '').slice(0, 300);

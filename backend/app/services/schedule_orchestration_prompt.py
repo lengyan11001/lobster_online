@@ -96,7 +96,7 @@ def build_schedule_orchestration_user_message(
         "小红书笔记必须有正文：publish_content.description 不可为空（勿只填 title）；若说明里只有一句标题、无单独正文，"
         "须把该句同时作为 title 与 description 传入（或 description 写同等内容），否则定时发布后笔记正文区会空。"
         "话题可放 tags 或写在 description。"
-        "小红书标题最多 20 字；抖音视频标题约 30 字、图文约 20 字，描述与话题总长约 500 字；勿超长。"
+        "小红书标题最多 20 字；抖音视频标题约 30 字、图文约 20 字，描述与话题合计 40-90 字（略超没关系，别写成长文）；勿超长。"
         "生成素材阶段不必打开本地浏览器；仅在 publish_content 时本机会唤起该账号有头浏览器完成上传/登录。"
         "不要只回复计划而不调用工具。"
         "**禁止**在素材已就绪时用自然语言写「接下来检查账号/写文案/再发布」收尾而不调用 publish_content；"

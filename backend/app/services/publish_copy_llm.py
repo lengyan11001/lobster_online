@@ -52,7 +52,7 @@ def _platform_copy_limits(platform: str, media_type: str) -> str:
             lines.append("标题：最多 20 个字。")
         else:
             lines.append("标题：最多 30 个字。")
-        lines.append("描述：宜控制在 400 字以内（平台描述与话题合并后总长约 ≤500 字）。")
+        lines.append("描述：40-90 字（正文与话题合并后尽量不超过 120 字；宁可短一点，不要写成大段长文）。")
     elif p == "tiktok":
         lines.append("标题：不超过 100 个字。")
         lines.append("描述：与标题、话题合并后不超过 4000 个字符，建议 300 字以内。")

@@ -2444,8 +2444,8 @@ def _tool_definitions(
                         "description": "发布账号昵称（必填）：与用户/发布管理里对该账号的称呼一致，如 6、2号、头条1。勿使用 list_publish_accounts 返回的数字 id。",
                     },
                     "title": {"type": "string", "description": "标题。小红书≤20字；抖音图文≤20、视频≤30；头条宜≤30"},
-                    "description": {"type": "string", "description": "描述/正文。小红书宜≤1000字；抖音与tags合并后约≤500字；头条宜≤5000字"},
-                    "tags": {"type": "string", "description": "话题标签，逗号分隔（抖音会转成 #话题 拼入描述侧，占用500字额度）"},
+                    "description": {"type": "string", "description": "描述/正文。小红书宜≤1000字；抖音与tags合并后40-90字（略超没关系）；头条宜≤5000字"},
+                    "tags": {"type": "string", "description": "话题标签，逗号分隔、不带 #（抖音会转成 #话题 拼入描述侧，计入正文长度）"},
                     "ai_publish_copy": {
                         "type": "boolean",
                         "description": (

@@ -892,11 +892,12 @@ def _effective_publish_copy_from_asset(
 
 
 def _sanitize_internal_publish_tags(g: str) -> str:
-    """去掉 MCP/速推自动入库标记，避免抖音等把 tags 拼进描述后出现 #sutui.transfer_url 等。"""
-    parts = [x.strip() for x in (g or "").split(",") if x.strip()]
+    """去掉 MCP/速推自动入库标记，并统一成「逗号分隔、不带 #」的标签串。"""
+    raw = [x.strip() for x in re.split(r"[,，\s#]+", str(g or "")) if x.strip()]
     drop = {"auto", "task.get_result", "sutui.transfer_url", "transfer_url"}
     out: List[str] = []
-    for p in parts:
+    seen: set[str] = set()
+    for p in raw:
         pl = p.lower()
         if pl in drop:
             continue
@@ -905,6 +906,9 @@ def _sanitize_internal_publish_tags(g: str) -> str:
             continue
         if pl.endswith(".transfer_url"):
             continue
+        if p in seen:
+            continue
+        seen.add(p)
         out.append(p)
     return ",".join(out)
 
