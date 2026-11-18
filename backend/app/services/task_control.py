@@ -294,12 +294,19 @@ def ensure_overlay(*, idle_seconds: int = 8, port: int = 0) -> Dict[str, Any]:
         flags = 0
         if hasattr(subprocess, "CREATE_NO_WINDOW"):
             flags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+        # 2026-11-18：原来 stdout/stderr 全丢 DEVNULL，悬浮键起不来时现场什么都没有。
+        # 现在落到 logs/task_overlay.log，另存 pid 便于排查"浮标没出现"。
+        try:
+            (ROOT_DIR / "logs").mkdir(parents=True, exist_ok=True)
+            log_fh = open(ROOT_DIR / "logs" / "task_overlay.log", "ab")
+        except Exception:
+            log_fh = subprocess.DEVNULL  # type: ignore[assignment]
         proc = subprocess.Popen(
             overlay_command(idle_seconds=idle_seconds, port=port),
             cwd=str(ROOT_DIR),
             creationflags=flags,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=log_fh,
         )
         OVERLAY_PID_FILE.write_text(str(int(proc.pid)), encoding="utf-8")
         return {"running": True, "pid": int(proc.pid), "spawned": True}

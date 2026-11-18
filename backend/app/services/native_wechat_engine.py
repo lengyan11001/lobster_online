@@ -10106,6 +10106,13 @@ def _run_local_driver_operation(
             # 以前那个行为会把用户刚按下的暂停静默取消（任何自动回复/发消息都会走到这里）。
             # 现在暂停中直接拒绝启动，由用户点「继续」/Alt+R 恢复（竞品也是这个语义）。
             if _task_ctl.stop_requested() and not force:
+                # 2026-11-18：暂停状态下任务不会开始，begin_task 就不会跑，
+                # 悬浮键也就永远不出现 —— 用户没有「继续」按钮（现场就是"右下角没浮标"）。
+                # 这里主动把悬浮键拉起来，保证还有入口能恢复。
+                try:
+                    _task_ctl.ensure_overlay(idle_seconds=3600)
+                except Exception:
+                    pass
                 raise TaskPaused(PAUSED_MESSAGE)
         except TaskPaused:
             raise
@@ -10170,6 +10177,21 @@ def _run_local_driver_operation(
                     error=str(initial_exc),
                 )
                 if not recovery.get("ok"):
+                    # 2026-11-18：恢复阶段发现"已被暂停"时，不要包成"读取微信会话失败"。
+                    # 现场就是这条误导性文案，导致一直在查会话而没看到其实是暂停了。
+                    _ctl = _task_control()
+                    if _ctl is not None:
+                        try:
+                            if _ctl.stop_requested():
+                                try:
+                                    _ctl.ensure_overlay(idle_seconds=3600)
+                                except Exception:
+                                    pass
+                                raise TaskPaused(PAUSED_MESSAGE)
+                        except TaskPaused:
+                            raise
+                        except Exception:
+                            pass
                     raise RuntimeError(
                         f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u9a71\u52a8\u672a\u6210\u529f\uff1a"
                         f"{recovery.get('error') or initial_exc}"
