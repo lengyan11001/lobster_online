@@ -1648,6 +1648,27 @@ def _is_wechat_main_window_class(class_name: str) -> bool:
     return low.startswith("qt") and low.endswith("qwindowicon")
 
 
+def _is_usable_main_wechat_window(item: Dict[str, Any]) -> bool:
+    """Reject tiny Qt transient/white windows that share the WeChat class/title."""
+    try:
+        import win32gui  # type: ignore
+    except Exception:
+        return False
+    try:
+        hwnd = int(item.get("hwnd") or 0)
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return False
+        class_name = str(item.get("class_name") or "")
+        if not _is_wechat_main_window_class(class_name):
+            return False
+        area = int(item.get("area") or 0)
+        if area < 80_000 and not item.get("is_iconic") and not item.get("full_driver_ready"):
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def _looks_like_wechat_window(title: str, class_name: str, process_meta: Dict[str, Any]) -> bool:
     title = str(title or "").strip()
     class_name = str(class_name or "").strip()
@@ -1816,6 +1837,10 @@ def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str
             _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
             meta = _process_meta(int(pid or 0))
             if not _looks_like_wechat_window(title, class_name, meta):
+                return
+            # Qt 会冒出很小的白色瞬态窗口（class 仍是 Qt...QWindowIcon，title=微信），
+            # 以前会被当成主窗口激活，用户看到的就是小白窗口。主窗口不可能这么小。
+            if _is_wechat_main_window_class(class_name) and (width * height) < 80_000 and not iconic:
                 return
             if "TrayIcon" in class_name:
                 return
@@ -21078,7 +21103,7 @@ def _find_local_account(account_id: str) -> Dict[str, Any]:
     if not hwnd:
         raise RuntimeError("本机微信账号标识无效")
     for item in _scan_local_wechat_windows(max_age_seconds=0):
-        if int(item.get("hwnd") or 0) == hwnd:
+        if int(item.get("hwnd") or 0) == hwnd and _is_usable_main_wechat_window(item):
             return item
     candidates = _scan_local_wechat_windows(max_age_seconds=0)
     if candidates:
