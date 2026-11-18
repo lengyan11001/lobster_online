@@ -5148,6 +5148,17 @@ async def run_auto_reply_once(
     def log_event(event: str, **fields: Any) -> None:
         _write_auto_reply_diagnostic(event, account_id=account_id, run_id=run_id, **fields)
 
+    # 每轮先把被挪到屏幕外的微信主窗口拉回来：窗口在 -32000 时 UIA 能读到控件树，
+    # 但点击落空、wxauto 读消息恒为空（线上 19:52 之后所有会话 scan_capture_missing）。
+    try:
+        _main_hwnd = _local_wechat_hwnd(account_id)
+        if _main_hwnd:
+            _onscreen = _ensure_local_wechat_on_screen(_main_hwnd)
+            if _onscreen.get("changed"):
+                log_event("wechat_window_restored", account_id=account_id, **_onscreen)
+    except Exception:
+        pass
+
     if auth_context:
         _AUTO_REPLY_AUTH_CONTEXT[account_id] = dict(auth_context)
     # A second manual/scheduled trigger must not redo config/due checks while
@@ -11864,6 +11875,54 @@ def _open_next_visible_session(
         cells = next_cells
 
 
+def _ensure_local_wechat_on_screen(hwnd: int) -> Dict[str, Any]:
+    """把被挪到屏幕外（x=-32000，托盘/最小化后常见）的微信主窗口拉回可见区域。
+
+    窗口在屏幕外时 UIA 仍能读到控件树、点击却落在屏幕外，wxauto 的 ChatBox
+    也会脱离当前会话：ChatInfo 还是上一个会话、GetAllMessage() 恒为 0。
+    自动回复每轮先走这一步，避免"点开了会话但一条消息都读不到"。
+    """
+    info: Dict[str, Any] = {"changed": False}
+    try:
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+    except Exception as exc:
+        info["error"] = f"missing win32: {exc}"
+        return info
+    try:
+        left, top, right, bottom = win32gui.GetWindowRect(int(hwnd))
+    except Exception as exc:
+        info["error"] = str(exc)[:200]
+        return info
+    info.update({"rect": [left, top, right, bottom]})
+    width = max(680, int(right - left))
+    height = max(480, int(bottom - top))
+    offscreen = (
+        left <= -30000
+        or top <= -30000
+        or right <= 0
+        or bottom <= 0
+        or left > 10000
+        or top > 10000
+    )
+    try:
+        if offscreen:
+            win32gui.MoveWindow(int(hwnd), 120, 80, width, height, True)
+            win32gui.ShowWindow(int(hwnd), win32con.SW_SHOW)
+            info["changed"] = True
+            time.sleep(0.35)
+        elif win32gui.IsIconic(int(hwnd)):
+            win32gui.ShowWindow(int(hwnd), win32con.SW_RESTORE)
+            info["changed"] = True
+            time.sleep(0.35)
+    except Exception as exc:
+        info["error"] = str(exc)[:200]
+    try:
+        info["rect_after"] = list(win32gui.GetWindowRect(int(hwnd)))
+    except Exception:
+        pass
+    return info
+
 def _open_local_session_by_uia(
     account_id: str,
     peer_id: str,
@@ -11878,6 +11937,7 @@ def _open_local_session_by_uia(
     hwnd = _local_wechat_hwnd(account_id)
     if not hwnd:
         raise RuntimeError("local WeChat window not found")
+    _ensure_local_wechat_on_screen(hwnd)
     root = auto.ControlFromHandle(int(hwnd))
     cells = _uia_session_cells(root)
     if not cells:
@@ -15262,6 +15322,43 @@ def _sync_local_messages_once(
             except Exception:
                 break
     messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    if select_via_uia and not list(messages or []):
+        # 2026-11-18 本机实测：外部 UIA 点击切会话后，这个常驻 wxauto 客户端的
+        # ChatBox 会脱离当前会话 —— ChatInfo 能读到新会话名，但 GetAllMessage()
+        # 恒返回空（用户机器 2.0.321/2.0.322 三次诊断都是 seen_count=0）。
+        # ChatWith 同名会话时 wxauto 直接认为"已在该会话"不做重绑，所以下面那段
+        # 重绑也读不到。这里直接重建一个 wxauto 客户端，让它按当前窗口重新绑定
+        # ChatBox，再读一次。
+        try:
+            _LOCAL_WXAUTO4_CLIENTS.pop((str(account_id or "").strip(), threading.get_ident()), None)
+            wx = _new_wxauto4_client(account_id, ensure_chat_tab=False, check_online=False)
+            _LOCAL_WXAUTO4_CLIENTS[(str(account_id or "").strip(), threading.get_ident())] = wx
+            time.sleep(random.uniform(0.6, 0.9))
+            rebuilt_info = _current_local_chat_info(wx, fallback_name=actual_name)
+            rebuilt_name = str((rebuilt_info or {}).get("chat_name") or "").strip()
+            if rebuilt_info:
+                info = rebuilt_info
+            if rebuilt_name:
+                actual_name = rebuilt_name
+            messages = list(wx.GetAllMessage() or [])
+            _write_auto_reply_diagnostic(
+                "wxauto_client_rebuilt",
+                account_id=diagnostic_account_id,
+                run_id=diagnostic_run_id,
+                target_peer_id=target,
+                target_display_name=display_target,
+                rebuilt_display_name=rebuilt_name,
+                message_count=len(messages),
+            )
+        except Exception as exc:
+            _write_auto_reply_diagnostic(
+                "wxauto_client_rebuild_failed",
+                account_id=diagnostic_account_id,
+                run_id=diagnostic_run_id,
+                target_peer_id=target,
+                target_display_name=display_target,
+                error=str(exc)[:500],
+            )
     if select_via_uia and not list(messages or []) and actual_name:
         # 2026-11-18：UIA 点开会话后 wxauto4 的 ChatBox 还停在上一个会话，
         # GetAllMessage() 直接返回空列表（用户机器 2.0.321：seen_count=0，被误判成
