@@ -53,6 +53,10 @@ def _ensure_dir() -> None:
 # ── 暂停标记 ─────────────────────────────────────────────────────────────
 def request_stop(reason: str = "overlay") -> Dict[str, Any]:
     _ensure_dir()
+    try:
+        ensure_overlay(idle_seconds=3600)
+    except Exception:
+        _logger.debug("ensure_overlay on request_stop failed", exc_info=True)
     payload = {"at": _now_iso(), "reason": str(reason or "")[:120]}
     try:
         STOP_FLAG.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -75,6 +79,21 @@ def stop_expired_seconds() -> float:
         return max(0.0, time.time() - STOP_FLAG.stat().st_mtime)
     except Exception:
         return 0.0
+
+
+def clear_stop(reason: str = "resume") -> Dict[str, Any]:
+    """清掉暂停标记。
+
+    2026-11-18 用户口径：暂停只针对"当前这一轮"，不能拖累下一次任务。
+    """
+    removed = False
+    try:
+        if STOP_FLAG.exists():
+            STOP_FLAG.unlink()
+            removed = True
+    except Exception:
+        _logger.debug("failed to clear stop flag", exc_info=True)
+    return {"ok": True, "cleared": removed, "reason": str(reason or "")[:120]}
 
 
 def stop_requested(*, ttl_seconds: Optional[float] = None) -> bool:
@@ -112,6 +131,13 @@ def clear_stop() -> Dict[str, Any]:
 # ── 运行状态（悬浮键显示"谁在跑"）─────────────────────────────────────────
 def begin_task(kind: str, label: str = "", account_id: str = "") -> Dict[str, Any]:
     _ensure_dir()
+    # 暂停只影响发起它的那一轮；新一轮开始前把残留标记清掉，
+    # 否则用户上一次点过暂停，10 分钟内下一次任务会被直接拒绝（现场就是这个）。
+    try:
+        if STOP_FLAG.exists():
+            STOP_FLAG.unlink()
+    except Exception:
+        _logger.debug("failed to reset stale stop flag", exc_info=True)
     payload = {
         "running": True,
         "kind": str(kind or "")[:64],
@@ -175,6 +201,11 @@ def heartbeat(patch: Optional[Dict[str, Any]] = None) -> None:
 
 def end_task() -> Dict[str, Any]:
     _ensure_dir()
+    try:
+        if STOP_FLAG.exists():
+            STOP_FLAG.unlink()
+    except Exception:
+        _logger.debug("failed to clear stop flag on end_task", exc_info=True)
     payload = {"running": False, "finished_at": _now_iso()}
     try:
         STATUS_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -309,6 +340,13 @@ def ensure_overlay(*, idle_seconds: int = 8, port: int = 0) -> Dict[str, Any]:
             stderr=log_fh,
         )
         OVERLAY_PID_FILE.write_text(str(int(proc.pid)), encoding="utf-8")
+        # 2026-11-18：确认它真的活下来了（现场出现过"浮标没出现"但没有任何报错）
+        for _ in range(10):
+            time.sleep(0.2)
+            if proc.poll() is not None:
+                err = f"overlay_exited_code_{proc.returncode}"
+                _logger.warning("[task-control] 悬浮键启动后立即退出: %s（日志见 logs/task_overlay.log）", err)
+                return {"running": False, "pid": int(proc.pid), "spawned": False, "error": err}
         return {"running": True, "pid": int(proc.pid), "spawned": True}
     except Exception as exc:
         _logger.debug("failed to spawn overlay", exc_info=True)
