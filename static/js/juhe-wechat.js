@@ -24,6 +24,8 @@
     sendFiles: [],
     momentsFiles: [],
     momentsContentRecord: null,
+    momentsPickerAssets: [],
+    momentsPickerSelected: {},
     momentsSubmitting: false,
     contactSelected: {},
     contactPickerContacts: [],
@@ -333,6 +335,168 @@
         '</div>' +
       '</div>';
     }).join('');
+  }
+
+  function momentsPickerMediaType() {
+    var type = String((($('nativeWechatMomentsMediaType') || {}).value || 'image_text')).trim();
+    return type === 'video' ? 'video' : 'image';
+  }
+
+  function ensureMomentsAssetModal() {
+    var modal = $('nativeWechatMomentsAssetModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'nativeWechatMomentsAssetModal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;padding:24px;';
+    modal.innerHTML =
+      '<div style="width:min(980px,96vw);max-height:88vh;background:#fff;border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.28);">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e5e7eb;">' +
+          '<strong style="font-size:16px;">从素材库选择</strong>' +
+          '<button type="button" data-moments-asset-close style="border:0;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:#64748b;">×</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;padding:12px 18px;">' +
+          '<input id="nativeWechatMomentsAssetSearch" placeholder="搜索文件名 / 提示词" style="flex:1;height:34px;border:1px solid #d1d5db;border-radius:8px;padding:0 10px;font-size:13px;">' +
+          '<button type="button" class="btn btn-ghost btn-sm" id="nativeWechatMomentsAssetReload">刷新</button>' +
+          '<span id="nativeWechatMomentsAssetCount" style="font-size:12px;color:#64748b;"></span>' +
+        '</div>' +
+        '<div id="nativeWechatMomentsAssetGrid" style="flex:1;overflow:auto;padding:0 18px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;"></div>' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 18px;border-top:1px solid #e5e7eb;">' +
+          '<span id="nativeWechatMomentsAssetHint" style="font-size:12px;color:#64748b;">从素材库选择图片，确认后会加入待发布素材。</span>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<button type="button" class="btn btn-ghost" data-moments-asset-close>取消</button>' +
+            '<button type="button" class="btn btn-primary" id="nativeWechatMomentsAssetConfirm">使用选中素材</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(event) {
+      var target = event.target;
+      if (target === modal || (target && target.closest && target.closest('[data-moments-asset-close]'))) {
+        closeMomentsAssetPicker();
+      }
+    });
+    var search = modal.querySelector('#nativeWechatMomentsAssetSearch');
+    if (search) search.addEventListener('input', renderMomentsAssetGrid);
+    var reload = modal.querySelector('#nativeWechatMomentsAssetReload');
+    if (reload) reload.addEventListener('click', function() { loadMomentsAssetPicker(true); });
+    var confirm = modal.querySelector('#nativeWechatMomentsAssetConfirm');
+    if (confirm) confirm.addEventListener('click', confirmMomentsAssetPicker);
+    return modal;
+  }
+
+  function openMomentsAssetPicker() {
+    var modal = ensureMomentsAssetModal();
+    modal.style.display = 'flex';
+    state.momentsPickerSelected = {};
+    loadMomentsAssetPicker(true);
+  }
+
+  function closeMomentsAssetPicker() {
+    var modal = $('nativeWechatMomentsAssetModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function loadMomentsAssetPicker(force) {
+    var modal = ensureMomentsAssetModal();
+    var grid = modal.querySelector('#nativeWechatMomentsAssetGrid');
+    var mediaType = momentsPickerMediaType();
+    if (grid) grid.innerHTML = '<div style="grid-column:1/-1;padding:24px;text-align:center;color:#64748b;">正在加载素材...</div>';
+    return apiJson('/api/assets?media_type=' + encodeURIComponent(mediaType) + '&limit=120').then(function(data) {
+      var rows = (Array.isArray(data && data.assets) ? data.assets : []).filter(function(item) {
+        return item && item.asset_id;
+      });
+      state.momentsPickerAssets = rows;
+      renderMomentsAssetGrid();
+      return rows;
+    }).catch(function(err) {
+      if (grid) grid.innerHTML = '<div style="grid-column:1/-1;padding:24px;text-align:center;color:#b91c1c;">' + esc(err.message || '素材加载失败') + '</div>';
+    });
+  }
+
+  function renderMomentsAssetGrid() {
+    var modal = $('nativeWechatMomentsAssetModal');
+    if (!modal) return;
+    var grid = modal.querySelector('#nativeWechatMomentsAssetGrid');
+    if (!grid) return;
+    var query = String((modal.querySelector('#nativeWechatMomentsAssetSearch') || {}).value || '').trim().toLowerCase();
+    var mediaType = momentsPickerMediaType();
+    var rows = (state.momentsPickerAssets || []).filter(function(item) {
+      if (!query) return true;
+      return [item.filename, item.prompt, item.title, item.asset_id].join(' ').toLowerCase().indexOf(query) >= 0;
+    });
+    if (!rows.length) {
+      grid.innerHTML = '<div style="grid-column:1/-1;padding:24px;text-align:center;color:#64748b;">素材库没有可用' + (mediaType === 'video' ? '视频' : '图片') + '</div>';
+      return;
+    }
+    var selected = state.momentsPickerSelected || {};
+    grid.innerHTML = rows.map(function(item) {
+      var id = String(item.asset_id || '');
+      var isSelected = !!selected[id];
+      var thumbUrl = String(item.preview_url || item.source_url || '');
+      var thumb = thumbUrl
+        ? (mediaType === 'video'
+          ? '<video src="' + esc(thumbUrl) + '" muted preload="metadata" style="width:100%;height:100%;object-fit:cover;"></video>'
+          : '<img src="' + esc(thumbUrl) + '" alt="" style="width:100%;height:100%;object-fit:cover;">')
+        : '<span style="font-size:26px;">素材</span>';
+      return '<button type="button" data-moments-asset-id="' + esc(id) + '" style="position:relative;border:2px solid ' + (isSelected ? '#2563eb' : '#e5e7eb') + ';border-radius:10px;overflow:hidden;background:#f8fafc;padding:0;cursor:pointer;text-align:left;">' +
+        '<span style="display:block;aspect-ratio:1/1;overflow:hidden;">' + thumb + '</span>' +
+        '<span style="display:block;padding:6px 8px;font-size:12px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(item.filename || item.title || id) + '</span>' +
+        (isSelected ? '<span style="position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;">✓</span>' : '') +
+      '</button>';
+    }).join('');
+    var count = modal.querySelector('#nativeWechatMomentsAssetCount');
+    if (count) count.textContent = '已选 ' + Object.keys(selected).length + ' 个 / 共 ' + rows.length + ' 个';
+    Array.prototype.slice.call(grid.querySelectorAll('[data-moments-asset-id]')).forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = String(btn.getAttribute('data-moments-asset-id') || '');
+        var limit = mediaType === 'video' ? 1 : 9;
+        if (state.momentsPickerSelected[id]) delete state.momentsPickerSelected[id];
+        else {
+          if (Object.keys(state.momentsPickerSelected).length >= limit) {
+            setMsg('一次最多选择 ' + limit + ' 个' + (limit === 1 ? '视频' : '图片'), true);
+            return;
+          }
+          state.momentsPickerSelected[id] = true;
+        }
+        renderMomentsAssetGrid();
+      });
+    });
+  }
+
+  function fetchAssetAsFile(asset) {
+    var base = apiBase();
+    if (!base) return Promise.reject(new Error('未配置本机 API 地址'));
+    var id = String(asset.asset_id || '');
+    return fetch(base + '/api/assets/' + encodeURIComponent(id) + '/content', {
+      headers: authHeaderForm(),
+      cache: 'no-store'
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error('读取素材失败：' + (asset.filename || id));
+      return resp.blob();
+    }).then(function(blob) {
+      var type = blob.type || (asset.media_type === 'video' ? 'video/mp4' : 'image/jpeg');
+      var name = String(asset.filename || (id + (asset.media_type === 'video' ? '.mp4' : '.jpg')));
+      return new File([blob], name, { type: type });
+    });
+  }
+
+  function confirmMomentsAssetPicker() {
+    var selectedIds = Object.keys(state.momentsPickerSelected || {});
+    if (!selectedIds.length) { setMsg('请先选择素材', true); return; }
+    var assets = (state.momentsPickerAssets || []).filter(function(item) { return selectedIds.indexOf(String(item.asset_id)) >= 0; });
+    var btn = $('nativeWechatMomentsAssetConfirm');
+    if (btn) { btn.disabled = true; btn.textContent = '正在准备...'; }
+    Promise.all(assets.map(fetchAssetAsFile)).then(function(files) {
+      state.momentsFiles = (state.momentsFiles || []).concat(files);
+      renderMomentsFiles();
+      setChip('nativeWechatMomentsState', '待发布');
+      setMsg('已从素材库加入 ' + files.length + ' 个素材', false);
+      closeMomentsAssetPicker();
+    }).catch(function(err) {
+      setMsg(err.message || '素材准备失败', true);
+    }).finally(function() {
+      if (btn) { btn.disabled = false; btn.textContent = '使用选中素材'; }
+    });
   }
 
   function uploadWechatFile(file) {
@@ -2592,6 +2756,8 @@
         momentsFileInput.click();
       });
     }
+    var momentsAssetBtn = $('nativeWechatMomentsAssetBtn');
+    if (momentsAssetBtn) momentsAssetBtn.addEventListener('click', openMomentsAssetPicker);
     if (momentsFileInput) {
       momentsFileInput.addEventListener('change', function() {
         var files = Array.prototype.slice.call(momentsFileInput.files || []);
