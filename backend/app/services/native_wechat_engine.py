@@ -24167,12 +24167,23 @@ def _select_files_in_open_dialog(
     dialog_hwnd = int(window.get("hwnd") or 0)
     root = window.get("root") or _uia_main_root(dialog_hwnd)
     if len(paths) > 1:
-        # 多选 spec 在部分系统上会让文件框报错且不关闭；直接逐张添加，
-        # 每张都是完整路径，最稳。先关掉当前这个多选框。
-        steps.append({"step": "moments_multi_select_skipped", "ok": True, "reason": "use_one_by_one"})
-        _dismiss_open_dialog(dialog_hwnd, steps)
-        _add_moments_files_one_by_one(hwnd, files, steps)
-        return
+        # 多选一律用完整路径（不要「目录 + 文件名」）。真机验证：完整路径
+        # 能正常关闭文件框并挂上 3 张图；旧写法会让文件框报错且不关闭。
+        try:
+            _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_multi")
+            return
+        except RuntimeError as exc:
+            steps.append(
+                {
+                    "step": "moments_multi_select_failed",
+                    "ok": False,
+                    "error": str(exc)[:200],
+                    "fallback": "one_by_one",
+                }
+            )
+            _dismiss_open_dialog(dialog_hwnd, steps)
+            _add_moments_files_one_by_one(hwnd, files, steps)
+            return
     _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_single")
 
 
