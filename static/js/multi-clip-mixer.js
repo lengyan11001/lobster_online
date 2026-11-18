@@ -50,6 +50,92 @@
   };
 
   function $(id) { return document.getElementById(id); }
+  var SETTINGS_STORAGE_KEY = 'lobster_multi_clip_settings_v1';
+  var SETTINGS_INPUT_IDS = [
+    'mcmClipModeSelect', 'mcmFixedStart', 'mcmFixedEnd',
+    'mcmSingleSegmentSeconds', 'mcmSingleSegmentCount', 'mcmSingleTargetDuration', 'mcmSingleOutputCount',
+    'mcmRandomSegmentSeconds', 'mcmRandomOutputCount', 'mcmRandomTargetDuration',
+    'mcmTemplateSwitch', 'mcmRandomTemplateSwitch',
+    'mcmMusicSwitch', 'mcmRandomMusicSwitch', 'mcmMusicVolume',
+    'mcmSpeechVoice', 'mcmSpeechRate', 'mcmSpeechVolume', 'mcmSpeechPitch',
+    'mcmColorStyle'
+  ];
+  var savedSettings = null;
+  var pendingSpeechVoice = '';
+  var settingsSaveTimer = null;
+
+  function readSavedSettings() {
+    try {
+      var raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) { return null; }
+  }
+
+  function setSelectValue(select, value) {
+    if (!select) return;
+    var text = String(value == null ? '' : value);
+    var ok = Array.prototype.some.call(select.options || [], function(option) { return String(option.value) === text; });
+    if (ok) select.value = text;
+  }
+
+  function setRadioValue(name, value) {
+    if (!value) return;
+    var radio = document.querySelector('input[name="' + name + '"][value="' + String(value) + '"]');
+    if (radio) radio.checked = true;
+  }
+
+  function collectSettings() {
+    var out = { v: 1 };
+    SETTINGS_INPUT_IDS.forEach(function(id) {
+      var el = $(id);
+      if (!el) return;
+      out[id] = el.type === 'checkbox' ? !!el.checked : String(el.value || '');
+    });
+    out.mcmTemplateProvider = currentTemplateProvider();
+    out.mcmVoiceMode = currentVoiceMode();
+    out.mcmTextMode = textModePerSegment() ? 'per-segment' : 'unified';
+    out.templateScene = currentMixerTemplateScene();
+    out.outputRatio = currentOutputRatio();
+    out.fillMode = currentFillMode();
+    return out;
+  }
+
+  function applySavedSettings() {
+    savedSettings = readSavedSettings();
+    if (!savedSettings) return;
+    SETTINGS_INPUT_IDS.forEach(function(id) {
+      if (!Object.prototype.hasOwnProperty.call(savedSettings, id)) return;
+      var el = $(id);
+      if (!el) return;
+      if (el.tagName === 'SELECT') { setSelectValue(el, savedSettings[id]); return; }
+      if (el.type === 'checkbox') { el.checked = !!savedSettings[id]; return; }
+      el.value = String(savedSettings[id] == null ? '' : savedSettings[id]);
+    });
+    setRadioValue('mcmTemplateProvider', savedSettings.mcmTemplateProvider);
+    setRadioValue('mcmVoiceMode', savedSettings.mcmVoiceMode);
+    setRadioValue('mcmTextMode', savedSettings.mcmTextMode);
+    if (savedSettings.templateScene) state.templateScene = String(savedSettings.templateScene);
+    if (savedSettings.outputRatio) state.outputRatio = String(savedSettings.outputRatio);
+    if (savedSettings.fillMode) state.fillMode = String(savedSettings.fillMode);
+    if (savedSettings.mcmSpeechVoice) pendingSpeechVoice = String(savedSettings.mcmSpeechVoice);
+    if ($('mcmTemplateSwitch') && $('mcmTemplatePanel')) $('mcmTemplatePanel').hidden = !$('mcmTemplateSwitch').checked;
+    if ($('mcmMusicSwitch')) {
+      if ($('mcmMusicPanel')) $('mcmMusicPanel').hidden = !$('mcmMusicSwitch').checked;
+      if ($('mcmMusicVolumeValue')) $('mcmMusicVolumeValue').textContent = Math.round(Number((($('mcmMusicVolume') || {}).value || 0.24)) * 100) + '%';
+    }
+  }
+
+  function saveSettings() {
+    try {
+      savedSettings = collectSettings();
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(savedSettings));
+    } catch (error) {}
+  }
+
+  function scheduleSaveSettings() {
+    if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = setTimeout(saveSettings, 200);
+  }
 
   function apiBase() {
     return (typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '').replace(/\/$/, '');
@@ -3091,6 +3177,10 @@
     select.innerHTML = state.voiceLibrary.map(function(item) {
       return '<option value="' + escapeHtml(item.voice) + '">' + escapeHtml(item.title) + '</option>';
     }).join('');
+    if (pendingSpeechVoice) {
+      setSelectValue(select, pendingSpeechVoice);
+      pendingSpeechVoice = '';
+    }
   }
 
   function loadSpeechVoices() {
@@ -3315,6 +3405,15 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-mcm-close-aitrim]'), function (btn) {
       btn.addEventListener('click', function () { state.aiTrim = null; closeAiTrimModal(); });
     });
+    var settingsRoot = $('content-multi-clip-mixer');
+    if (settingsRoot) {
+      settingsRoot.addEventListener('change', scheduleSaveSettings);
+      settingsRoot.addEventListener('click', function(event) {
+        var target = event.target;
+        if (!target || !target.closest) return;
+        if (target.closest('[data-mcm-output-ratio],[data-mcm-fill-mode],[data-mcm-template-scene],[data-mcm-template-color],[data-mcm-template-style]')) scheduleSaveSettings();
+      });
+    }
     refreshAiTools();
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').addEventListener('click', confirmSegment);
     if ($('mcmClipModeSelect')) $('mcmClipModeSelect').addEventListener('change', syncModePanels);
@@ -3424,7 +3523,7 @@
       renderTemplateLayoutItems();
     });
     if ($('mcmTemplateTitle')) $('mcmTemplateTitle').addEventListener('input', function(event) {
-      var value = truncateChars(String(event.target.value || '').replace(/\r\n?/g, '\n').trim(), 80);
+      var value = truncateChars(String(event.target.value || '').replace(/\r\n?/g, '\n'), 80);
       if (event.target.value !== value) event.target.value = value;
       state.overlayTexts = overlayTextsWithTemplateTitle(state.selectedTemplate, state.overlayTexts);
       renderTemplateLayoutItems();
@@ -3613,11 +3712,14 @@
     var root = $('content-multi-clip-mixer');
     if (!root || root.dataset.mcmInitialized === '1') return;
     root.dataset.mcmInitialized = '1';
+    applySavedSettings();
     bindEvents();
     loadHistory();
     syncModePanels();
     renderClips();
     syncFinalAudioOptions();
+    if (hasTemplateEnabled() && !state.templateCatalog.length) loadTemplates(true).catch(function() {});
+    if (($('mcmMusicSwitch') || {}).checked && !state.musicOptions.length) loadMusicOptions().catch(function() {});
     renderBatchResults();
     renderHistory();
     restoreLatestResult();
