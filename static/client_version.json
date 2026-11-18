@@ -1,7 +1,7 @@
 {
-  "version": "2.0.293",
-  "build": 600,
-  "applied_at": "2026-11-18T12:56:16+08:00",
+  "version": "2.0.294",
+  "build": 601,
+  "applied_at": "2026-11-18T12:58:02+08:00",
   "note": "robot 能力层 + main 合并（正常打包，剔除大体积资源目录）",
-  "bundle_sha256": "505802ee08928c5214dd9c05f3bb23f2b276cd42b9ca7e3108a40260fca38b78"
+  "bundle_sha256": "549caafad8a752a823ffdfcc1fd260b17a023c3d0efb471e94c02ed4a7a608fd"
 }
