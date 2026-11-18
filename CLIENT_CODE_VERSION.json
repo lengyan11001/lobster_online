@@ -1,7 +1,7 @@
 {
-  "version": "2.0.316",
-  "build": 624,
-  "applied_at": "2026-11-18T18:53:48+08:00",
-  "note": "清理旧 launcher 不树杀 WebView2（白屏修复）",
-  "bundle_sha256": "8cf0db7dc3f593f0bad5102ebbad3bcf9c2477f34822b33c713fd0bb9dbe601a"
+  "version": "2.0.317",
+  "build": 625,
+  "applied_at": "2026-11-18T19:16:27+08:00",
+  "note": "扫描前真实滚轮拉回会话顶部（个微不回消息）",
+  "bundle_sha256": "3051ebe2540c4a40e1fa69216859ef6ee267b6f2f2a03c0bd0e554a68e9fdcf7"
 }
