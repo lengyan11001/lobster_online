@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import logging
 import shutil
 import subprocess
@@ -31,6 +32,34 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MCM_TASK_ROOT = Path(__file__).resolve().parents[3] / "data" / "multi_clip_mixer" / "tasks"
+_MCM_BATCH_ROOT = Path(__file__).resolve().parents[3] / "data" / "multi_clip_mixer" / "batches"
+
+
+def _safe_batch_id(value: str) -> str:
+    """批次目录名：只留字母数字下划线短横线，避免路径穿越。"""
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "", str(value or ""))[:48]
+    return cleaned or ("batch_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+
+def _safe_output_name(value: str, fallback: str = "成片") -> str:
+    text = re.sub(r'[\\/:*?"<>|\r\n\t]', "", str(value or "")).strip().strip(".")
+    return (text or fallback)[:40]
+
+
+def _prune_batch_dirs(user_root: Path, keep: int = 20) -> None:
+    try:
+        dirs = sorted((d for d in user_root.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    for old in dirs[keep:]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _batch_dir(user_id: int, batch_id: str) -> Path:
+    path = _MCM_BATCH_ROOT / f"u{int(user_id)}" / _safe_batch_id(batch_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 
 
 def _prune_task_dirs(user_root: Path, keep: int = 30) -> None:
@@ -1754,8 +1783,79 @@ def ai_trim_tools_status():
     return job or {"status": "idle", "progress": 0}
 
 
-class OpenTaskFolderBody(BaseModel):
+class BatchSaveItem(BaseModel):
     asset_id: str = Field(..., max_length=64)
+    title: str = Field("", max_length=80)
+
+
+class BatchSaveBody(BaseModel):
+    batch_id: Optional[str] = Field(default=None, max_length=64)
+    title: str = Field("", max_length=80)
+    items: List[BatchSaveItem] = Field(default_factory=list, max_length=50)
+
+
+@router.post("/api/multi-clip-mixer/batch/save")
+async def save_multi_clip_batch(
+    body: BatchSaveBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """把一批成片归到一个批次目录，供「打开文件夹」直接定位这一批。"""
+    if not body.items:
+        raise HTTPException(status_code=400, detail="没有可归档的成片")
+    batch_id = _safe_batch_id(str(body.batch_id or ""))
+    folder = _batch_dir(current_user.id, batch_id)
+    saved: List[Dict[str, Any]] = []
+    for index, item in enumerate(body.items, start=1):
+        asset_id = str(item.asset_id or "").strip()
+        if not asset_id:
+            continue
+        row = (
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.asset_id == asset_id)
+            .first()
+        )
+        if row is None:
+            continue
+        try:
+            source_path, _, media_type = resolve_asset_path(db, current_user.id, asset_id)
+        except Exception as exc:
+            logger.warning("[multi-clip-batch] resolve failed asset=%s err=%s", asset_id, exc)
+            continue
+        if media_type != "video" or not source_path.is_file():
+            continue
+        name = f"{index:02d}_{_safe_output_name(item.title or body.title or (row.meta or {}).get('title') or '成片')}.mp4"
+        target = folder / name
+        try:
+            if source_path.resolve() != target.resolve():
+                if target.exists():
+                    target.unlink()
+                try:
+                    # 同盘优先硬链接，省空间；跨盘自动退回复制
+                    os.link(source_path, target)
+                except OSError:
+                    shutil.copy2(source_path, target)
+        except OSError as exc:
+            logger.warning("[multi-clip-batch] copy failed asset=%s err=%s", asset_id, exc)
+            continue
+        meta = dict(row.meta or {}) if isinstance(row.meta, dict) else {}
+        meta.update({"work_dir": str(folder), "batch_id": batch_id, "batch_file": name})
+        row.meta = meta
+        db.add(row)
+        saved.append({"asset_id": asset_id, "file": name, "path": str(target)})
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    _prune_batch_dirs(folder.parent, keep=20)
+    logger.info("[multi-clip-batch] saved user=%s batch=%s count=%d dir=%s", current_user.id, batch_id, len(saved), folder)
+    return {"ok": True, "batch_id": batch_id, "batch_dir": str(folder), "count": len(saved), "saved": saved}
+
+
+class OpenTaskFolderBody(BaseModel):
+    asset_id: str = Field("", max_length=64)
+    batch_id: Optional[str] = Field(default=None, max_length=64)
 
 
 @router.post("/api/multi-clip-mixer/open-folder")
@@ -1764,7 +1864,16 @@ def open_multi_clip_task_folder(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    """打开某条成片对应的本地任务文件夹（一次任务一个目录）。"""
+    """打开批次目录（一批成片一个文件夹）；没有批次时退回单条成片的任务目录。"""
+    batch_id = str(body.batch_id or "").strip()
+    if batch_id:
+        batch_path = _MCM_BATCH_ROOT / f"u{int(current_user.id)}" / _safe_batch_id(batch_id)
+        if batch_path.is_dir():
+            try:
+                subprocess.Popen(["explorer", str(batch_path)])
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"打开文件夹失败：{exc}")
+            return {"ok": True, "path": str(batch_path), "kind": "batch"}
     asset_id = str(body.asset_id or "").strip()
     row = (
         db.query(Asset)

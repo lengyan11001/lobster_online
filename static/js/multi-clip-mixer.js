@@ -34,6 +34,9 @@
     templatePollTimer: null,
     pendingTemplateTask: null,
     batchResults: [],
+    batchId: '',
+    lastBatchId: '',
+    lastBatchDir: '',
     speechAudio: null,
     lastSpeechAudioUrl: '',
     voiceMode: 'original',
@@ -704,6 +707,38 @@
     state.historySelection[record.id] = selection;
     saveHistory();
     renderHistory();
+  }
+
+  function newBatchId() {
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    var d = new Date();
+    return 'batch_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+      + '_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  }
+
+  function saveBatchFolder(fallbackResult) {
+    var items = (state.batchResults || []).filter(function(result) {
+      return !!(result && result.asset_id);
+    }).map(function(result) {
+      return { asset_id: String(result.asset_id), title: String(result.title || '') };
+    });
+    if (!items.length && fallbackResult && fallbackResult.asset_id) {
+      items.push({ asset_id: String(fallbackResult.asset_id), title: '' });
+    }
+    if (!items.length) return Promise.resolve('');
+    if (!state.batchId) state.batchId = newBatchId();
+    return post('/api/multi-clip-mixer/batch/save', {
+      batch_id: state.batchId,
+      title: templateTitleValue() || '',
+      items: items
+    }).then(function(data) {
+      state.lastBatchId = String((data && (data.batch_id || state.batchId)) || '');
+      state.lastBatchDir = String((data && data.batch_dir) || '');
+      return state.lastBatchDir;
+    }).catch(function(err) {
+      state.lastBatchDir = '';
+      return '';
+    });
   }
 
   function appendBatchResult(result) {
@@ -2957,6 +2992,9 @@
       var totalRuns = outputCount();
       state.batchResults = [];
       state.batchSelection = {};
+      state.batchId = newBatchId();
+      state.lastBatchId = '';
+      state.lastBatchDir = '';
       startHistoryBatch({ useTemplate: useTemplate, useMusic: useMusic }, totalRuns);
       renderBatchResults();
       resetProgress();
@@ -2987,9 +3025,13 @@
     }).then(function(payload) {
       var result = payload.result;
       var totalRuns = payload.totalRuns;
-      progress('done', 'done', result && result.asset_id ? '成片已保存到素材库' : '成片已生成，可打开预览');
-      showMessage((result && result.completion_message) || ('视频生成完成，共 ' + totalRuns + ' 条结果已保存。'), false);
-      saveActiveHistoryBatch(true);
+      return saveBatchFolder(result).then(function(folder) {
+        progress('done', 'done', folder ? '成片已保存到批次目录' : (result && result.asset_id ? '成片已保存到素材库' : '成片已生成，可打开预览'));
+        var message = (result && result.completion_message) || ('视频生成完成，共 ' + totalRuns + ' 条结果已保存。');
+        if (folder) message += ' 本批已归到：' + folder;
+        showMessage(message, false);
+        saveActiveHistoryBatch(true);
+      });
     }).catch(function(error) {
       var templateActive = document.querySelector('#mcmProgressList [data-stage="template"].is-active');
       if (templateActive && state.lastBaseResult) {
@@ -3634,8 +3676,8 @@
     if ($('mcmOpenFolderBtn')) $('mcmOpenFolderBtn').addEventListener('click', function() {
       var assetId = String(state.lastResultAssetId || '').trim();
       if (!assetId) return showMessage('还没有可打开的成片任务', true);
-      post('/api/multi-clip-mixer/open-folder', { asset_id: assetId }).then(function(data) {
-        showMessage('已打开任务文件夹：' + String((data && data.path) || ''), false);
+      post('/api/multi-clip-mixer/open-folder', { asset_id: assetId, batch_id: state.lastBatchId || '' }).then(function(data) {
+        showMessage((data && data.kind === 'batch' ? '已打开批次文件夹：' : '已打开任务文件夹：') + String((data && data.path) || ''), false);
       }).catch(function(err) {
         showMessage('打开文件夹失败：' + (err.message || err), true);
       });
