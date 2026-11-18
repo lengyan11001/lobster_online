@@ -189,10 +189,20 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: s
     # （表现为 chat_name_mismatch，客户侧就是"没回复"）。现在：
     #   剪贴板输入（名字里有空格/表情不会被打歪）→ 最多按 3 次回车 →
     #   轮询窗口放到 timeout*1.5（默认 12s）→ 仍不行就点第一条匹配的搜索结果。
+    # 2026-11-18：按用户口径，微信 ID 是唯一的 —— 先用 wxid 搜；
+    # 搜不到（老号/未同步 wxid）再退回按显示名搜。两轮都走"只点联系人分组"的兜底。
+    # 2026-11-18：微信 ID 唯一 —— 先按 wxid 搜；wxid 搜不到再退回显示名。
+    # 只按名字搜会撞到同名群聊（军争 / 军争、单鹏程 / 单鹏程、军争…），
+    # 所以 wxid 永远是第一选择，打开后统一按显示名核对。
+    _sq = str(search_key or "").strip()
+    rounds: List[str] = []
+    if _sq and _sq != target:
+        rounds = [_sq, target]
+    else:
+        rounds = [target]
+
     box = _find_control(win, "搜索", region="sessions") or _find_control(win, "搜索")
     if box is not None:
-        # 2026-11-18：微信不在前台时，剪贴板粘贴/回车会打到别的窗口上——
-        # 本机能发、客户机发不出去，最常见的就是这一条。
         try:
             active = bool(win.is_active())
         except Exception:
@@ -208,50 +218,53 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: s
             res.layer, res.error = "precondition", "window_not_foreground"
             _trace("robot_open_failed", target=target, error="window_not_foreground")
             return res
-        typed = False
-        # 2026-11-18：按显示名搜会撞到同名群聊（现场 军争 / 军争、单鹏程 / 单鹏程、军争）。
-        # 有 wxid 就用 wxid 搜，点结果后再按显示名核对。
-        query = str(search_key or "").strip() or target
-        try:
-            from pywinauto import keyboard
-            from publisher.agent.desktop import type_text
 
-            box.click_input()
-            time.sleep(0.15)
-            keyboard.send_keys("^a")
-            keyboard.send_keys("{DELETE}")
-            typed = bool(type_text(query))
-        except Exception:
+        for round_idx, query in enumerate(rounds):
+            if round_idx > 0:
+                _trace("robot_search_retry_display_name", target=target, query=query)
             typed = False
-        if not typed:
             try:
                 from pywinauto import keyboard
+                from publisher.agent.desktop import type_text
 
-                keyboard.send_keys(target, with_spaces=True)
+                box.click_input()
+                time.sleep(0.15)
+                keyboard.send_keys("^a")
+                keyboard.send_keys("{DELETE}")
+                typed = bool(type_text(query))
             except Exception:
-                pass
-        _trace("robot_search_typed", target=target, typed=typed)
-        deadline = time.monotonic() + max(6.0, float(timeout) * 1.5)
-        next_enter = time.monotonic() + 1.0
-        pressed = 0
-        while time.monotonic() < deadline:
-            if pressed < 3 and time.monotonic() >= next_enter:
+                typed = False
+            if not typed:
                 try:
-                    from pywinauto import keyboard as _kb
+                    from pywinauto import keyboard
 
-                    _kb.send_keys("{ENTER}")
+                    keyboard.send_keys(query, with_spaces=True)
                 except Exception:
                     pass
-                pressed += 1
-                next_enter = time.monotonic() + 2.0
-            time.sleep(0.2)
-            if _current_chat_name(win) == target:
-                res.after = S.snapshot_desktop(win).to_dict()
-                res.ok = True
-                res.evidence["via"] = "search_enter"
-                res.evidence["enter_presses"] = pressed
-                _trace("robot_open_ok", target=target, via="search_enter", presses=pressed)
-                return res
+            _trace("robot_search_typed", target=target, query=query, typed=typed)
+            deadline = time.monotonic() + max(6.0, float(timeout) * 1.5)
+            next_enter = time.monotonic() + 1.0
+            pressed = 0
+            while time.monotonic() < deadline:
+                if pressed < 3 and time.monotonic() >= next_enter:
+                    try:
+                        from pywinauto import keyboard as _kb
+
+                        _kb.send_keys("{ENTER}")
+                    except Exception:
+                        pass
+                    pressed += 1
+                    next_enter = time.monotonic() + 2.0
+                time.sleep(0.2)
+                if _current_chat_name(win) == target:
+                    res.after = S.snapshot_desktop(win).to_dict()
+                    res.ok = True
+                    res.evidence["via"] = "search_enter"
+                    res.evidence["enter_presses"] = pressed
+                    res.evidence["query"] = query
+                    _trace("robot_open_ok", target=target, via="search_enter", presses=pressed, query=query)
+                    return res
+
         # 兜底 1：只在"联系人"分组里点（这是以前那个流程）
         try:
             if _click_contact_group_result(win, target):
