@@ -1,7 +1,7 @@
 {
-  "version": "2.0.313",
-  "build": 620,
-  "applied_at": "2026-11-18T17:41:57+08:00",
-  "note": "启动白屏：300s+120s 等待，旧 watchdog 不再重拉后端",
-  "bundle_sha256": "eb0e41fb6014c410569b52d8a719e2a2f9d3853bf56d5920b64a0786358dbc78"
+  "version": "2.0.314",
+  "build": 621,
+  "applied_at": "2026-11-18T17:46:00+08:00",
+  "note": "watchdog 不再杀启动中的后端（白屏3分半根因）",
+  "bundle_sha256": "daccb0bf20a6571d39597749ef39a64188b49d198e6602f378aa072450106f67"
 }
