@@ -2558,6 +2558,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         "watchdog_stop": threading.Event(),
         "closing": threading.Event(),
         "recovery_lock": threading.Lock(),
+        "backend_started_at": 0.0,
     }
     try:
         def recover_local_services(
@@ -2604,6 +2605,24 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
                 proc = runtime.get("backend_proc")
                 if isinstance(proc, subprocess.Popen) and proc.poll() is None:
+                    started_at = float(runtime.get("backend_started_at") or 0.0)
+                    boot_age = (time.monotonic() - started_at) if started_at else 999.0
+                    if not allow_live_process_restart and boot_age < 180.0:
+                        # 后端进程还活着、只是还在 import/初始化（端口还没开），
+                        # 这时它 poll() 是 None。以前 watchdog 会在 2 秒内把它杀掉，
+                        # 然后不断重启，真机就卡 3 分半白屏。
+                        log(
+                            "Desktop recovery: defer booting backend reason=%s pid=%s age=%.1fs"
+                            % (reason, proc.pid, boot_age)
+                        )
+                        return {
+                            "ok": False,
+                            "deferred": True,
+                            "booting": True,
+                            "backend_restarted": False,
+                            "mcp_restarted": mcp_restarted,
+                            "health_url": health_url,
+                        }
                     if not allow_live_process_restart and port_open("127.0.0.1", port, timeout=0.4):
                         # A busy Python event loop can temporarily stop serving
                         # /api/health while the backend process and its socket
@@ -2655,6 +2674,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 clear_service_log(ROOT / "backend.log", "backend recovery")
                 recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
                 runtime["backend_proc"] = recovered_proc
+                runtime["backend_started_at"] = time.monotonic()
                 if recovered_proc is None:
                     log(
                         "Desktop recovery: backend launch returned no process reason=%s elapsed_ms=%.1f"
@@ -2829,6 +2849,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             try:
                 ok, actual_url, backend_proc, mcp_proc, error = start_services_blocking(port, mcp_port, env, wait_seconds, ensure_runtime=False)
                 runtime["backend_proc"] = backend_proc
+                runtime["backend_started_at"] = time.monotonic()
                 runtime["mcp_proc"] = mcp_proc
                 if runtime["closing"].is_set():
                     log("webview closed during service startup; stopping newly started services")
