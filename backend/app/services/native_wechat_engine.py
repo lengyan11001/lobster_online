@@ -10670,12 +10670,6 @@ def _capture_auto_reply_scan_page(
             not peer_id
             or not reliability.get("reliable")
             or float(reliability.get("age_seconds") or 0) >= 24 * 60 * 60
-            or _is_non_private_session_entry(session)
-            or _local_chat_type_is_group(
-                (session.get("raw") or {}).get("type")
-                if isinstance(session.get("raw"), dict)
-                else ""
-            )
         ):
             capture_skip(
                 "page_row_prefiltered",
@@ -10755,7 +10749,6 @@ def _capture_auto_reply_scan_page(
             if (
                 _local_chat_type_is_group(chat_type)
                 or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
-                or not _local_chat_type_is_private(chat_type)
             ):
                 capture_skip(
                     "chat_type_not_private",
@@ -10764,6 +10757,13 @@ def _capture_auto_reply_scan_page(
                     message_chat_type=str(sync_result.get("message_chat_type") or ""),
                 )
                 continue
+            if not _local_chat_type_is_private(chat_type):
+                # 这一行已经通过扫描阶段的私聊预过滤；wxauto 读不到 chat_info
+                # 时不要把整行丢掉（线上就是这里把私聊吞了，表现为"不回复"）。
+                # 先按私聊采集，真正发送前 _verify_local_send_chat(strict_private)
+                # 还会再拦一次群聊。
+                chat_type = "friend"
+                chat_type_source = "scan_private_prefilter"
             fresh = sync_result.get("fresh_latest_message")
             if not isinstance(fresh, dict) or str(fresh.get("direction") or "").strip().lower() != "in":
                 captures[peer_id] = {
