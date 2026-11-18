@@ -1941,7 +1941,7 @@
       return;
     }
     if (shanjianPanel) shanjianPanel.hidden = true;
-    // 我们的模板：不再用「标题/文案」，只按模板的每个文字位置单独编辑
+    // 定制模板：不再用「标题/文案」，只按模板的每个文字位置单独编辑
     var titlePanel = $('mcmTemplateTitlePanel');
     var titleStep = $('mcmTitleStepLabel');
     if (titlePanel) titlePanel.hidden = true;
@@ -2110,7 +2110,7 @@
   }
 
   // 2026-10-15：成片比例与画面填充交给用户选；
-  // 比例同时决定（1）基础成片画布（后端 output_ratio）和（2）数字人2.0模板的筛选（上游 ratio 参数）。
+  // 比例同时决定（1）基础成片画布（后端 output_ratio）和（2）标准模板的筛选（上游 ratio 参数）。
   var MIXER_OUTPUT_RATIOS = [
     ['9:16', '竖屏 9:16'],
     ['16:9', '横屏 16:9']
@@ -2150,8 +2150,8 @@
     var hint = $('mcmOutputRatioHint');
     if (hint) {
       hint.textContent = currentOutputRatio() === '16:9'
-        ? '成片 1280x720；数字人2.0模板只筛 16:9（真人/数字人各 10 套，资讯混剪没有）'
-        : '成片 720x1280；数字人2.0模板筛 9:16';
+        ? '成片 1280x720；标准模板只筛 16:9（真人/数字人各 10 套，资讯混剪没有）'
+        : '成片 720x1280；标准模板筛 9:16';
     }
   }
 
@@ -2164,7 +2164,7 @@
     });
   }
 
-  // 2026-10-15 v2（客户确认后去掉分类）：数字人2.0模板抽样 110/110
+  // 2026-10-15 v2（客户确认后去掉分类）：标准模板抽样 110/110
   // （3 个场景）全都带 subtitleLayer，“支持正文/不含正文”没有区分度，
   // 能否填正文与模板无关（混剪场景本来就不合成正文）。
   function syncTemplateSceneUI() {
@@ -2191,7 +2191,7 @@
     var id = item.id || item.styleId || item.style_id || item.templateId || item.template_id || '';
     return Object.assign({}, item, {
       id: String(id),
-      name: item.name || item.title || item.styleName || item.style_name || '数字人2.0模板',
+      name: item.name || item.title || item.styleName || item.style_name || '标准模板',
       coverUrl: item.coverUrl || item.cover_url || item.cover || '',
       preview_url: item.preview_url || item.previewUrl || item.demoUrl || item.demo_url || item.videoUrl || item.video_url || '',
       provider: 'shanjian'
@@ -2226,9 +2226,9 @@
             return false;
           });
           if (currentOutputRatio() === '16:9') {
-            throw new Error('数字人2.0在「' + (sceneLabel || currentMixerTemplateScene()) + '」场景下没有 16:9 模板：把「成片比例」改回竖屏 9:16，或把「场景」切到真人模板。');
+            throw new Error('标准模板在「' + (sceneLabel || currentMixerTemplateScene()) + '」场景下没有 16:9 模板：把「成片比例」改回竖屏 9:16，或把「场景」切到真人模板。');
           }
-          throw new Error('数字人2.0暂时没有返回可用模板。');
+          throw new Error('标准模板暂时没有返回可用模板。');
         }
 
         return state.templates;
@@ -2439,16 +2439,16 @@
     return new Promise(function(resolve, reject) {
       var startedAt = Date.now();
       function poll() {
-        if (Date.now() - startedAt > 30 * 60 * 1000) return reject(new Error('数字人2.0模板处理超过 30 分钟，可稍后查看任务结果'));
+        if (Date.now() - startedAt > 30 * 60 * 1000) return reject(new Error('标准模板处理超过 30 分钟，可稍后查看任务结果'));
         post('/api/shanjian-smart-clip/task', { task_id: taskId }, true).then(function(data) {
           var status = String(data.status || '').toLowerCase();
           if ((status === 'succeed' || status === 'completed' || status === 'success') && data.video_url) return resolve(data);
-          if (status === 'failed' || data.ok === false) return reject(new Error(data.message || data.error_code || '数字人2.0模板处理失败'));
-          progress('template', 'active', data.status_text || ('数字人2.0任务 ' + taskId + ' 处理中'));
+          if (status === 'failed' || data.ok === false) return reject(new Error(data.message || data.error_code || '标准模板处理失败'));
+          progress('template', 'active', data.status_text || ('标准模板任务 ' + taskId + ' 处理中'));
           setTimeout(poll, 5000);
         }).catch(function(error) {
           if (Date.now() - startedAt > 30 * 60 * 1000) return reject(error);
-          progress('template', 'active', '数字人2.0查询暂时中断，5 秒后继续');
+          progress('template', 'active', '标准模板查询暂时中断，5 秒后继续');
           setTimeout(poll, 5000);
         });
       }
@@ -2464,14 +2464,14 @@
 
   function applyShanjianTemplate(baseResult, override) {
     override = override || {};
-    if (!state.selectedTemplate) return Promise.reject(new Error('请先选择数字人2.0模板'));
+    if (!state.selectedTemplate) return Promise.reject(new Error('请先选择标准模板'));
     var videoUrl = baseResult && (baseResult.source_url || baseResult.video_url || '');
-    if (!videoUrl) return Promise.reject(new Error('基础成片没有公网链接，无法提交数字人2.0模板；请先保证 TOS/转存成功。'));
+    if (!videoUrl) return Promise.reject(new Error('基础成片没有公网链接，无法提交标准模板；请先保证 TOS/转存成功。'));
     var title = normalizeShanjianTitle(override.title != null ? override.title : templateTitleValue());
     var description = String(
       (override.description != null ? override.description : (($('mcmShanjianDescription') || {}).value || '')).trim()
     ).slice(0, 240);
-    progress('template', 'active', '正在提交数字人2.0模板任务');
+    progress('template', 'active', '正在提交标准模板任务');
     return loadShanjianTemplateDetail(state.selectedTemplate).then(function(detailResponse) {
       var editInfo = shanjianEditInfo(detailResponse);
       var supportsIpLayer = !!editInfo.ipLayer;
@@ -2489,7 +2489,7 @@
       material_sound_switch: keepAudio,
       material_composition: 'order',
       video_duration: Math.max(1, Math.round(Number(baseResult.duration || 30))),
-      // 数字人2.0 introduceCard.name 是必填元数据；页面没有单独的 name 输入，服务端会以标题兜底。
+      // 标准模板 introduceCard.name 是必填元数据；页面没有单独的 name 输入，服务端会以标题兜底。
       introduce_name: supportsIpLayer && description ? title : '',
       introduce_description: supportsIpLayer ? description : '',
       struct_layers: structLayers,
@@ -2500,7 +2500,7 @@
       watermark_show: false
       });
     }).then(function(submitted) {
-      if (!submitted.task_id) throw new Error('数字人2.0没有返回任务编号');
+      if (!submitted.task_id) throw new Error('标准模板没有返回任务编号');
       return pollShanjianTask(submitted.task_id);
     }).then(function(task) {
       var finalDuration = Number(task.duration || baseResult.duration || 0);
@@ -2511,7 +2511,7 @@
         duration: finalDuration,
         introduce_name: title,
         introduce_description: description,
-        completion_message: '数字人2.0模板成片已完成，可打开预览。'
+        completion_message: '标准模板成片已完成，可打开预览。'
       };
       if (override.silent) {
         progress('template', 'done', '本段模板完成，等待拼接');
@@ -2519,13 +2519,13 @@
       }
       var audioMode = currentFinalAudioMode();
       if (audioMode !== 'original' && audioMode !== 'bgm') {
-        progress('template', 'done', '数字人2.0模板处理完成');
+        progress('template', 'done', '标准模板处理完成');
         return setResultVideo(saved).then(function() { return saved; });
       }
       return applyFinalAudioToResult(saved, baseResult).then(function(out) {
         out.introduce_name = title;
         out.introduce_description = description;
-        out.completion_message = '数字人2.0模板成片已完成，已替换为' + (audioMode === 'original' ? '原声' : '背景音乐') + '。';
+        out.completion_message = '标准模板成片已完成，已替换为' + (audioMode === 'original' ? '原声' : '背景音乐') + '。';
         return setResultVideo(out).then(function() { return out; });
       });
     });
@@ -2683,7 +2683,7 @@
       : post('/api/multi-clip-mixer/render', {
       title: templateTitleValue() || (totalRuns > 1 ? ('剪辑大师 ' + runIndex) : '剪辑大师'),
       clips: clipPlan,
-      // 本地模板、以及数字人2.0真人模板都需要保留原声（真人模板会校验输入视频的讲话发音）
+      // 本地模板、以及标准模板真人模板都需要保留原声（真人模板会校验输入视频的讲话发音）
       keep_original_audio: keepBaseAudio,
       audio_asset_id: baseAudioAssetId,
       // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
@@ -2768,7 +2768,7 @@
         return post('/api/multi-clip-mixer/render', {
           title: segTitle,
           clips: [plan[idx]],
-          // 我们的模板是 auto_caption 类，需要原声做语音识别；数字人2.0不需要
+          // 定制模板是 auto_caption 类，需要原声做语音识别；标准模板不需要
           keep_original_audio: provider === 'local',
           audio_asset_id: '',
           target_duration: null,
@@ -2783,7 +2783,7 @@
       }).then(function(base) {
         state.lastBaseResult = base;
         progress('template', 'active', '第 ' + (idx + 1) + '/' + total + ' 段：套模板'
-          + (provider === 'shanjian' ? '（消耗 1 次数字人2.0额度）' : ''));
+          + (provider === 'shanjian' ? '（消耗 1 次标准模板额度）' : ''));
         if (provider === 'shanjian') {
           return applyShanjianTemplate(base, {
             title: String(clip.segTitle || ''),
