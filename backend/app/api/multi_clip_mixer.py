@@ -516,13 +516,19 @@ def _replace_video_audio(
 
 
 def _extend_visual_segments_to_target(
-    segments: List[Dict[str, Any]], target_duration: float, *, allow_trim: bool = False
+    segments: List[Dict[str, Any]],
+    target_duration: float,
+    *,
+    allow_trim: bool = False,
+    keep_pace: bool = False,
 ) -> float:
     """把片段总时长对齐到 target_duration。
 
     - 总时长 < 目标：延长最后一段（不够则 clone 末帧补齐）—— 旧行为；
     - 总时长 > 目标且 allow_trim=True：按比例压缩每段，填满目标时长后丢弃多余片段。
       用户显式填「目标时长」时才会裁剪，避免主音轨对齐时把用户素材剪短。
+    - keep_pace=True（口播/音频主音轨驱动）：保留每段原速原节奏，按顺序取满真实音频
+      时长，只裁掉最后一段超出部分，不再整段等比压缩、也不补空白帧。
     """
     if not segments:
         return 0.0
@@ -533,6 +539,25 @@ def _extend_visual_segments_to_target(
     if total > clean_target + 0.01:
         if not allow_trim:
             return round(total, 3)
+        if keep_pace:
+            acc = 0.0
+            kept: List[Dict[str, Any]] = []
+            for item in segments:
+                remain = clean_target - acc
+                if remain <= 0.05:
+                    break
+                d = max(0.0, float(item.get("duration") or 0))
+                if d <= remain + 0.01:
+                    acc += d
+                    kept.append(item)
+                    continue
+                item["end_sec"] = round(float(item.get("start_sec") or 0) + remain, 3)
+                item["duration"] = round(remain, 3)
+                acc += remain
+                kept.append(item)
+                break
+            segments[:] = kept
+            return round(acc, 3)
         ratio = clean_target / total
         acc = 0.0
         kept: List[Dict[str, Any]] = []
@@ -613,6 +638,7 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
         audio_source_path: Optional[Path] = None
         user_target = float(body.target_duration or 0)
         target_duration = user_target
+        audio_driven = False
         if audio_source_asset_id:
             audio_source_path, _, audio_media_type = resolve_asset_path(db, user_id, audio_source_asset_id)
             # 2026-11-15 口播驱动：TTS 生成的是 audio（mp3），这里要允许音频作为主音轨；
@@ -622,19 +648,27 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
             if audio_source_path.parent.name.startswith("media_edit_dl_"):
                 download_dirs.add(audio_source_path.parent)
             if audio_media_type == "audio":
+                # 2026-11-18：口播音频是硬目标，时长只认真实音频（前端预估不可信）
+                audio_driven = True
                 audio_info = _probe_audio(audio_source_path, ffprobe)
             else:
                 audio_info = _probe_video(audio_source_path, ffprobe)
             if not bool(audio_info["has_audio"]):
                 raise ValueError("标记为主音轨的视频没有可用音频")
             audio_duration = float(audio_info["duration"] or 0)
-            if target_duration <= 0:
+            if audio_driven and audio_duration > 0:
+                # 音频主音轨（口播/TTS）：忽略前端传来的预估值，按真实音频时长出片
+                target_duration = audio_duration
+            elif target_duration <= 0:
                 # 没填目标时长：跟随主音轨（只延长，不裁剪，保持旧行为）
                 target_duration = audio_duration
 
         if target_duration > 0:
             _extend_visual_segments_to_target(
-                normalized, target_duration, allow_trim=user_target > 0
+                normalized,
+                target_duration,
+                allow_trim=audio_driven or user_target > 0,
+                keep_pace=audio_driven,
             )
 
         target_width, target_height = _output_size(

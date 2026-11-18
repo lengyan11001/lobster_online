@@ -2687,8 +2687,9 @@
       keep_original_audio: keepBaseAudio,
       audio_asset_id: baseAudioAssetId,
       // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
+      // 口播模式不传预估值：由后端 probe 真实音频时长决定成片长度，避免预估偏长导致尾部静止画面
       target_duration: speechDriven
-        ? (Number(speech.duration) > 0 ? Number(speech.duration) : null)
+        ? null
         : (currentClipMode() === 'single' ? null : (targetSeconds > 0 ? targetSeconds : (baseAudioAssetId ? Number((audioClip || {}).duration || 0) : null))),
       audio_volume: 1,
       clip_mode: currentClipMode(),
@@ -3101,6 +3102,27 @@
     });
   }
 
+  function probeAudioDuration(assetId) {
+    return fetchObjectUrl(assetContentUrl(assetId)).then(function(objectUrl) {
+      return new Promise(function(resolve) {
+        var audio = document.createElement('audio');
+        var done = false;
+        function finish(value) {
+          if (done) return;
+          done = true;
+          try { audio.removeAttribute('src'); audio.load(); } catch (err) {}
+          try { URL.revokeObjectURL(objectUrl); } catch (err) {}
+          resolve(Number(value) || 0);
+        }
+        audio.preload = 'metadata';
+        audio.src = objectUrl;
+        audio.onloadedmetadata = function() { finish(audio.duration); };
+        audio.onerror = function() { finish(0); };
+        setTimeout(function() { finish(audio.duration); }, 8000);
+      });
+    }).catch(function() { return 0; });
+  }
+
   function loadAssetGroups() {
     var list = $('mcmGroupList');
     if (list) list.innerHTML = '<div class="mcm-empty-hint">正在加载分组...</div>';
@@ -3228,18 +3250,24 @@
       if (!audioUrl) throw new Error('TTS 没有返回音频');
       state.lastSpeechAudioUrl = audioUrl;
       var duration = Number(data.duration_seconds || 0);
+      function settleSpeechAsset(saved) {
+        var assetId = String((saved && saved.asset_id) || "");
+        return probeAudioDuration(assetId).then(function(actual) {
+          return { assetId: assetId, duration: actual > 0 ? actual : duration };
+        });
+      }
       if (audioUrl.indexOf('data:') === 0) {
         return fetch(audioUrl).then(function(resp) { return resp.blob(); }).then(function(blob) {
           var file = new File([blob], 'speech.mp3', { type: 'audio/mpeg' });
           return uploadVideo(file).then(function(saved) {
-            return { assetId: saved.asset_id, duration: duration };
+            return settleSpeechAsset(saved);
           });
         });
       }
       return post('/api/assets/save-url', {
         url: audioUrl, media_type: 'audio', tags: '口播,tts', asset_origin: 'generated'
       }).then(function(saved) {
-        return { assetId: saved.asset_id, duration: duration };
+        return settleSpeechAsset(saved);
       });
     }).then(function(result) {
       state.speechAudio = {
