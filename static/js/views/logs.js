@@ -36,7 +36,16 @@ function uploadDiagnosticLogs() {
   var btn = document.getElementById('logsUploadDiagnosticBtn');
   var msgEl = document.getElementById('logsDiagnosticUploadMsg');
   var pre = document.getElementById('logsContent');
-  var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? String(LOCAL_API_BASE).replace(/\/$/, '') : '';
+  // 2026-11-18：以前只用 LOCAL_API_BASE，一旦它在当前作用域里取不到（view-split 后
+  // 每个视图是独立脚本），base 为空 → 直接 return，界面上什么都不发生，
+  // 后端日志里也一条请求都没有（用户看到的就是"点上传没反应"）。
+  var base = logsApiBase();
+  if (!base) {
+    try { base = String(window.__LOCAL_API_BASE || '').replace(/\/$/, ''); } catch (e) {}
+  }
+  if (!base) {
+    try { base = String(window.location.origin || '').replace(/\/$/, ''); } catch (e) {}
+  }
   if (!base) {
     if (msgEl) {
       msgEl.style.display = 'block';
@@ -188,3 +197,22 @@ function loadLogsView() {
   ensureLogsBindings();
 }
 
+
+
+/* 2026-11-18：视图是动态注入的，ensureLogsBindings() 在脚本加载时可能拿不到按钮
+   （DOM 还没进来），于是"点上传诊断"什么都不发生、后端也收不到请求。
+   这里用事件委托兜底：只要按钮出现，点击就一定进 uploadDiagnosticLogs。 */
+(function bindLogsUploadByDelegation() {
+  if (window.__logsUploadDelegated) return;
+  window.__logsUploadDelegated = true;
+  document.addEventListener('click', function (e) {
+    var t = e && e.target;
+    if (t && t.id === 'logsUploadDiagnosticBtn') {
+      e.preventDefault();
+      try { uploadDiagnosticLogs(); } catch (err) {
+        var m = document.getElementById('logsDiagnosticUploadMsg');
+        if (m) { m.style.display = 'block'; m.style.color = '#d14343'; m.textContent = '上传诊断失败：' + (err && err.message ? err.message : err); }
+      }
+    }
+  }, true); // delegated-logs-upload
+})();
