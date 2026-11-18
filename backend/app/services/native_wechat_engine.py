@@ -24283,15 +24283,36 @@ def _dismiss_moments_leftovers(hwnd: int, steps: List[Dict[str, Any]]) -> None:
         try:
             _uia_click(cancel)
             steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "cancel"})
-            return
         except Exception:
             pass
-    try:
-        _send_hotkey("esc", pause=0.15)
-        _send_hotkey("esc", pause=0.15)
-        steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "esc"})
-    except Exception:
-        pass
+    else:
+        try:
+            _send_hotkey("esc", pause=0.15)
+            _send_hotkey("esc", pause=0.15)
+            steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "esc"})
+        except Exception:
+            pass
+    # 微信点「取消」后会再弹一个「不保留」确认框；不点掉它，弹窗会一直挡着。
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        try:
+            fg_root = _uia_foreground_or_main_root(hwnd)
+        except Exception:
+            fg_root = root
+        for candidate in (fg_root, root):
+            for label in ("不保留", "不保存", "放弃", "确定"):
+                node = _uia_find_by_names(candidate, [label], contains=False, max_depth=16)
+                if node is None:
+                    continue
+                try:
+                    _uia_click(node)
+                    steps.append(
+                        {"step": "cleanup_moments_discard_confirm", "ok": True, "button": label}
+                    )
+                    return
+                except Exception:
+                    continue
+        time.sleep(0.25)
 
 
 def _moments_ffprobe_path() -> str:
