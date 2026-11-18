@@ -11215,20 +11215,38 @@ def _sync_recent_sessions_from_wxauto4(
         uia_visible = _uia_visible_session_count(account_id)
         if uia_visible and len(items) < uia_visible:
             try:
-                uia = _sync_local_sessions_from_uia(account_id, passive=False, recent_only=True)
-                if uia.get("items"):
-                    for _item in uia.get("items") or []:
-                        if isinstance(_item, dict):
-                            _item["source"] = "pc_wechat_uia_sessions_recent"
-                            _item["_uia_visible_fallback"] = True
-                    uia["fallback"] = "uia_visible_sessions"
-                    uia["time_scan"] = False
-                    uia["uia_visible_count"] = uia_visible
+                # 只读前 3 页：置顶会话常把新私聊挤到第二页之后；
+                # recent_only 只读首屏，会继续漏。3 页足够覆盖置顶 + 最新会话。
+                uia_scan = _uia_collect_all_sessions(
+                    int(_local_wechat_hwnd(account_id) or 0), max_pages=3
+                )
+                uia_items: List[Dict[str, Any]] = []
+                for _session in uia_scan.get("items") or []:
+                    _saved = _persist_session(account_id, _session, chat_type="unknown")
+                    if _saved:
+                        _saved["source"] = "pc_wechat_uia_sessions_recent"
+                        _saved["_uia_visible_fallback"] = True
+                        uia_items.append(_saved)
+                if uia_items:
                     logger.info(
-                        "[native-wechat] wxauto sessions=%s < uia=%s, use uia visible rows",
-                        len(items), uia_visible,
+                        "[native-wechat] wxauto sessions=%s < uia=%s, use uia visible rows pages=3 count=%s",
+                        len(items), uia_visible, len(uia_items),
                     )
-                    return uia
+                    return {
+                        "ok": True,
+                        "items": uia_items,
+                        "count": len(uia_items),
+                        "changed": [],
+                        "changed_count": 0,
+                        "mode": "merge",
+                        "source": "pc_wechat_uia_sessions_recent",
+                        "time_scan": False,
+                        "fallback": "uia_visible_sessions",
+                        "uia_visible_count": uia_visible,
+                        "scroll_rounds": int(uia_scan.get("rounds") or 0),
+                        "scroll_completed": bool(uia_scan.get("completed")),
+                        "auto_reply_captures": {},
+                    }
             except Exception as exc:
                 logger.info("[native-wechat] uia session fallback failed: %s", str(exc)[:200])
         return {
@@ -11867,7 +11885,7 @@ def _open_local_session_by_uia(
     raise RuntimeError(f"未在微信会话列表找到联系人：{target}")
 
 
-def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
+def _uia_collect_all_sessions(hwnd: int, *, max_pages: int = 120) -> Dict[str, Any]:
     import uiautomation as auto  # type: ignore
 
     root = auto.ControlFromHandle(int(hwnd))
@@ -11885,7 +11903,7 @@ def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
     stable_rounds = 0
     last_signature = ""
     rounds = 0
-    for idx in range(120):
+    for idx in range(max(1, min(int(max_pages or 120), 120))):
         rounds = idx + 1
         root = auto.ControlFromHandle(int(hwnd))
         cells = _uia_session_cells(root)
