@@ -128,7 +128,176 @@ def _click_contact_group_result(window: Any, expect_name: str, *, tries: int = 3
             continue
     return False
 
-def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: str = "") -> Result:
+def _looks_like_wxid_text(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{5,27}", str(value or "").strip()))
+
+
+def _opened_chat_is_group(window: Any, account_id: str = "") -> bool:
+    """当前打开的会话是不是群：同名群和联系人只能靠这个区分。"""
+    try:
+        from backend.app.services.native_wechat_engine import (  # type: ignore
+            _current_local_chat_info,
+            _get_wxauto4_client,
+        )
+
+        info = _current_local_chat_info(
+            _get_wxauto4_client(account_id, ensure_chat_tab=False), fallback_name=""
+        )
+        chat_type = str((info or {}).get("chat_type") or "").strip().lower()
+        return chat_type in {"group", "chatroom", "room", "chat_room"}
+    except Exception:
+        return False
+
+
+def _wait_current_chat(window: Any, target: str, timeout: float) -> bool:
+    from publisher.agent.desktop import _current_chat_name
+
+    deadline = time.monotonic() + max(2.0, float(timeout))
+    while time.monotonic() < deadline:
+        if _current_chat_name(window) == target:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _search_open_once(win: Any, target: str, query: str, timeout: float, account_id: str = "") -> tuple:
+    """输入 query 后尝试打开 target 会话。
+
+    返回 (ok, via, presses)。query 可以是 wxid（首选），也可以是显示名
+    （微信默认 wxid 在搜索里搜不到时的唯一兜底）。不管哪种，最后都按显示名
+    核对当前会话，并且拒绝同名群。
+    """
+    hwnd = int(getattr(win, "handle", 0) or 0)
+    box = _find_control(win, "搜索", region="sessions") or _find_control(win, "搜索")
+    if box is None:
+        return False, "search_box_missing", 0
+    try:
+        active = bool(win.is_active())
+    except Exception:
+        active = False
+    if not active:
+        activate_window(win)
+        try:
+            active = bool(win.is_active())
+        except Exception:
+            active = False
+    _trace("robot_search_focus", target=target, query=query, active=active)
+    if not active:
+        return False, "window_not_foreground", 0
+    typed = False
+    try:
+        from pywinauto import keyboard
+        from publisher.agent.desktop import type_text
+
+        box.click_input()
+        time.sleep(0.15)
+        keyboard.send_keys("^a")
+        keyboard.send_keys("{DELETE}")
+        typed = bool(type_text(query))
+    except Exception:
+        typed = False
+    if not typed:
+        try:
+            from pywinauto import keyboard
+
+            keyboard.send_keys(query, with_spaces=True)
+        except Exception:
+            pass
+    _trace("robot_search_typed", target=target, query=query, typed=typed)
+
+    # 1) 引擎既有实现：只点「联系人」分组第一条（老流程里验证过的就是这条）
+    try:
+        from backend.app.services.native_wechat_engine import (  # type: ignore
+            _find_local_contact_search_result,
+            _uia_click,
+            _uia_main_root,
+        )
+
+        deadline = time.monotonic() + max(4.0, float(timeout))
+        node = None
+        while time.monotonic() < deadline:
+            node = _find_local_contact_search_result(_uia_main_root(hwnd), target)
+            if node is not None:
+                break
+            time.sleep(0.25)
+        if node is not None:
+            _uia_click(node)
+            if _wait_current_chat(win, target, timeout):
+                if _opened_chat_is_group(win, account_id):
+                    _trace("robot_open_group_rejected", target=target, query=query, step="contact_first")
+                else:
+                    return True, "engine_contact_first", 0
+    except Exception as exc:
+        _trace("robot_engine_search_failed", target=target, error=str(exc)[:120])
+
+    # 2) 回车（搜索索引慢时点结果点不到，回车更稳）
+    deadline = time.monotonic() + max(4.0, float(timeout))
+    next_enter = time.monotonic() + 0.8
+    pressed = 0
+    while time.monotonic() < deadline:
+        if pressed < 3 and time.monotonic() >= next_enter:
+            try:
+                from pywinauto import keyboard as _kb
+
+                _kb.send_keys("{ENTER}")
+            except Exception:
+                pass
+            pressed += 1
+            next_enter = time.monotonic() + 2.0
+        time.sleep(0.2)
+        from publisher.agent.desktop import _current_chat_name
+
+        if _current_chat_name(win) == target:
+            if _opened_chat_is_group(win, account_id):
+                _trace("robot_open_group_rejected", target=target, query=query, step="enter")
+            else:
+                return True, "search_enter", pressed
+
+    # 3) 只点「联系人」分组（沿用老流程的点法）
+    try:
+        if _click_contact_group_result(win, target):
+            if _opened_chat_is_group(win, account_id):
+                _trace("robot_open_group_rejected", target=target, query=query, step="contact_group")
+            else:
+                return True, "contact_group_click", pressed
+    except Exception:
+        pass
+
+    # 4) 搜索结果里只点名字精确匹配的行 —— 不再盲点前几行，避免点到同名群
+    try:
+        from publisher.agent.desktop import _chat_left, _iter_controls, _rect, _visible
+
+        rect = _rect(win) or (0, 0, 0, 0)
+        chat_left = _chat_left(win, rect[0], rect[2] - rect[0])
+        rows = []
+        for c, info in _iter_controls(win):
+            try:
+                if str(info.control_type or "") != "ListItem" or not _visible(c):
+                    continue
+                if int(c.rectangle().left) >= chat_left:
+                    continue
+                rows.append((c, " ".join(str(info.name or "").split())))
+            except Exception:
+                continue
+        for c, nm in rows:
+            if not (nm == target or nm.startswith(target + " ")):
+                continue
+            try:
+                c.click_input()
+                time.sleep(1.0)
+                from publisher.agent.desktop import _current_chat_name
+
+                if _current_chat_name(win) == target and not _opened_chat_is_group(win, account_id):
+                    return True, "search_result_click", pressed
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False, "", pressed
+
+
+def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: str = "",
+              account_id: str = "") -> Result:
     res = Result(op="wechat.open_chat")
     target = str(name or "").strip()
     if not target:
@@ -147,199 +316,96 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: s
     if snap is None:
         return res
     if snap.anchors.get("chat") == target:
-        res.after = snap.to_dict()
-        res.ok = True
-        res.evidence["already_open"] = True
-        _trace("robot_open_already", target=target)
-        return res
+        if _opened_chat_is_group(win, account_id):
+            # 同名群已经打开：有 wxid 还能搜联系人，没有就只能报歧义，不能往里发
+            _trace("robot_open_group_rejected", target=target, reason="already_open")
+            if not str(search_key or "").strip():
+                res.layer, res.error = "precondition", "ambiguous_group_name"
+                return res
+        else:
+            res.after = snap.to_dict()
+            res.ok = True
+            res.evidence["already_open"] = True
+            _trace("robot_open_already", target=target)
+            return res
     _trace("robot_open_start", target=target, current=snap.anchors.get("chat"), rows=snap.count)
-    # 可视行
-    for item in snap.items:
-        if item.startswith(target):
-            try:
-                from publisher.agent.desktop import _iter_controls, _visible
 
-                for c, info in _iter_controls(win):
-                    try:
-                        if str(info.control_type or "") != "ListItem" or not _visible(c):
-                            continue
-                        if " ".join(str(info.name or "").split()) == item:
-                            c.click_input()
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-            break
-    # 轮询用便宜的"当前会话名"检查；整页快照只在命中后取一次
-    # （整页快照要扫 800 个控件 + 消息列表，真机上单次就要 1 秒多，
-    #   放在轮询里会把 2 秒的切换拖成 14 秒）
+    # 可视行：只认精确名字（或名字后面跟空格），避免点到「军争、xxx」这种同名群
     from publisher.agent.desktop import _current_chat_name
 
+    for item in snap.items:
+        if not (item == target or item.startswith(target + " ")):
+            continue
+        try:
+            from publisher.agent.desktop import _iter_controls, _visible
+
+            for c, info in _iter_controls(win):
+                try:
+                    if str(info.control_type or "") != "ListItem" or not _visible(c):
+                        continue
+                    if " ".join(str(info.name or "").split()) == item:
+                        c.click_input()
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        break
     deadline = time.monotonic() + max(3.0, float(timeout))
     while time.monotonic() < deadline:
         if _current_chat_name(win) == target:
+            if _opened_chat_is_group(win, account_id):
+                _trace("robot_open_group_rejected", target=target, reason="session_row")
+                break
             res.after = S.snapshot_desktop(win).to_dict()
             res.ok = True
             res.evidence["via"] = "session_row"
             _trace("robot_open_ok", target=target, via="session_row")
             return res
         time.sleep(0.2)
-    # 搜索 + 回车（2026-11-18 加固）
-    # 真机实测：微信搜索索引慢时，按一次回车 + 固定等 1.5s 会直接超时判失败
-    # （表现为 chat_name_mismatch，客户侧就是"没回复"）。现在：
-    #   剪贴板输入（名字里有空格/表情不会被打歪）→ 最多按 3 次回车 →
-    #   轮询窗口放到 timeout*1.5（默认 12s）→ 仍不行就点第一条匹配的搜索结果。
-    # 2026-11-18：按用户口径，微信 ID 是唯一的 —— 先用 wxid 搜；
-    # 搜不到（老号/未同步 wxid）再退回按显示名搜。两轮都走"只点联系人分组"的兜底。
-    # 2026-11-18：微信 ID 唯一 —— 有 wxid 就只按 wxid 搜，**不再退回去搜昵称**
-    # （按昵称会撞同名群：军争 / 军争、单鹏程 / 单鹏程、军争…）。
-    # 点结果这件事直接用引擎里那套已验证的实现：
-    #   _find_local_contact_search_result(root, target) 只认「联系人」分组的第一条，
-    #   避开「搜索网络结果」和群聊。
-    # 2026-11-18：没有 wxid 就不搜。只有 search_key（或 target 本身）
-    # 长得像微信号时才允许输入搜索框；显示名一律拒绝，避免同名群/同名好友。
-    query = str(search_key or "").strip()
-    if not query and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{5,27}", target):
-        query = target
-    if not query:
-        res.layer, res.error = "precondition", "wxid_required"
-        _trace("robot_open_failed", target=target, error="wxid_required")
-        return res
-    hwnd = int(getattr(win, "handle", 0) or 0)
-    box = _find_control(win, "搜索", region="sessions") or _find_control(win, "搜索")
-    if box is not None:
-        try:
-            active = bool(win.is_active())
-        except Exception:
-            active = False
-        if not active:
-            activate_window(win)
-            try:
-                active = bool(win.is_active())
-            except Exception:
-                active = False
-        _trace("robot_search_focus", target=target, active=active)
-        if not active:
-            res.layer, res.error = "precondition", "window_not_foreground"
-            _trace("robot_open_failed", target=target, error="window_not_foreground")
-            return res
-        typed = False
-        try:
-            from pywinauto import keyboard
-            from publisher.agent.desktop import type_text
 
-            box.click_input()
-            time.sleep(0.15)
-            keyboard.send_keys("^a")
-            keyboard.send_keys("{DELETE}")
-            typed = bool(type_text(query))
-        except Exception:
-            typed = False
-        if not typed:
-            try:
-                from pywinauto import keyboard
+    # 搜索：wxid 优先；微信默认 wxid 搜不到时，用显示名兜底（老流程就是这个口径）
+    sq = str(search_key or "").strip()
+    rounds: List[str] = []
+    skipped_default_wxid = False
+    if sq and sq != target:
+        # 微信默认 wxid（wxid_ 开头）在搜索里搜不到，直接走显示名兜底，
+        # 省掉一轮注定失败、还要等十几秒的搜索。
+        if sq.lower().startswith("wxid_") and target and not _looks_like_wxid_text(target):
+            skipped_default_wxid = True
+            _trace("robot_search_skip_wxid", target=target, query=sq, reason="default_wxid_unsearchable")
+        else:
+            rounds.append(sq)
+    if target and not _looks_like_wxid_text(target) and target not in rounds:
+        rounds.append(target)
+    if not rounds:
+        rounds = [target]
 
-                keyboard.send_keys(query, with_spaces=True)
-            except Exception:
-                pass
-        _trace("robot_search_typed", target=target, query=query, typed=typed)
-
-        # 1) 优先用引擎的实现：只点「联系人」分组第一条
-        node = None
-        try:
-            from backend.app.services.native_wechat_engine import (  # type: ignore
-                _find_local_contact_search_result,
-                _uia_click,
-                _uia_main_root,
+    for idx, query in enumerate(rounds):
+        ok, via, presses = _search_open_once(win, target, query, timeout, account_id)
+        if ok:
+            res.after = S.snapshot_desktop(win).to_dict()
+            res.ok = True
+            res.evidence.update(
+                {"via": via, "query": query, "enter_presses": presses}
             )
+            if idx > 0 or skipped_default_wxid:
+                res.evidence["fallback"] = "display_name"
+            _trace(
+                "robot_open_ok",
+                target=target,
+                via=via,
+                query=query,
+                fallback=bool(idx > 0 or skipped_default_wxid),
+                presses=presses,
+            )
+            return res
+        _trace("robot_search_round_failed", target=target, query=query, round=idx + 1)
 
-            deadline = time.monotonic() + max(4.0, float(timeout))
-            while time.monotonic() < deadline:
-                node = _find_local_contact_search_result(_uia_main_root(hwnd), target)
-                if node is not None:
-                    break
-                time.sleep(0.25)
-            if node is not None:
-                _uia_click(node)
-                wait_until = time.monotonic() + max(3.0, float(timeout))
-                while time.monotonic() < wait_until:
-                    time.sleep(0.2)
-                    if _current_chat_name(win) == target:
-                        res.after = S.snapshot_desktop(win).to_dict()
-                        res.ok = True
-                        res.evidence.update({"via": "engine_contact_first", "query": query})
-                        _trace("robot_open_ok", target=target, via="engine_contact_first", query=query)
-                        return res
-        except Exception as exc:
-            _trace("robot_engine_search_failed", target=target, error=str(exc)[:120])
-
-        # 2) 引擎那条没成：仍按 wxid 回车（最多 3 次），但**不换昵称**
-        deadline = time.monotonic() + max(4.0, float(timeout))
-        next_enter = time.monotonic() + 0.8
-        pressed = 0
-        while time.monotonic() < deadline:
-            if pressed < 3 and time.monotonic() >= next_enter:
-                try:
-                    from pywinauto import keyboard as _kb
-
-                    _kb.send_keys("{ENTER}")
-                except Exception:
-                    pass
-                pressed += 1
-                next_enter = time.monotonic() + 2.0
-            time.sleep(0.2)
-            if _current_chat_name(win) == target:
-                res.after = S.snapshot_desktop(win).to_dict()
-                res.ok = True
-                res.evidence.update({"via": "search_enter", "enter_presses": pressed, "query": query})
-                _trace("robot_open_ok", target=target, via="search_enter", presses=pressed, query=query)
-                return res
-
-        # 兜底 1：只在"联系人"分组里点（这是以前那个流程）
-        try:
-            if _click_contact_group_result(win, target):
-                res.ok = True
-                res.evidence["via"] = "contact_group_click"
-                _trace("robot_open_ok", target=target, via="contact_group_click")
-                return res
-        except Exception:
-            pass
-        # 兜底 2：点搜索结果里第一条匹配的行
-        try:
-            from publisher.agent.desktop import _chat_left, _iter_controls, _visible
-
-            rect = _rect(win) or (0, 0, 0, 0)
-            chat_left = _chat_left(win, rect[0], rect[2] - rect[0])
-            rows = []
-            for c, info in _iter_controls(win):
-                try:
-                    if str(info.control_type or "") != "ListItem" or not _visible(c):
-                        continue
-                    if int(c.rectangle().left) >= chat_left:
-                        continue
-                    rows.append((c, str(info.name or "").strip()))
-                except Exception:
-                    continue
-            # 先点名字匹配的，再逐个试前几行（wxid 搜索时行里显示昵称，不能靠名字过滤）
-            ordered = [c for c, nm in rows if nm.startswith(target)] + [c for c, nm in rows if not nm.startswith(target)]
-            for c in ordered[:4]:
-                try:
-                    c.click_input()
-                    time.sleep(1.0)
-                    if S.snapshot_desktop(win).anchors.get("chat") == target:
-                        res.ok = True
-                        res.evidence["via"] = "search_result_click"
-                        _trace("robot_open_ok", target=target, via="search_result_click")
-                        return res
-                except Exception:
-                    continue
-        except Exception:
-            pass
     after = S.snapshot_desktop(win)
     res.after = after.to_dict()
     res.layer, res.error = "verify", "chat_name_mismatch"
-    _trace("robot_open_failed", target=target, current=S.snapshot_desktop(win).anchors.get("chat"), error="chat_name_mismatch")
+    _trace("robot_open_failed", target=target, current=after.anchors.get("chat"), error="chat_name_mismatch")
     return res
 
 

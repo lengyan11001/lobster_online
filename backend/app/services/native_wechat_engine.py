@@ -22370,7 +22370,7 @@ def _agent_send_fallback(account_id: str, peer_id: str, text: str, *, search_key
     try:
         from publisher.robot import wechat_ops as W
 
-        opened = W.open_chat(str(peer_id), search_key=str(search_key or ""))
+        opened = W.open_chat(str(peer_id), search_key=str(search_key or ""), account_id=account_id)
         if not opened.ok:
             logger.warning(
                 "[native-wechat] robot 无法切到目标会话 peer=%s layer=%s err=%s",
@@ -22492,9 +22492,9 @@ def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict
     target = str(peer_id or "").strip()
     if not target:
         return None
-    # 2026-11-18 用户口径：微信 ID 唯一，禁止按昵称搜索。
-    # 传进来是显示名时，先用本地通讯录做唯一映射；映射不出来就跳过，
-    # 由上层报"缺微信号"，绝不按昵称盲搜（同名群：军争 / 军争、单鹏程 / 单鹏程）。
+    # 2026-11-18 用户口径：微信 ID 优先。能唯一映射到 wxid 就按 wxid 搜；
+    # 但微信默认 wxid（wxid_ 开头）在搜索里是搜不到的，必须保留显示名兜底。
+    # 兜底只在「联系人」分组里点结果，并拒绝同名群（军争 / 军争、单鹏程 / 单鹏程）。
     if _looks_like_wechat_id(target):
         wxid = target
         resolved = _peer_display_name(account_id, wxid) or wxid
@@ -22502,17 +22502,19 @@ def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict
         wxid = _resolve_unique_local_contact_wx_no(account_id, target)
         resolved = target
         if not _looks_like_wechat_id(wxid):
-            logger.info("[native-wechat] robot 跳过：显示名未唯一映射到微信号 name=%s", target)
+            # 微信默认 wxid 在搜索里搜不到，通讯录也可能没有号：保留显示名兜底。
+            # open_chat 只用「联系人」分组点结果，并拒绝同名群，不会再串到群里。
+            logger.info("[native-wechat] robot 显示名兜底（无可用 wxid）name=%s", target)
             try:
                 _send_path_debug(
                     account_id,
-                    stage="robot_skip_no_wxid",
+                    stage="robot_name_fallback",
                     driver="robot_send",
                     target=target,
                 )
             except Exception:
                 pass
-            return None
+            return _robot_call(account_id, target, text)
     logger.info("[native-wechat] robot 用 wxid 搜、按显示名核对 peer=%s -> %s", wxid, resolved)
     return _robot_call(account_id, resolved, text, search_key=wxid)
 
@@ -22527,8 +22529,9 @@ def _send_text_local_slow(
     raw_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
     driver_name = str(raw_meta.get("driver") or "").strip()
     peer_id = str(peer_id or "").strip()
-    # 2026-11-18：发送身份统一成微信号。传进来是显示名时先在本地通讯录做唯一映射；
-    # 映射不到就明确报错，绝不按昵称搜索（同名群会发错人）。
+    # 2026-11-18：发送身份优先用微信号。传进来是显示名时先在本地通讯录做唯一映射；
+    # 映射不到就保留显示名兜底（微信默认 wxid 搜不到），由 robot 只点「联系人」分组
+    # 并拒绝同名群，避免串到群里。
     if (
         peer_id
         and not use_current_chat
@@ -22546,8 +22549,13 @@ def _send_text_local_slow(
             )
             peer_id = resolved_wxid
         else:
-            raise RuntimeError(
-                f"未找到「{peer_id}」对应的微信号，已跳过发送（禁止按昵称搜索；请先同步通讯录）"
+            # 微信默认 wxid 搜不到、通讯录也没号：保留显示名兜底（老流程口径）。
+            # open_chat 只会点「联系人」分组第一条并拒绝同名群，不会串到群里。
+            _write_auto_reply_diagnostic(
+                "send_identity_nickname_fallback",
+                account_id=account_id,
+                target_display_name=peer_id,
+                reason="no_wxid_unique_mapping",
             )
     # 2026-11-17：robot 优先。微信 4.x 自绘输入框读不回内容，老链路会"打进去了但判定失败"，
     # 反复重试还会把同一句话打多遍。robot 有快照回读，先走它。
