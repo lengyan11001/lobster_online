@@ -1,7 +1,7 @@
 {
-  "version": "2.0.281",
-  "build": 587,
-  "applied_at": "2026-11-18T14:38:51+08:00",
-  "note": "main 分支修复：口播优化 job_dir/out 初始化、主音轨支持纯音频探测",
-  "bundle_sha256": "aa59976137663cc7ee75d9be2bdce82ac6587d612641e34b50e3d4d5311ccafa"
+  "version": "2.0.282",
+  "build": 588,
+  "applied_at": "2026-11-18T15:02:59+08:00",
+  "note": "剪辑大师参数记忆、模板标题换行、模板来源改名、口播音频替换修复",
+  "bundle_sha256": "8be50e617d63d953d9f4acc70a77321105d73cefa78abc02ca90df2054c3d731"
 }
