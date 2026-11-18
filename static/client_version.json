@@ -1,7 +1,7 @@
 {
-  "version": "2.0.307",
-  "build": 614,
-  "applied_at": "2026-11-18T16:50:38+08:00",
-  "note": "朋友圈发图文支持从素材库选择（本机已验证）",
-  "bundle_sha256": "b77b866864c4473a7cace04bd79641ed904904f2fecc474c0c6ce891ce52d43b"
+  "version": "2.0.308",
+  "build": 615,
+  "applied_at": "2026-11-18T16:56:47+08:00",
+  "note": "内容记录朋友圈发布直接走本机链路（素材本地化+自动提交）",
+  "bundle_sha256": "f89bdfe7d78bd7b17ff73f21ba636b1d761b60c41ec61bf251ea690afbd995f5"
 }
