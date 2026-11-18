@@ -48,13 +48,13 @@ NATIVE_WECHAT_AUTO_REPLY_LOG = LOG_DIR / "native_wechat_auto_reply.jsonl"
 NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER = LOG_DIR / "native_wechat_auto_reply.disabled"
 try:
     _native_wechat_log_max_bytes_env = int(
-        os.environ.get("LOBSTER_NATIVE_WECHAT_LOG_MAX_BYTES", str(50 * 1024 * 1024))
-        or 50 * 1024 * 1024
+        os.environ.get("LOBSTER_NATIVE_WECHAT_LOG_MAX_BYTES", str(8 * 1024 * 1024))
+        or 8 * 1024 * 1024
     )
 except (TypeError, ValueError):
-    _native_wechat_log_max_bytes_env = 50 * 1024 * 1024
+    _native_wechat_log_max_bytes_env = 8 * 1024 * 1024
 NATIVE_WECHAT_LOG_MAX_BYTES = max(1024 * 1024, _native_wechat_log_max_bytes_env)
-NATIVE_WECHAT_LOG_BACKUP_COUNT = 3
+NATIVE_WECHAT_LOG_BACKUP_COUNT = 2
 NATIVE_WECHAT_UPLOAD_DIR = ROOT_DIR / "temp_assets" / "native_wechat"
 NATIVE_WECHAT_DOWNLOAD_DIR = ROOT_DIR / "assets" / "native_wechat"
 NATIVE_WECHAT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -363,7 +363,16 @@ def _write_auto_reply_diagnostic(
         "account_id": str(account_id or ""),
         "run_id": str(run_id or ""),
     }
-    entry.update(_json_safe_value(fields, max_text=1200))
+    entry.update(_json_safe_value(fields, max_text=800))
+    # 整条事件也限长：异常 payload（例如整段会话/消息列表）不允许再撑爆文件
+    try:
+        if len(json.dumps(entry, ensure_ascii=False)) > 8192:
+            keep = {k: v for k, v in entry.items()
+                    if k in {"timestamp", "event", "account_id", "run_id", "error", "error_message", "replied", "processed", "failed", "skipped", "round", "consecutive"}}
+            keep["truncated"] = True
+            entry = keep
+    except Exception:
+        pass
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with _AUTO_REPLY_DIAGNOSTIC_LOCK:
@@ -429,7 +438,13 @@ def _json_safe_value(value: Any, *, max_text: int = 1200) -> Any:
     if isinstance(value, dict):
         return {str(k): _json_safe_value(v, max_text=max_text) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
-        return [_json_safe_value(v, max_text=max_text) for v in list(value)]
+        # 2026-11-17：用户机上这个 JSONL 涨到 45MB —— 一条事件里 items/rounds 可能几百条。
+        # 列表只保留前 12 条 + 计数，别把整批明细写进日志。
+        raw_list = list(value)
+        trimmed = [_json_safe_value(v, max_text=max_text) for v in raw_list[:12]]
+        if len(raw_list) > 12:
+            trimmed.append(f"...<{len(raw_list) - 12} more>")
+        return trimmed
     if isinstance(value, (str, int, float, bool)) or value is None:
         if isinstance(value, str) and len(value) > max_text:
             return value[:max_text] + "...<truncated>"
@@ -3590,8 +3605,20 @@ def _looks_like_group_session(item: Dict[str, Any]) -> bool:
         return True
     preview = str(item.get("last_content") or "").strip()
     first_line = next((line.strip() for line in preview.splitlines() if line.strip()), "")
-    if re.match(r"^[^:：]{1,40}[:：]", first_line):
-        return True
+    m = re.match(r"^([^:：]{1,40})[:：]", first_line)
+    if m:
+        head = m.group(1).strip()
+        # 2026-11-18：真机误判——单聊最后一条是 "robot自开会话 12:27:48"，
+        # 冒号前的 "robot自开会话 12" 被当成"群成员名: 内容"，整个单聊被 skip_group 跳过，
+        # 客户侧就是"不回复"。
+        # 时间戳、URL、纯数字/纯符号前缀都不算"群成员名"。
+        looks_like_time = bool(re.match(r"^\d{1,2}:\d{2}(:\d{2})?$", head)) or bool(
+            re.search(r"\d{1,2}:\d{2}", head)
+        )
+        looks_like_url = "http" in head.lower() or "www." in head.lower()
+        has_name_shape = bool(re.search(r"[A-Za-z\u4e00-\u9fff]", head))
+        if not looks_like_time and not looks_like_url and has_name_shape:
+            return True
     return False
 
 
@@ -5013,16 +5040,32 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
             # keep the explicit action for callers that use the prefilter
             # independently.
             return {"action": "stop", "reason": "last_message_over_24h"}
-    known_type = _normalize_local_chat_type(
-        session.get("chat_type") or _known_local_peer_chat_type(account_id, peer_id)
-    )
-    if (
+    # 2026-11-18：扫描阶段经常给 "unknown"（wxauto4 不提供类型时不猜）。
+    # 以前 "unknown" 是 truthy，直接把库里的 friend 覆盖掉了 → 下游只能靠文本猜 → 误判成群。
+    # 现在把 unknown/空 当作"没有信息"，回落到本地库（wechat_peers / 通讯录同步结果）。
+    session_chat_type = _normalize_local_chat_type(session.get("chat_type"))
+    if session_chat_type in {"", "unknown", "none", "null"}:
+        session_chat_type = _normalize_local_chat_type(
+            _known_local_peer_chat_type(account_id, peer_id)
+        )
+    known_type = session_chat_type
+    # 2026-11-18：区分"确定的群/公众号"和"只是预览看起来像群消息"。
+    # 现场：军争 最后一条是 "robot自开会话 12:27:48"，冒号让 _looks_like_group_session
+    # 判成群 → 直接 skip_group → 客户侧"不回复"。
+    known_private = known_type in _LOCAL_PRIVATE_CHAT_TYPES
+    peer_key = str(session.get("peer_id") or session.get("display_name") or "")
+    authoritative_group = (
         _local_chat_type_is_group(known_type)
         or known_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
-        or _looks_like_group_session({**session, "chat_type": known_type})
         or _is_non_private_session_entry(session)
-    ):
+        or "@chatroom" in peer_key.lower()
+        or "群" in peer_key
+    )
+    if authoritative_group:
         return {"action": "skip_group", "reason": "known_non_private", "chat_type": known_type}
+    if not known_private and _looks_like_group_session({**session, "chat_type": known_type}):
+        # 只有"预览文本像群消息"这一条证据 → 打开看一眼再决定，不要直接丢
+        return {"action": "open", "reason": "group_heuristic_verify", "chat_type": known_type}
     if (
         not session.get("session_snapshot_fresh")
         and not _session_has_explicit_private_evidence(account_id, session, known_type)
@@ -5504,21 +5547,43 @@ async def run_auto_reply_once(
                         identity_mode="nickname" if nickname_identity else "wechat_id",
                     )
                 elif isinstance(scan_capture, dict):
-                    # The scanner already attempted this row while it was on
-                    # the visible page. Do not fall back to a second nickname
-                    # search in the same round; retry it on the next fresh
-                    # takeover scan instead.
-                    raise RuntimeError(
-                        str(scan_capture.get("error") or "page capture did not produce a current chat snapshot")
+                    # 这一行在页面上抓取失败（不是"最新一条不是入站"）。
+                    # 单行失败不能把整轮自动回复判死，否则后面的真人消息永远轮不到；
+                    # 本轮跳过，下一轮重新扫描再试。
+                    result["skipped"] += 1
+                    skip_reason = str(
+                        scan_capture.get("error") or "page capture did not produce a current chat snapshot"
+                    )[:300]
+                    collection_result.update(
+                        {"status": "scan_capture_failed", "skip_reason": skip_reason}
                     )
+                    result["items"].append(collection_result)
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="scan_capture_failed",
+                        reason=skip_reason,
+                    )
+                    continue
                 else:
                     if not scanned_wechat_id:
-                        # The precise wxauto scan must have captured this row
-                        # while it was visible.  Do not reopen a missing
-                        # capture by nickname after the list has moved.
-                        raise RuntimeError(
-                            "page capture missing for session; nickname selection is disabled"
+                        # 本轮没抓到这一行的页面快照，也没有可用的 wxid。
+                        # 不按昵称盲搜（会点错同名会话），跳过这个候选人，
+                        # 让下一轮重新扫描；不能因此把整轮自动回复判失败。
+                        result["skipped"] += 1
+                        collection_result.update(
+                            {"status": "scan_capture_missing", "skip_reason": "scan_capture_missing"}
                         )
+                        result["items"].append(collection_result)
+                        log_event(
+                            "session_skipped",
+                            peer_id=peer_id,
+                            display_name=display_name,
+                            status="scan_capture_missing",
+                            reason="scan_capture_missing",
+                        )
+                        continue
                     sync_result = await _run_local_wechat_async(
                         sync_local_messages,
                         account_id,
@@ -10063,6 +10128,13 @@ def _run_local_driver_operation(
             # 以前那个行为会把用户刚按下的暂停静默取消（任何自动回复/发消息都会走到这里）。
             # 现在暂停中直接拒绝启动，由用户点「继续」/Alt+R 恢复（竞品也是这个语义）。
             if _task_ctl.stop_requested() and not force:
+                # 2026-11-18：暂停状态下任务不会开始，begin_task 就不会跑，
+                # 悬浮键也就永远不出现 —— 用户没有「继续」按钮（现场就是"右下角没浮标"）。
+                # 这里主动把悬浮键拉起来，保证还有入口能恢复。
+                try:
+                    _task_ctl.ensure_overlay(idle_seconds=3600)
+                except Exception:
+                    pass
                 raise TaskPaused(PAUSED_MESSAGE)
         except TaskPaused:
             raise
@@ -10127,6 +10199,21 @@ def _run_local_driver_operation(
                     error=str(initial_exc),
                 )
                 if not recovery.get("ok"):
+                    # 2026-11-18：恢复阶段发现"已被暂停"时，不要包成"读取微信会话失败"。
+                    # 现场就是这条误导性文案，导致一直在查会话而没看到其实是暂停了。
+                    _ctl = _task_control()
+                    if _ctl is not None:
+                        try:
+                            if _ctl.stop_requested():
+                                try:
+                                    _ctl.ensure_overlay(idle_seconds=3600)
+                                except Exception:
+                                    pass
+                                raise TaskPaused(PAUSED_MESSAGE)
+                        except TaskPaused:
+                            raise
+                        except Exception:
+                            pass
                     raise RuntimeError(
                         f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u9a71\u52a8\u672a\u6210\u529f\uff1a"
                         f"{recovery.get('error') or initial_exc}"
@@ -10583,12 +10670,6 @@ def _capture_auto_reply_scan_page(
             not peer_id
             or not reliability.get("reliable")
             or float(reliability.get("age_seconds") or 0) >= 24 * 60 * 60
-            or _is_non_private_session_entry(session)
-            or _local_chat_type_is_group(
-                (session.get("raw") or {}).get("type")
-                if isinstance(session.get("raw"), dict)
-                else ""
-            )
         ):
             capture_skip(
                 "page_row_prefiltered",
@@ -10668,7 +10749,6 @@ def _capture_auto_reply_scan_page(
             if (
                 _local_chat_type_is_group(chat_type)
                 or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
-                or not _local_chat_type_is_private(chat_type)
             ):
                 capture_skip(
                     "chat_type_not_private",
@@ -10677,6 +10757,13 @@ def _capture_auto_reply_scan_page(
                     message_chat_type=str(sync_result.get("message_chat_type") or ""),
                 )
                 continue
+            if not _local_chat_type_is_private(chat_type):
+                # 这一行已经通过扫描阶段的私聊预过滤；wxauto 读不到 chat_info
+                # 时不要把整行丢掉（线上就是这里把私聊吞了，表现为"不回复"）。
+                # 先按私聊采集，真正发送前 _verify_local_send_chat(strict_private)
+                # 还会再拦一次群聊。
+                chat_type = "friend"
+                chat_type_source = "scan_private_prefilter"
             fresh = sync_result.get("fresh_latest_message")
             if not isinstance(fresh, dict) or str(fresh.get("direction") or "").strip().lower() != "in":
                 captures[peer_id] = {
@@ -11778,6 +11865,35 @@ def _sync_local_sessions_from_uia(
     }
 
 
+def _agent_recover_wechat_ui() -> bool:
+    """把微信拉回聊天页（桌面 Agent，surface 闸门 + 快照校验）。
+
+    2026-11-17：自动回复走的是 _AUTO_REPLY_TIME_SCAN_ACCOUNTS 的 wxauto4 快扫分支，
+    那条分支**绕过了**原来的 agent 兜底，所以用户看到的就是
+    "读取微信会话失败…Find Control Timeout: right_v_view.user_info_center_view"
+    而日志里一个 agent 事件都没有。这里抽成公用函数，两条分支都用。
+    """
+    try:
+        from publisher.agent import recover_desktop
+
+        rec = recover_desktop(
+            stage="wechat_sessions",
+            goal="微信主窗口已回到「聊天」页，且左侧会话列表可见",
+            max_steps=4,
+            timeout_seconds=180.0,
+        )
+        if rec.ok:
+            logger.info(
+                "[native-wechat] agent 已把微信拉回聊天页 steps=%s recovered=%s",
+                rec.steps, rec.recovered,
+            )
+            return True
+        logger.warning("[native-wechat] agent 恢复失败: %s", str(rec.error or "")[:160])
+    except Exception as exc:
+        logger.warning("[native-wechat] agent 恢复异常: %s", str(exc)[:200])
+    return False
+
+
 def _sync_local_sessions_once(
     account_id: str,
     *,
@@ -11798,11 +11914,26 @@ def _sync_local_sessions_once(
     if account_id in _AUTO_REPLY_TIME_SCAN_ACCOUNTS and not passive and not recent_only:
         # Do not fall back to UIA's calendar labels here: automatic takeover
         # must only process rows with a precise wxauto4 timestamp.
-        return _sync_recent_sessions_from_wxauto4(
-            account_id,
-            max_pages=12,
-            capture_auto_reply=capture_auto_reply,
-        )
+        try:
+            return _sync_recent_sessions_from_wxauto4(
+                account_id,
+                max_pages=12,
+                capture_auto_reply=capture_auto_reply,
+            )
+        except Exception as wx4_exc:
+            if passive:
+                raise
+            # 2026-11-17：这条分支以前没有兜底 —— 微信停在非聊天页/资料卡读不到时，
+            # 自动回复直接整轮失败（用户侧表现就是"个微不回复"）。
+            if _agent_recover_wechat_ui():
+                data = _sync_recent_sessions_from_wxauto4(
+                    account_id,
+                    max_pages=12,
+                    capture_auto_reply=capture_auto_reply,
+                )
+                data["agent_recovered"] = True
+                return data
+            raise
     try:
         return _sync_local_sessions_from_uia(account_id, passive=passive, recent_only=recent_only)
     except Exception as uia_exc:
@@ -11815,23 +11946,13 @@ def _sync_local_sessions_once(
         except Exception as wx_exc:
             # 2026-11-16：硬编码读取都失败时，交给桌面 Agent 把微信拉回聊天页再试一次
             try:
-                from publisher.agent import recover_desktop
-
-                rec = recover_desktop(
-                    stage="wechat_sessions",
-                    goal="微信主窗口已回到「聊天」页，且左侧会话列表可见",
-                    max_steps=4,
-                    timeout_seconds=180.0,
-                )
-                if rec.ok:
+                if _agent_recover_wechat_ui():
                     data = _sync_local_sessions_from_uia(
                         account_id, passive=passive, recent_only=recent_only
                     )
                     data["agent_recovered"] = True
                     return data
-                logger.warning(
-                    "[native-wechat] agent recovery failed: %s", str(rec.error or "")[:200]
-                )
+                logger.warning("[native-wechat] agent recovery 未成功，继续抛原始错误")
             except Exception as agent_exc:
                 logger.warning(
                     "[native-wechat] agent recovery crashed: %s", str(agent_exc)[:200]
@@ -22264,40 +22385,160 @@ def _send_text_local_slow_once(
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "pc_wechat_slow_typing"}
 
 
-def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
+def _agent_send_fallback(account_id: str, peer_id: str, text: str, *, search_key: str = "") -> Optional[Dict[str, Any]]:
     """确定性发送链路写不进输入框时（微信 4.x 自绘输入框读不回内容），
-    交给桌面 Agent：校验当前会话就是目标，再清空输入框→写入→回车，最后从聊天记录验证。
-    只在“已阻止点击发送”这种确认没发出去的情况下调用，避免重复发送。"""
+    交给 robot 操作层：open_chat 先摆正会话，send_message 用快照差异验证。
+    只在"已阻止点击发送"（确认没发出去）的分支调用，避免重复发送。"""
     try:
-        from publisher.agent import recover_desktop
+        from publisher.robot import wechat_ops as W
 
-        expect = str(text or "").strip()[:16]
-        if not expect:
+        opened = W.open_chat(str(peer_id), search_key=str(search_key or ""), account_id=account_id)
+        if not opened.ok:
+            logger.warning(
+                "[native-wechat] robot 无法切到目标会话 peer=%s layer=%s err=%s",
+                peer_id, opened.layer, opened.error,
+            )
             return None
-        rec = recover_desktop(
-            stage="wechat_send",
-            goal=(
-                "当前会话必须是「" + str(peer_id) + "」。用 send 动作把下面这条消息发出去，"
-                "发送后要能在聊天记录里看到：" + str(text)
-            ),
-            guard_name=str(peer_id),
-            expect_text=expect,
-            max_steps=4,
-            timeout_seconds=180.0,
-        )
-        if rec.ok:
-            logger.info("[native-wechat] agent 接管发送成功 peer=%s steps=%s", peer_id, rec.steps)
+        # 2026-11-18：验证口径统一 —— 用引擎自己的可见消息快照，
+        # 不再靠 robot 轮询聊天区文本（两套判定会得出不同结论）。
+        _verify_hook = None
+        try:
+            _wx = _get_wxauto4_client(account_id)
+            _before = _wxauto_visible_message_snapshot(_wx)
+
+            def _verify_hook(probe: str) -> bool:  # type: ignore[misc]
+                return _wxauto_snapshot_has_new_outbound(
+                    _before, _wxauto_visible_message_snapshot(_wx), probe
+                )
+        except Exception as _exc:
+            logger.debug("[native-wechat] engine snapshot verifier unavailable: %s", str(_exc)[:120])
+        sent = W.send_message(str(text), to=str(peer_id), verify_hook=_verify_hook)
+        # 2026-11-18：robot 的结果必须落进 native_wechat_send.jsonl，
+        # 否则用户说"没收到"时，日志里只有"robot 按显示名发送"，没有结果可查。
+        try:
+            _send_path_debug(
+                account_id,
+                stage="robot_send_result",
+                driver="robot_send",
+                target=str(peer_id),
+                ok=bool(getattr(sent, "ok", False)),
+                layer=str(getattr(sent, "layer", "") or ""),
+                error=str(getattr(sent, "error", "") or "")[:200],
+                evidence=str(getattr(sent, "evidence", "") or "")[:300],
+            )
+        except Exception:
+            pass
+        if sent.ok:
+            logger.info("[native-wechat] robot 接管发送成功 peer=%s evidence=%s",
+                        peer_id, str(sent.evidence.get("matched") or "")[:40])
             return {
                 "ok": True,
-                "driver": "agent_send",
+                "driver": "robot_send",
                 "peer_id": peer_id,
-                "agent_steps": rec.steps,
+                "matched": sent.evidence.get("matched", ""),
                 "text": text,
             }
-        logger.warning("[native-wechat] agent 发送未成功 peer=%s err=%s", peer_id, str(rec.error)[:160])
+        logger.warning("[native-wechat] robot 发送失败 peer=%s layer=%s err=%s",
+                       peer_id, sent.layer, sent.error)
     except Exception as exc:
-        logger.warning("[native-wechat] agent 发送兜底异常: %s", str(exc)[:200])
+        logger.warning("[native-wechat] robot 发送兜底异常: %s", str(exc)[:200])
     return None
+
+
+def _peer_display_name(account_id: str, peer_id: str) -> str:
+    """把 wxid 换成会话里显示的名字（robot 只能按名字定位会话）。"""
+    key = str(peer_id or "").strip()
+    if not key:
+        return ""
+    def _usable(value: Any) -> str:
+        text = str(value or "").strip()
+        # 2026-11-18：历史脏数据里存在 display_name == wxid 的 peer 行
+        # （例如 eiaiyuangong -> eiaiyuangong），那不是会话标题，不能拿去做
+        # 「打开后核对会话名」，否则 robot 永远判定 chat_name_mismatch。
+        if not text or text.casefold() == key.casefold():
+            return ""
+        return text
+
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "select display_name from wechat_peers where account_id=? and peer_id=? limit 1",
+                (str(account_id or ""), key),
+            ).fetchone()
+            if row and _usable(row[0]):
+                return _usable(row[0])
+            row = conn.execute(
+                "select display_name from wechat_peers where peer_id=? or display_name=? limit 1",
+                (key, key),
+            ).fetchone()
+            if row and _usable(row[0]):
+                return _usable(row[0])
+            row = conn.execute(
+                "select display_name, contact_key from wechat_contacts where contact_key=? or wx_no=? limit 1",
+                (key, key),
+            ).fetchone()
+            if row:
+                return _usable(row[0]) or _usable(row[1])
+    except Exception as exc:
+        logger.debug("[native-wechat] resolve display name failed: %s", exc)
+    return ""
+
+
+def _robot_call(account_id: str, target: str, text: str, *, search_key: str = "") -> Optional[Dict[str, Any]]:
+    """带硬超时的 robot 发送（45s），超时/异常都返回 None 交给上层处理。"""
+    import concurrent.futures as _cf
+
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            fut = _pool.submit(_agent_send_fallback, account_id, target, text, search_key=search_key)
+            return fut.result(timeout=45.0)
+    except _cf.TimeoutError:
+        logger.warning("[native-wechat] robot 发送超时（45s） peer=%s", target)
+        return None
+    except Exception as exc:
+        logger.warning("[native-wechat] robot 发送异常: %s", str(exc)[:160])
+        return None
+
+
+def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
+    """robot 负责"开会话 + 发送"。
+
+    2026-11-17：以前遇到 wxid 直接放弃 robot，全部落回老链路（写不进输入框）。
+    2026-11-18：改成用 wxid 去搜索、按显示名核对会话 —— 只按显示名搜会撞到同名群聊
+    （现场：军争 / 军争、单鹏程 / 单鹏程、军争），打开的是群，随即 session_target_mismatch。
+    """
+    import os as _os
+
+    if str(_os.environ.get("LOBSTER_WECHAT_SEND_ROBOT", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    target = str(peer_id or "").strip()
+    if not target:
+        return None
+    # 2026-11-18 用户口径：微信 ID 优先。能唯一映射到 wxid 就按 wxid 搜；
+    # 但微信默认 wxid（wxid_ 开头）在搜索里是搜不到的，必须保留显示名兜底。
+    # 兜底只在「联系人」分组里点结果，并拒绝同名群（军争 / 军争、单鹏程 / 单鹏程）。
+    if _looks_like_wechat_id(target):
+        wxid = target
+        resolved = _peer_display_name(account_id, wxid) or wxid
+    else:
+        wxid = _resolve_unique_local_contact_wx_no(account_id, target)
+        resolved = target
+        if not _looks_like_wechat_id(wxid):
+            # 微信默认 wxid 在搜索里搜不到，通讯录也可能没有号：保留显示名兜底。
+            # open_chat 只用「联系人」分组点结果，并拒绝同名群，不会再串到群里。
+            logger.info("[native-wechat] robot 显示名兜底（无可用 wxid）name=%s", target)
+            try:
+                _send_path_debug(
+                    account_id,
+                    stage="robot_name_fallback",
+                    driver="robot_send",
+                    target=target,
+                )
+            except Exception:
+                pass
+            return _robot_call(account_id, target, text)
+    logger.info("[native-wechat] robot 用 wxid 搜、按显示名核对 peer=%s -> %s", wxid, resolved)
+    return _robot_call(account_id, resolved, text, search_key=wxid)
 
 
 def _send_text_local_slow(
@@ -22307,23 +22548,66 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
+    raw_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+    driver_name = str(raw_meta.get("driver") or "").strip()
+    peer_id = str(peer_id or "").strip()
+    # 2026-11-18：发送身份优先用微信号。传进来是显示名时先在本地通讯录做唯一映射；
+    # 映射不到就保留显示名兜底（微信默认 wxid 搜不到），由 robot 只点「联系人」分组
+    # 并拒绝同名群，避免串到群里。
+    if (
+        peer_id
+        and not use_current_chat
+        and driver_name != "native_wechat_group_welcome"
+        and not _looks_like_wechat_id(peer_id)
+    ):
+        resolved_wxid = _resolve_unique_local_contact_wx_no(account_id, peer_id)
+        if _looks_like_wechat_id(resolved_wxid):
+            _write_auto_reply_diagnostic(
+                "send_identity_resolved",
+                account_id=account_id,
+                target_display_name=peer_id,
+                wechat_id=resolved_wxid,
+                reason="local_contact_unique_mapping",
+            )
+            peer_id = resolved_wxid
+        else:
+            # 微信默认 wxid 搜不到、通讯录也没号：保留显示名兜底（老流程口径）。
+            # open_chat 只会点「联系人」分组第一条并拒绝同名群，不会串到群里。
+            _write_auto_reply_diagnostic(
+                "send_identity_nickname_fallback",
+                account_id=account_id,
+                target_display_name=peer_id,
+                reason="no_wxid_unique_mapping",
+            )
+    # 2026-11-17：robot 优先。微信 4.x 自绘输入框读不回内容，老链路会"打进去了但判定失败"，
+    # 反复重试还会把同一句话打多遍。robot 有快照回读，先走它。
+    _robot = _robot_send_first(account_id, peer_id, text)
+    if _robot is not None:
+        return _robot
     try:
+        # 2026-11-17：发送不再自动重试 3 次。
+        # 老链路在微信 4.x 读不回输入框内容，每次"重试"都会把同一句话重新打一遍
+        # （客户看到的就是"连续输入几遍但不发送"）。失败一次就直接交给 robot：
+        # robot 会清空输入框、打一遍、回车，并用聊天记录验证。
         return _run_local_driver_operation(
             account_id,
             "发送微信自动回复",
             lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
-        # Sending is verified from the visible chat record. If the UI driver
-        # loses its COM/UIA handle mid-send, rebuild the driver and retry the
-        # same operation instead of leaving the task stuck until the user
-        # restarts WeChat.
-            retry_on_failure=True,
+            retry_on_failure=False,
         )
     except RuntimeError as exc:
-        # 明确“已阻止点击发送”= 这条消息没发出去，可以安全交给 Agent 再发一次
-        if "已阻止" in str(exc):
-            fallback = _agent_send_fallback(account_id, peer_id, text)
-            if fallback is not None:
-                return fallback
+        # 老链路失败：robot 会先确认当前会话就是目标，再清空/输入/回车/回读，
+        # 不会重复打字；只有 robot 也失败才把原始错误抛出去。
+        # peer_id 已在上游统一成 wxid：robot 的 open_chat 需要「显示名 + wxid 搜索键」
+        # 两个参数，直接把 wxid 当显示名传进去会永远核对不上会话标题。
+        fallback = _agent_send_fallback(
+            account_id,
+            _peer_display_name(account_id, peer_id) or peer_id,
+            text,
+            search_key=peer_id,
+        )
+        if fallback is not None:
+            return fallback
         raise
 
 

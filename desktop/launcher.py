@@ -286,8 +286,8 @@ LOG_PATH = ROOT / "desktop_launcher.log"
 WINDOW_STATE_PATH = ROOT / "browser_data" / "desktop_window_state.json"
 _WINDOW_STATE_LOCK = threading.Lock()
 _WINDOW_STATE_TIMER: threading.Timer | None = None
-_LOG_ROTATE_MAX_BYTES = 50 * 1024 * 1024
-_LOG_ROTATE_BACKUP_COUNT = 3
+_LOG_ROTATE_MAX_BYTES = 8 * 1024 * 1024
+_LOG_ROTATE_BACKUP_COUNT = 2
 _LOG_ROTATE_LOCK = threading.Lock()
 APP_ICON_PATH: Path | None = None
 LOADING_MARK_PATH: Path | None = None
@@ -378,7 +378,15 @@ def log(message: str) -> None:
 
 
 def clear_service_log(path: Path, label: str) -> bool:
-    """Remove a stopped service's append-only console log before restart."""
+    """Remove a stopped service's append-only console log before restart.
+
+    2026-11-18：清空之前先留档到 logs/crashes（只保留最后 2MB、最多 3 份）。
+    之前每次启动都直接删，客户一重启，上一轮的失败现场就没了——诊断反复拿不到证据。
+    """
+    try:
+        preserve_service_log(path, label, keep=3, tail_bytes=2 * 1024 * 1024)
+    except Exception:
+        pass
     try:
         path.unlink(missing_ok=True)
         log(f"Logs: cleared {label} path={path}")
@@ -1720,7 +1728,7 @@ def start_services_blocking(
     mcp_proc = start_bat("MCP", "run_mcp.bat", env)
     backend_proc = None
     # 端口空闲就直接起后端；端口被占用时仍按原来的 2s 归属探测走（避免关机竞态）。
-    if not port_open("127.0.0.1", port, timeout=0.4) or not wait_for_own_backend(port, 2):
+    if not port_open("127.0.0.1", port, timeout=0.4) or not wait_for_own_backend(port, 8):
         set_startup_status("backend", "正在启动本地服务", detail=f"端口 {port}", percent=58)
         backend_proc = start_bat("Backend", "run_backend.bat", env)
     else:
@@ -2712,6 +2720,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             """Restart only an unexpectedly exited local backend while the window is open."""
             stop_event = runtime["watchdog_stop"]
             failures = 0
+            # 2026-11-17：延迟探针按时间节流（5 分钟一条）。
+            # 旧写法在 delayed 分支里把 failures 归零，导致 `failures in (0,3,10)` 永远命中，
+            # 于是每 7 秒写一行，日志一天涨 5MB（客户机上一天就 10MB+）。
+            last_delayed_log = 0.0
+            _DELAYED_LOG_INTERVAL = 300.0
             health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
             # 2026-10-05：心跳从 2s 放到 5s。2s 时客户机 backend.log 里
             # 89.5% 的行都是这条探针（15 小时 2.2 万条），看着一直在刷新；
@@ -2727,7 +2740,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
                 proc = runtime.get("backend_proc")
                 process_alive = isinstance(proc, subprocess.Popen) and proc.poll() is None
-                port_alive = process_alive and port_open("127.0.0.1", port, timeout=0.4)
+                # 2026-11-17：端口存活不能依赖"我们自己的子进程还活着"。
+                # 启动时如果端口已有健康后端，backend_proc 会是 None（接管模式），
+                # 旧写法 port_alive 恒为 False —— 只要健康探测慢一次（后端在做同步任务），
+                # watchdog 就会把**正在服务的**后端当成死的杀掉，然后反复重启（真机 18:39 的崩溃循环）。
+                port_alive = port_open("127.0.0.1", port, timeout=0.4)
                 probe_delayed = (
                     "timeouterror" in health_reason.lower()
                     or "timed out" in health_reason.lower()
@@ -2738,11 +2755,13 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     # event loop while the backend remains healthy enough to
                     # continue the active task. Do not turn that delay into a
                     # recovery attempt or carry it into the next probe.
-                    if failures in (0, 3, 10) or failures % 30 == 0:
+                    now_mono = time.monotonic()
+                    if now_mono - last_delayed_log >= _DELAYED_LOG_INTERVAL:
+                        last_delayed_log = now_mono
                         log(
                             "Backend watchdog: health probe delayed; backend process and port are alive "
-                            "reason=%s elapsed_ms=%.1f pid=%s"
-                            % (health_reason, health_elapsed_ms, getattr(proc, "pid", None))
+                            "reason=%s elapsed_ms=%.1f pid=%s failures_since_start=%s"
+                            % (health_reason, health_elapsed_ms, getattr(proc, "pid", None), failures)
                         )
                     failures = 0
                     continue

@@ -66,7 +66,13 @@ def find_window(keyword: str = "微信") -> Any:
                     pass
                 r = win.rectangle()
                 area = max(0, (r.right - r.left)) * max(0, (r.bottom - r.top))
-                if area < 300 * 300:
+                try:
+                    iconic = bool(win.is_minimized())
+                except Exception:
+                    iconic = False
+                # 最小化窗口的 rect 是 (-32000,...)，不能再按面积筛，
+                # 否则"微信最小化"时 agent 连窗口都找不到（真机 21:0x 就是这样）。
+                if not iconic and area < 300 * 300:
                     continue
                 score = area / 1e6
                 if "MainWindow" in cls or "mmui" in cls:
@@ -108,11 +114,12 @@ def find_window(keyword: str = "微信") -> Any:
                     pid = 0
                 if pid and not _is_personal_wechat(pid):
                     return True
+                iconic = bool(win32gui.IsIconic(hwnd))
                 l, t, r, b = win32gui.GetWindowRect(hwnd)
                 area = max(0, r - l) * max(0, b - t)
-                if area < 300 * 300:
+                if not iconic and area < 300 * 300:
                     return True
-                picked.append((area, hwnd))
+                picked.append((area if not iconic else 300 * 300, hwnd))
             except Exception:
                 pass
             return True
@@ -541,8 +548,62 @@ def _send_allowlist() -> List[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+_SENDKEYS_SPECIAL = set("+^%~(){}[]")
+
+
+def type_text(text: str) -> bool:
+    """往当前焦点控件写文本。
+
+    坑：pywinauto/pywinauto.keyboard 的 SendKeys 语法里 + ^ % ~ ( ) { } [ ] 是特殊字符。
+    之前用 send_keys("agent+robot ...") 直接发，+ 被当成 SHIFT，消息内容被改坏，
+    于是"发出去了但回读校验不通过"。这里优先走剪贴板粘贴，中文/符号都原样。
+    """
+    body = str(text or "")
+    if not body:
+        return False
+    try:
+        import win32clipboard
+        import win32con
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, body)
+        finally:
+            win32clipboard.CloseClipboard()
+        from pywinauto import keyboard as _kb
+
+        _kb.send_keys("^v")
+        return True
+    except Exception as exc:
+        logger.debug("[agent] clipboard paste failed: %s", exc)
+    try:
+        from pywinauto import keyboard as _kb
+
+        escaped = "".join("{" + ch + "}" if ch in _SENDKEYS_SPECIAL else ch for ch in body)
+        _kb.send_keys(escaped, with_spaces=True)
+        return True
+    except Exception as exc:
+        logger.warning("[agent] type_text failed: %s", exc)
+        return False
+
+
 def _chat_input(window: Any) -> Any:
-    """聊天输入框：优先用真机确认的 automation_id=chat_input_field。"""
+    """聊天输入框：优先用真机确认的 automation_id=chat_input_field。
+
+    2026-11-18：先只枚举 Edit 控件（通常 2~5 个），比全量扫 1200 个控件快一个数量级。
+    open_chat 的轮询里每次都要取会话名，慢的这一层会把"2 秒切会话"拖成 13 秒。
+    """
+    try:
+        edits = window.descendants(control_type="Edit")
+        for c in edits[:20]:
+            try:
+                if str(getattr(c.element_info, "automation_id", "") or "") == "chat_input_field":
+                    return c
+            except Exception:
+                continue
+    except Exception:
+        pass
     ctl = _find_control(window, "aid:chat_input_field")
     if ctl is not None:
         return ctl
@@ -588,9 +649,9 @@ def _guard_ok(window: Any, guard_name: str) -> bool:
 
 
 _STAGE_ALLOWED_ACTIONS = {
-    "wechat_sessions": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "abort"},
+    "wechat_sessions": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "op", "abort"},
     # 只有这个阶段允许打字，且只在白名单会话里
-    "wechat_send": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "type", "send", "abort"},
+    "wechat_send": {"click", "scroll", "close_overlay", "wait_for", "screenshot", "press", "type", "send", "op", "abort"},
 }
 
 
@@ -601,6 +662,22 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
     allowed = _STAGE_ALLOWED_ACTIONS.get(str(stage or "").lower())
     if allowed is not None and name not in allowed:
         return StepResult(False, f"action '{name}' blocked in stage '{stage}'")
+    if name == "op":
+        from publisher.robot.dispatch import run_op
+        from publisher.robot.ops import OPS
+
+        op_name = str(target.get("name") or target.get("op") or "").strip()
+        params = dict(target.get("params") or {})
+        if not op_name:
+            return StepResult(False, "empty_op")
+        # 会话修复阶段只允许只读 op：这里绝不该出现"发消息/点赞"这种写操作
+        if str(stage or "").lower() == "wechat_sessions":
+            spec_ = OPS.get(op_name)
+            if spec_ is None or not spec_.readonly:
+                return StepResult(False, f"op '{op_name}' blocked in stage '{stage}'")
+        res = run_op(op_name, params, window=window)
+        err = "" if res.ok else f"{res.layer}:{res.error}"
+        return StepResult(bool(res.ok), err[:200], observed=str(res.evidence)[:400])
     if name == "press":
         key = str(target.get("value") or action.text or "").strip().upper()
         ok_keys = {"{ESC}", "ESC", "ESCAPE"}
@@ -638,11 +715,12 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
             if control is None:
                 return StepResult(False, "chat_input_not_found")
             control.click_input()
-            from pywinauto import keyboard
-            keyboard.send_keys("^a")
-            keyboard.send_keys("{DELETE}")
-            keyboard.send_keys(text, with_spaces=True)
-            keyboard.send_keys("{ENTER}")
+            from pywinauto import keyboard as _kb
+            _kb.send_keys("^a")
+            _kb.send_keys("{DELETE}")
+            if not type_text(text):
+                return StepResult(False, "paste_failed")
+            _kb.send_keys("{ENTER}")
             return StepResult(True, "sent")
         if str(target.get("by") or "").lower() == "point":
             from pywinauto import mouse
@@ -673,8 +751,8 @@ def run_desktop_action(window: Any, action: Action, *, stage: str = "", guard_na
             if control is None:
                 return StepResult(False, "target_not_found")
             control.click_input()
-            from pywinauto import keyboard
-            keyboard.send_keys(text, with_spaces=True)
+            if not type_text(text):
+                return StepResult(False, "paste_failed")
             return StepResult(True, "typed")
         return StepResult(False, "unsupported_action")
     except Exception as exc:
@@ -726,12 +804,16 @@ def recover_desktop(
             obs = observe_desktop_window(win, stage=stage)
             action = decide_sync(obs, goal, history, budget)
             if action is None:
-                result.error = "no_action"
+                result.error = "no_action (模型未返回可执行动作/预算耗尽)"
                 break
             writer.event("decide", action=action.action, target=action.target,
                          confidence=action.confidence, thought=action.thought[:300])
             if action.action == "abort":
-                result.error = "agent_abort"
+                # 只写 agent_abort 等于黑盒：把模型的判断和置信度带上，日志里能直接看到为什么放弃
+                result.error = (
+                    "agent_abort"
+                    f" (conf={action.confidence:.2f}, thought={str(action.thought or '')[:120]})"
+                )
                 break
             step = run_desktop_action(win, action, stage=stage, guard_name=guard_name)
             verified = bool(step.ok) and verify_desktop(win, action.expect)

@@ -80,6 +80,19 @@ async def verify_stage(page: Any, platform: str, stage: str) -> bool:
             if await _text_visible(page, text):
                 return True
         return False
+    if stage == "editor_ready":
+        # 抖音：已在编辑页 + 标题非空 = 可以直接发布
+        try:
+            url = str(page.url or "")
+        except Exception:
+            url = ""
+        if "/content/post/" not in url:
+            return False
+        try:
+            value = await page.locator('input[placeholder*="填写作品标题"]').first.input_value(timeout=2000)
+        except Exception:
+            value = ""
+        return bool(str(value or "").strip())
     if stage == "publish":
         # 落到作品管理页 = 发布成功的硬证据；「作品管理」这种导航词在编辑页也有，不能用
         try:
