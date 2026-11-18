@@ -489,7 +489,25 @@ def send_message(text: str, to: str, window: Any = None, timeout: float = 8.0,
         if not type_text(body):
             res.layer, res.error = "action", "paste_failed"
             return res
-        keyboard.send_keys("{ENTER}")
+        # 微信 4.x 的输入框里按 Enter 有时只是换行，不会真正发送；旧引擎
+        # 已经有「校验发送按钮再点」的实现，这里直接复用，不再靠 Enter。
+        send_method = ""
+        try:
+            from backend.app.services.native_wechat_engine import (  # type: ignore
+                _click_local_wechat_send_button,
+            )
+
+            send_method = _click_local_wechat_send_button(int(getattr(win, "handle", 0) or 0))
+        except Exception as exc:
+            _trace("robot_send_button_failed", target=target, error=str(exc)[:160])
+            try:
+                from pywinauto import keyboard as _kb
+
+                _kb.send_keys("{ENTER}")
+                send_method = "enter_fallback"
+            except Exception:
+                send_method = ""
+        res.evidence["send_method"] = send_method
     except Exception as exc:
         res.layer, res.error = "action", f"type_failed:{type(exc).__name__}"
         return res
