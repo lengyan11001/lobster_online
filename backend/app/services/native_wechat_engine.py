@@ -5094,12 +5094,17 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
     if (
         not session.get("session_snapshot_fresh")
         and not _session_has_explicit_private_evidence(account_id, session, known_type)
+        and not bool(session.get("_uia_visible_fallback"))
     ):
         return {
             "action": "skip",
             "reason": "private_identity_unconfirmed",
             "chat_type": known_type or "unknown",
         }
+    if bool(session.get("_uia_visible_fallback")):
+        # UIA 可见行没有 wxauto 的 fresh snapshot/类型字段。不要直接丢，
+        # 按老路由打开这一行再看 chat_info 决定私聊/群聊。
+        return {"action": "open", "reason": "uia_private_verify", "chat_type": known_type}
     if _session_stops_recent_scan(session):
         return {"action": "stop", "reason": "last_message_over_24h"}
     if not _session_is_scan_candidate(session):
