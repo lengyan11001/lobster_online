@@ -1392,10 +1392,10 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
         has_audio = bool(info.get("has_audio"))
         if duration <= 0:
             raise RuntimeError("素材时长读取失败")
+        job_dir = _AI_TRIM_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        out = job_dir / "output.mp4"
         if str(mode or "") == "visual":
-            job_dir = _AI_TRIM_DIR / job_id
-            job_dir.mkdir(parents=True, exist_ok=True)
-            out = job_dir / "output.mp4"
             _ai_set_status(job_id, progress=40, message="正在检测画面并分析色调")
             ranges = _visual_ranges(ffmpeg, path, duration)
             style = str(color_style or "").strip().lower()
