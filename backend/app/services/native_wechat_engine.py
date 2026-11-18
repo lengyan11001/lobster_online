@@ -22363,14 +22363,14 @@ def _send_text_local_slow_once(
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "pc_wechat_slow_typing"}
 
 
-def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
+def _agent_send_fallback(account_id: str, peer_id: str, text: str, *, search_key: str = "") -> Optional[Dict[str, Any]]:
     """确定性发送链路写不进输入框时（微信 4.x 自绘输入框读不回内容），
     交给 robot 操作层：open_chat 先摆正会话，send_message 用快照差异验证。
     只在"已阻止点击发送"（确认没发出去）的分支调用，避免重复发送。"""
     try:
         from publisher.robot import wechat_ops as W
 
-        opened = W.open_chat(str(peer_id))
+        opened = W.open_chat(str(peer_id), search_key=str(search_key or ""))
         if not opened.ok:
             logger.warning(
                 "[native-wechat] robot 无法切到目标会话 peer=%s layer=%s err=%s",
@@ -22440,43 +22440,44 @@ def _peer_display_name(account_id: str, peer_id: str) -> str:
     return ""
 
 
-def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
-    """robot 优先：用 open_chat + send_message（快照验证）先发一次。
+def _robot_call(account_id: str, target: str, text: str, *, search_key: str = "") -> Optional[Dict[str, Any]]:
+    """带硬超时的 robot 发送（45s），超时/异常都返回 None 交给上层处理。"""
+    import concurrent.futures as _cf
 
-    2026-11-17：以前遇到 wxid 直接放弃 robot（"按会话名定位不到"），
-    结果自动回复全部落回老链路 —— 老链路在微信 4.x 写不进输入框，
-    于是每轮都是 "回复文本未能写入微信聊天输入框，已阻止点击发送"，
-    用户侧就是"个微不回复"。现在先把 wxid 换成显示名再试 robot。
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            fut = _pool.submit(_agent_send_fallback, account_id, target, text, search_key=search_key)
+            return fut.result(timeout=45.0)
+    except _cf.TimeoutError:
+        logger.warning("[native-wechat] robot 发送超时（45s） peer=%s", target)
+        return None
+    except Exception as exc:
+        logger.warning("[native-wechat] robot 发送异常: %s", str(exc)[:160])
+        return None
+
+
+def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict[str, Any]]:
+    """robot 负责"开会话 + 发送"。
+
+    2026-11-17：以前遇到 wxid 直接放弃 robot，全部落回老链路（写不进输入框）。
+    2026-11-18：改成用 wxid 去搜索、按显示名核对会话 —— 只按显示名搜会撞到同名群聊
+    （现场：军争 / 军争、单鹏程 / 单鹏程、军争），打开的是群，随即 session_target_mismatch。
     """
     import os as _os
 
     if str(_os.environ.get("LOBSTER_WECHAT_SEND_ROBOT", "1")).strip().lower() in {"0", "false", "no", "off"}:
         return None
     target = str(peer_id or "").strip()
+    if not target:
+        return None
     if _looks_like_wechat_id(target):
         resolved = _peer_display_name(account_id, target)
         if not resolved:
             logger.info("[native-wechat] robot 跳过：wxid 未能解析成显示名 peer=%s", target)
             return None
-        logger.info("[native-wechat] robot 按显示名发送 peer=%s -> %s", target, resolved)
-        target = resolved
-    # 2026-11-18：robot 自己负责"开会话 + 发送"（不再因为会话没对上就甩回老链路）。
-    # 老链路在微信 4.x 本来就写不进输入框，甩回去等于不解决问题。
-    # 2026-11-18：robot 这一步必须有硬超时。
-    # 现场出现过：robot 卡在 open_chat/发送里，reply_send_started 之后几分钟没有任何后续日志，
-    # 整轮自动回复被它拖住（客户看到的就是"还是不回复"）。
-    import concurrent.futures as _cf
-
-    try:
-        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-            _fut = _pool.submit(_agent_send_fallback, account_id, target, text)
-            return _fut.result(timeout=45.0)
-    except _cf.TimeoutError:
-        logger.warning("[native-wechat] robot 发送超时（45s），回退老链路 peer=%s", target)
-        return None
-    except Exception as exc:
-        logger.warning("[native-wechat] robot 发送异常: %s", str(exc)[:160])
-        return None
+        logger.info("[native-wechat] robot 用 wxid 搜、按显示名核对 peer=%s -> %s", target, resolved)
+        return _robot_call(account_id, resolved, text, search_key=target)
+    return _robot_call(account_id, target, text)
 
 
 def _send_text_local_slow(

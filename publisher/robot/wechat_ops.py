@@ -84,7 +84,7 @@ def _window_hung(window: Any) -> bool:
     except Exception:
         return False
 
-def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
+def open_chat(name: str, window: Any = None, timeout: float = 8.0, search_key: str = "") -> Result:
     res = Result(op="wechat.open_chat")
     target = str(name or "").strip()
     if not target:
@@ -166,6 +166,9 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
             _trace("robot_open_failed", target=target, error="window_not_foreground")
             return res
         typed = False
+        # 2026-11-18：按显示名搜会撞到同名群聊（现场 军争 / 军争、单鹏程 / 单鹏程、军争）。
+        # 有 wxid 就用 wxid 搜，点结果后再按显示名核对。
+        query = str(search_key or "").strip() or target
         try:
             from pywinauto import keyboard
             from publisher.agent.desktop import type_text
@@ -174,7 +177,7 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
             time.sleep(0.15)
             keyboard.send_keys("^a")
             keyboard.send_keys("{DELETE}")
-            typed = bool(type_text(target))
+            typed = bool(type_text(query))
         except Exception:
             typed = False
         if not typed:
@@ -212,21 +215,27 @@ def open_chat(name: str, window: Any = None, timeout: float = 8.0) -> Result:
 
             rect = _rect(win) or (0, 0, 0, 0)
             chat_left = _chat_left(win, rect[0], rect[2] - rect[0])
+            rows = []
             for c, info in _iter_controls(win):
                 try:
                     if str(info.control_type or "") != "ListItem" or not _visible(c):
                         continue
                     if int(c.rectangle().left) >= chat_left:
                         continue
-                    if str(info.name or "").strip().startswith(target):
-                        c.click_input()
-                        time.sleep(1.2)
-                        if S.snapshot_desktop(win).anchors.get("chat") == target:
-                            res.ok = True
-                            res.evidence["via"] = "search_result_click"
-                            _trace("robot_open_ok", target=target, via="search_result_click")
-                            return res
-                        break
+                    rows.append((c, str(info.name or "").strip()))
+                except Exception:
+                    continue
+            # 先点名字匹配的，再逐个试前几行（wxid 搜索时行里显示昵称，不能靠名字过滤）
+            ordered = [c for c, nm in rows if nm.startswith(target)] + [c for c, nm in rows if not nm.startswith(target)]
+            for c in ordered[:4]:
+                try:
+                    c.click_input()
+                    time.sleep(1.0)
+                    if S.snapshot_desktop(win).anchors.get("chat") == target:
+                        res.ok = True
+                        res.evidence["via"] = "search_result_click"
+                        _trace("robot_open_ok", target=target, via="search_result_click")
+                        return res
                 except Exception:
                     continue
         except Exception:
