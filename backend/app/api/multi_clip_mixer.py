@@ -376,6 +376,36 @@ def _probe_video(path: Path, ffprobe: str) -> Dict[str, Any]:
     }
 
 
+def _probe_audio(path: Path, ffprobe: str) -> Dict[str, Any]:
+    process = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_type",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if process.returncode != 0:
+        raise RuntimeError((process.stderr or process.stdout or "音频信息读取失败").strip()[-2000:])
+    try:
+        payload = json.loads(process.stdout or "{}")
+        duration = float((payload.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("音频时长读取失败") from exc
+    streams = payload.get("streams") if isinstance(payload.get("streams"), list) else []
+    has_audio = any(item.get("codec_type") == "audio" for item in streams)
+    if duration <= 0 or not has_audio:
+        raise RuntimeError("主音轨素材没有可用音频")
+    return {"duration": duration, "has_audio": True}
+
+
 _RATIO_RE = re.compile(r"^\s*(\d{1,3})\s*:\s*(\d{1,3})\s*$")
 
 
@@ -591,7 +621,10 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
                 raise ValueError("主音轨素材必须是音频或视频")
             if audio_source_path.parent.name.startswith("media_edit_dl_"):
                 download_dirs.add(audio_source_path.parent)
-            audio_info = _probe_video(audio_source_path, ffprobe)
+            if audio_media_type == "audio":
+                audio_info = _probe_audio(audio_source_path, ffprobe)
+            else:
+                audio_info = _probe_video(audio_source_path, ffprobe)
             if not bool(audio_info["has_audio"]):
                 raise ValueError("标记为主音轨的视频没有可用音频")
             audio_duration = float(audio_info["duration"] or 0)
