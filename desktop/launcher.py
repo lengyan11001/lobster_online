@@ -283,6 +283,9 @@ def resolve_root() -> Path:
 
 ROOT = resolve_root()
 LOG_PATH = ROOT / "desktop_launcher.log"
+WINDOW_STATE_PATH = ROOT / "browser_data" / "desktop_window_state.json"
+_WINDOW_STATE_LOCK = threading.Lock()
+_WINDOW_STATE_TIMER: threading.Timer | None = None
 _LOG_ROTATE_MAX_BYTES = 50 * 1024 * 1024
 _LOG_ROTATE_BACKUP_COUNT = 3
 _LOG_ROTATE_LOCK = threading.Lock()
@@ -507,6 +510,82 @@ def adaptive_window_size(requested_width: int, requested_height: int) -> tuple[i
     height = max(640, height)
     log(f"screen work_area={work_w}x{work_h}, window={width}x{height}")
     return width, height
+
+
+def _window_geometry_payload(window: object) -> dict[str, int] | None:
+    try:
+        width = int(getattr(window, "width", 0) or 0)
+        height = int(getattr(window, "height", 0) or 0)
+        if width < 200 or height < 200:
+            return None
+        return {
+            "x": int(getattr(window, "x", 0) or 0),
+            "y": int(getattr(window, "y", 0) or 0),
+            "width": width,
+            "height": height,
+        }
+    except Exception:
+        return None
+
+
+def _write_window_state(state: dict[str, int]) -> None:
+    try:
+        WINDOW_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _WINDOW_STATE_LOCK:
+            WINDOW_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        log(f"save window geometry failed: {exc}")
+
+
+def save_window_geometry(window: object = None, *args: object) -> None:
+    state = _window_geometry_payload(window) if window is not None else None
+    if not state:
+        return
+    _write_window_state(state)
+    log(
+        "saved window geometry x=%s y=%s %sx%s"
+        % (state["x"], state["y"], state["width"], state["height"])
+    )
+
+
+def schedule_save_window_geometry(window: object = None, *args: object) -> None:
+    global _WINDOW_STATE_TIMER
+    state = _window_geometry_payload(window) if window is not None else None
+    if not state:
+        return
+    with _WINDOW_STATE_LOCK:
+        if _WINDOW_STATE_TIMER is not None:
+            try:
+                _WINDOW_STATE_TIMER.cancel()
+            except Exception:
+                pass
+        _WINDOW_STATE_TIMER = threading.Timer(0.6, _write_window_state, args=(state,))
+        _WINDOW_STATE_TIMER.daemon = True
+        _WINDOW_STATE_TIMER.start()
+
+
+def restore_window_geometry(default_width: int, default_height: int) -> tuple[int | None, int | None, int, int]:
+    try:
+        state = json.loads(WINDOW_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None, None, default_width, default_height
+    try:
+        width = int(state.get("width") or 0)
+        height = int(state.get("height") or 0)
+        x = int(state.get("x") or 0)
+        y = int(state.get("y") or 0)
+    except Exception:
+        return None, None, default_width, default_height
+    if width < 900 or height < 640:
+        return None, None, default_width, default_height
+    work_w, work_h = screen_work_area()
+    width = min(max(900, width), max(900, work_w))
+    height = min(max(640, height), max(640, work_h))
+    # Keep at least a strip of the window on the primary work area.
+    x = max(-width + 120, min(x, work_w - 120))
+    y = max(0, min(y, work_h - 80))
+    log(f"restore window geometry x={x} y={y} {width}x{height}")
+    return x, y, width, height
 
 
 def read_env_value(name: str, default: str, root: Path | None = None) -> str:
@@ -2855,9 +2934,12 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
             except Exception:
                 pass
+        window_x, window_y, width, height = restore_window_geometry(width, height)
         window = webview.create_window(
             title,
             html=desktop_loading_html(url, title),
+            x=window_x,
+            y=window_y,
             width=width,
             height=height,
             min_size=(900, 640),
@@ -2893,6 +2975,9 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 runtime["exit_reason"] = "user_closed"
             return None if allowed else False
 
+        window.events.moved += schedule_save_window_geometry
+        window.events.resized += schedule_save_window_geometry
+        window.events.closing += save_window_geometry
         window.events.closing += confirm_window_close
         webview.start(
             start_services_then_load,
