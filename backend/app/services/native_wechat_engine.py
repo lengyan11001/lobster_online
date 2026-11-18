@@ -5547,21 +5547,43 @@ async def run_auto_reply_once(
                         identity_mode="nickname" if nickname_identity else "wechat_id",
                     )
                 elif isinstance(scan_capture, dict):
-                    # The scanner already attempted this row while it was on
-                    # the visible page. Do not fall back to a second nickname
-                    # search in the same round; retry it on the next fresh
-                    # takeover scan instead.
-                    raise RuntimeError(
-                        str(scan_capture.get("error") or "page capture did not produce a current chat snapshot")
+                    # 这一行在页面上抓取失败（不是"最新一条不是入站"）。
+                    # 单行失败不能把整轮自动回复判死，否则后面的真人消息永远轮不到；
+                    # 本轮跳过，下一轮重新扫描再试。
+                    result["skipped"] += 1
+                    skip_reason = str(
+                        scan_capture.get("error") or "page capture did not produce a current chat snapshot"
+                    )[:300]
+                    collection_result.update(
+                        {"status": "scan_capture_failed", "skip_reason": skip_reason}
                     )
+                    result["items"].append(collection_result)
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="scan_capture_failed",
+                        reason=skip_reason,
+                    )
+                    continue
                 else:
                     if not scanned_wechat_id:
-                        # The precise wxauto scan must have captured this row
-                        # while it was visible.  Do not reopen a missing
-                        # capture by nickname after the list has moved.
-                        raise RuntimeError(
-                            "page capture missing for session; nickname selection is disabled"
+                        # 本轮没抓到这一行的页面快照，也没有可用的 wxid。
+                        # 不按昵称盲搜（会点错同名会话），跳过这个候选人，
+                        # 让下一轮重新扫描；不能因此把整轮自动回复判失败。
+                        result["skipped"] += 1
+                        collection_result.update(
+                            {"status": "scan_capture_missing", "skip_reason": "scan_capture_missing"}
                         )
+                        result["items"].append(collection_result)
+                        log_event(
+                            "session_skipped",
+                            peer_id=peer_id,
+                            display_name=display_name,
+                            status="scan_capture_missing",
+                            reason="scan_capture_missing",
+                        )
+                        continue
                     sync_result = await _run_local_wechat_async(
                         sync_local_messages,
                         account_id,
