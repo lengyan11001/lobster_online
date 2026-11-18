@@ -1,7 +1,7 @@
 {
-  "version": "2.0.311",
-  "build": 618,
-  "applied_at": "2026-11-18T17:31:45+08:00",
-  "note": "朋友圈多图完整路径多选（本机真机验证 3 张）",
-  "bundle_sha256": "f1a0d1543b8a592894782c87323c5255b43bb3b63f2052a3b7070a4505a3dc3b"
+  "version": "2.0.312",
+  "build": 619,
+  "applied_at": "2026-11-18T17:37:34+08:00",
+  "note": "朋友圈取消后点掉不保留确认框",
+  "bundle_sha256": "db4dbe327561ff8508ea3478168de2f90a23df8ae24b359b8bbd1f1cb0ab9dd4"
 }
