@@ -5776,6 +5776,33 @@ async def run_auto_reply_once(
                     known_type = _normalize_local_chat_type(_known_local_peer_chat_type(account_id, actual_peer))
                     if _local_chat_type_is_private(known_type):
                         chat_type = known_type
+                if (
+                    str(collection_target_source) == "uia_session_row"
+                    and int(sync_result.get("seen_count") or 0) <= 0
+                ):
+                    # 打开会话后一条消息都没读到 = 读取失败，不是"最新一条不是对方发的"。
+                    # 不能清失败标记当成功跳过，否则这条私聊永远静默不回复、也不重试。
+                    result["skipped"] += 1
+                    collection_result.update(
+                        {
+                            "status": "message_read_empty",
+                            "reply_suppressed": True,
+                            "skip_reason": "message_read_empty",
+                            "collection_target_source": collection_target_source,
+                        }
+                    )
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="message_read_empty",
+                        reason="message_read_empty",
+                        collection_target=collection_target,
+                        collection_target_source=collection_target_source,
+                    )
+                    result["items"].append(collection_result)
+                    continue
                 latest_after_sync = sync_result.get("latest_message") if isinstance(sync_result.get("latest_message"), dict) else {}
                 _clear_auto_reply_recover_failure(account_id, peer_id)
                 diagnostic_latest = (
@@ -10826,6 +10853,9 @@ def _capture_auto_reply_scan_page(
                 # 还会再拦一次群聊。
                 chat_type = "friend"
                 chat_type_source = "scan_private_prefilter"
+            if int(sync_result.get("seen_count") or 0) <= 0:
+                capture_skip("message_read_empty")
+                continue
             fresh = sync_result.get("fresh_latest_message")
             if not isinstance(fresh, dict) or str(fresh.get("direction") or "").strip().lower() != "in":
                 captures[peer_id] = {
@@ -15232,6 +15262,74 @@ def _sync_local_messages_once(
             except Exception:
                 break
     messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    if select_via_uia and not list(messages or []) and actual_name:
+        # 2026-11-18：UIA 点开会话后 wxauto4 的 ChatBox 还停在上一个会话，
+        # GetAllMessage() 直接返回空列表（用户机器 2.0.321：seen_count=0，被误判成
+        # latest_message_not_inbound，还把失败标记清掉，于是永远静默跳过、不重试）。
+        # 用会话名再走一次 wxauto 的 ChatWith 重新绑定 ChatBox 再读；读前读后都核对
+        # 会话名，点错同名会话就按 target_mismatch 退出，绝不落库。
+        for attempt in range(1, 4):
+            try:
+                if hasattr(wx, "ChatWith"):
+                    wx.ChatWith(actual_name, exact=True, force=False)
+            except Exception as exc:
+                _write_auto_reply_diagnostic(
+                    "chat_rebind_failed",
+                    account_id=diagnostic_account_id,
+                    run_id=diagnostic_run_id,
+                    target_peer_id=target,
+                    target_display_name=display_target,
+                    attempt=attempt,
+                    error=str(exc)[:500],
+                )
+            time.sleep(random.uniform(0.6, 0.9))
+            rebound_info = _current_local_chat_info(wx, fallback_name=actual_name)
+            rebound_name = str((rebound_info or {}).get("chat_name") or "").strip()
+            if (
+                expected_name
+                and _normalize_contact_lookup_key(expected_name)
+                and _normalize_contact_lookup_key(rebound_name)
+                and _normalize_contact_lookup_key(expected_name)
+                != _normalize_contact_lookup_key(rebound_name)
+            ):
+                _write_auto_reply_diagnostic(
+                    "chat_target_mismatch",
+                    account_id=diagnostic_account_id,
+                    run_id=diagnostic_run_id,
+                    target_peer_id=target,
+                    target_display_name=display_target,
+                    expected_display_name=expected_name,
+                    actual_display_name=rebound_name,
+                    click_mode="uia_rebind",
+                )
+                return {
+                    "ok": False,
+                    "session_target_mismatch": True,
+                    "peer_id": target,
+                    "chat_info": rebound_info or {},
+                    "expected_display_name": expected_name,
+                    "actual_display_name": rebound_name,
+                    "items": [],
+                    "count": 0,
+                    "seen_count": 0,
+                    "deduped_count": 0,
+                }
+            if rebound_info:
+                info = rebound_info
+            if rebound_name:
+                actual_name = rebound_name
+            messages = list(wx.GetAllMessage() or [])
+            _write_auto_reply_diagnostic(
+                "chat_rebind_read",
+                account_id=diagnostic_account_id,
+                run_id=diagnostic_run_id,
+                target_peer_id=target,
+                target_display_name=display_target,
+                attempt=attempt,
+                message_count=len(messages),
+            )
+            if messages:
+                break
     message_chat_type = "group" if any(
         _raw_local_message_is_group(_obj_dict(msg)) for msg in (messages or [])
     ) else ""
@@ -15343,6 +15441,7 @@ def _sync_local_messages_once(
         "current_selected": not bool(target),
         "seen_count": len(items),
         "deduped_count": len(items) - len(inserted),
+        "read_empty": bool(select_via_uia and not list(messages or [])),
     }
 
 
