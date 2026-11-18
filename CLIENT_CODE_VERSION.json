@@ -1,7 +1,7 @@
 {
-  "version": "2.0.302",
-  "build": 609,
-  "applied_at": "2026-11-18T14:08:58+08:00",
-  "note": "单行会话抓取失败不拖垮整轮；wxid 优先 + 默认 wxid 昵称兜底",
-  "bundle_sha256": "826d739dc2f64d2d98ecf80603fdc356149d2b979783c4782a4a312310a936da"
+  "version": "2.0.303",
+  "build": 610,
+  "applied_at": "2026-11-18T14:18:50+08:00",
+  "note": "私聊 unknown 类型不丢会话；wxid 优先 + 默认 wxid 昵称兜底",
+  "bundle_sha256": "d95f7a7928c7993c3ddaee007799a9b94580ddfc2136af453a8faa29d715d4c2"
 }
