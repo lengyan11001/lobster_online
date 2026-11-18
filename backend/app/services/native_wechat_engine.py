@@ -22423,7 +22423,21 @@ def _robot_send_first(account_id: str, peer_id: str, text: str) -> Optional[Dict
             return None
     except Exception:
         pass
-    return _agent_send_fallback(account_id, target, text)
+    # 2026-11-18：robot 这一步必须有硬超时。
+    # 现场出现过：robot 卡在 open_chat/发送里，reply_send_started 之后几分钟没有任何后续日志，
+    # 整轮自动回复被它拖住（客户看到的就是"还是不回复"）。
+    import concurrent.futures as _cf
+
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(_agent_send_fallback, account_id, target, text)
+            return _fut.result(timeout=45.0)
+    except _cf.TimeoutError:
+        logger.warning("[native-wechat] robot 发送超时（45s），回退老链路 peer=%s", target)
+        return None
+    except Exception as exc:
+        logger.warning("[native-wechat] robot 发送异常: %s", str(exc)[:160])
+        return None
 
 
 def _send_text_local_slow(

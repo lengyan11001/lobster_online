@@ -22,9 +22,11 @@ function ensureLogsBindings() {
     exportBtn._logsBound = true;
     exportBtn.onclick = exportLogsView;
   }
-  if (uploadDiagnosticBtn && !uploadDiagnosticBtn._logsBound) {
+  // 2026-11-18：上传按钮改由文件末尾的事件委托统一处理。
+  // 之前这里再绑一次 onclick，一次点击会发两个请求，第二个必然 429
+  // （"诊断包正在打包中"），而它的提示会覆盖掉第一个请求的结果。
+  if (uploadDiagnosticBtn) {
     uploadDiagnosticBtn._logsBound = true;
-    uploadDiagnosticBtn.onclick = uploadDiagnosticLogs;
   }
   if (tailEl && !tailEl._logsBound) {
     tailEl._logsBound = true;
@@ -34,6 +36,8 @@ function ensureLogsBindings() {
 
 function uploadDiagnosticLogs() {
   var btn = document.getElementById('logsUploadDiagnosticBtn');
+  if (window.__diagUploading) return;   // 防连点：真正只发一个请求
+  window.__diagUploading = true;
   var msgEl = document.getElementById('logsDiagnosticUploadMsg');
   var pre = document.getElementById('logsContent');
   // 2026-11-18：以前只用 LOCAL_API_BASE，一旦它在当前作用域里取不到（view-split 后
@@ -91,6 +95,7 @@ function uploadDiagnosticLogs() {
     })
     .then(function(x) {
       if (!x.ok) {
+        if (x.status === 429) throw new Error('诊断包正在打包中，请等 1 分钟再点（不要重复点击）');
         var detail = (x.data && (x.data.detail || x.data.message)) || ('HTTP ' + x.status);
         throw new Error(detail);
       }
@@ -115,6 +120,7 @@ function uploadDiagnosticLogs() {
       }
     })
     .finally(function() {
+      window.__diagUploading = false;
       if (btn) {
         btn.disabled = false;
         btn.textContent = '上传诊断';
