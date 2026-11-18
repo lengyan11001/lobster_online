@@ -22328,6 +22328,21 @@ def _agent_send_fallback(account_id: str, peer_id: str, text: str) -> Optional[D
             )
             return None
         sent = W.send_message(str(text), to=str(peer_id))
+        # 2026-11-18：robot 的结果必须落进 native_wechat_send.jsonl，
+        # 否则用户说"没收到"时，日志里只有"robot 按显示名发送"，没有结果可查。
+        try:
+            _send_path_debug(
+                account_id,
+                stage="robot_send_result",
+                driver="robot_send",
+                target=str(peer_id),
+                ok=bool(getattr(sent, "ok", False)),
+                layer=str(getattr(sent, "layer", "") or ""),
+                error=str(getattr(sent, "error", "") or "")[:200],
+                evidence=str(getattr(sent, "evidence", "") or "")[:300],
+            )
+        except Exception:
+            pass
         if sent.ok:
             logger.info("[native-wechat] robot 接管发送成功 peer=%s evidence=%s",
                         peer_id, str(sent.evidence.get("matched") or "")[:40])

@@ -375,7 +375,15 @@ def log(message: str) -> None:
 
 
 def clear_service_log(path: Path, label: str) -> bool:
-    """Remove a stopped service's append-only console log before restart."""
+    """Remove a stopped service's append-only console log before restart.
+
+    2026-11-18：清空之前先留档到 logs/crashes（只保留最后 2MB、最多 3 份）。
+    之前每次启动都直接删，客户一重启，上一轮的失败现场就没了——诊断反复拿不到证据。
+    """
+    try:
+        preserve_service_log(path, label, keep=3, tail_bytes=2 * 1024 * 1024)
+    except Exception:
+        pass
     try:
         path.unlink(missing_ok=True)
         log(f"Logs: cleared {label} path={path}")
