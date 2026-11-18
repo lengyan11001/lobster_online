@@ -1304,8 +1304,8 @@ def _score_sentences(captions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen: List[str] = []
     for cap in captions:
         text = str(cap.get("text") or "").strip()
-        start = float(cap.get("start") or 0) / 1000.0
-        end = float(cap.get("end") or 0) / 1000.0
+        start = float(cap.get("start") or 0) / 1_000_000.0
+        end = float(cap.get("end") or 0) / 1_000_000.0
         if end <= start:
             continue
         score = 1.0
@@ -1469,8 +1469,8 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                 sentences = [
                     {
                         "text": str(cap.get("text") or ""),
-                        "start": float(cap.get("start") or 0) / 1000.0,
-                        "end": float(cap.get("end") or 0) / 1000.0,
+                        "start": float(cap.get("start") or 0) / 1_000_000.0,
+                        "end": float(cap.get("end") or 0) / 1_000_000.0,
                     }
                     for cap in caps
                 ]
