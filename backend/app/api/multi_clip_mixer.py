@@ -515,6 +515,20 @@ def _replace_video_audio(
     _run_process(command)
 
 
+def _resolve_replace_duration(video_duration: float, audio_duration: float, media_type: str) -> float:
+    """替换音轨时的成片时长。
+
+    口播/TTS 音频是主音轨：音频比模板成片短时按音频裁掉多余画面，
+    避免模板最小 5 秒把 1.5 秒口播撑成 5 秒无声静止尾巴；
+    音频更长时沿用模板视频时长（不在这里补帧）。
+    """
+    video_duration = max(0.1, float(video_duration or 0))
+    audio_duration = float(audio_duration or 0)
+    if str(media_type or "") == "audio" and 0.1 < audio_duration < video_duration - 0.05:
+        return round(audio_duration, 3)
+    return round(video_duration, 3)
+
+
 def _extend_visual_segments_to_target(
     segments: List[Dict[str, Any]],
     target_duration: float,
@@ -1054,18 +1068,23 @@ async def replace_multi_clip_audio(
 
         audio_path: Optional[Path] = None
         bgm_path: Optional[Path] = None
+        audio_duration_sec = 0.0
+        audio_media_type = ""
         if mode == "original":
             audio_path, _, media_type = resolve_asset_path(
                 db, current_user.id, str(body.audio_asset_id).strip()
             )
             if media_type not in {"video", "audio"}:
                 raise HTTPException(status_code=400, detail="原声源不是视频或音频")
+            audio_media_type = media_type
             if media_type == "audio":
                 audio_info = _probe_audio(audio_path, ffprobe)
             else:
                 audio_info = _probe_video(audio_path, ffprobe)
                 if not bool(audio_info["has_audio"]):
                     raise HTTPException(status_code=400, detail="原声源视频没有音频")
+            audio_duration_sec = float(audio_info.get("duration") or 0)
+            duration = _resolve_replace_duration(duration, audio_duration_sec, audio_media_type)
         else:
             bgm_path = _download_bgm(str(body.bgm_url).strip(), work_dir)
 
