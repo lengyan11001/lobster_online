@@ -10895,8 +10895,17 @@ def _force_session_list_top(account_id: str) -> bool:
         hwnd = int(_local_wechat_hwnd(account_id) or 0)
         if not hwnd:
             return False
-        _activate_window(hwnd)
+        active = _activate_window(hwnd)
         left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        # 先点一下微信标题栏，绕开 Windows 前台锁：只 SetForegroundWindow 在
+        # 后台线程里经常不生效，滚轮会打到别的窗口上。
+        try:
+            win32api.SetCursorPos((int(left + 120), int(top + 18)))
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.25)
+        except Exception:
+            pass
         x = int(left + min(150, max(80, (right - left) // 5)))
         y = int(top + min(300, max(150, (bottom - top) // 2)))
         win32api.SetCursorPos((x, y))
@@ -10904,6 +10913,13 @@ def _force_session_list_top(account_id: str) -> bool:
             win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, 120, 0)
             time.sleep(0.01)
         time.sleep(0.35)
+        try:
+            logger.info(
+                "[native-wechat] force session top hwnd=%s active=%s fg=%s",
+                hwnd, bool(active), int(win32gui.GetForegroundWindow() or 0),
+            )
+        except Exception:
+            pass
         return True
     except Exception as exc:
         logger.debug("[native-wechat] force session list top failed: %s", str(exc)[:120])
