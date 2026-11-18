@@ -23520,10 +23520,8 @@ def _moments_open_dialog_file_spec(paths: List[str]) -> str:
     cleaned = [str(path or "").strip().strip('"') for path in paths if str(path or "").strip().strip('"')]
     if not cleaned:
         return ""
-    if len(cleaned) > 1 and len({str(Path(path).parent) for path in cleaned}) == 1:
-        folder = str(Path(cleaned[0]).parent)
-        names = [Path(path).name for path in cleaned]
-        return " ".join(f'"{part}"' for part in (folder, *names))
+    # 直接用完整路径。系统「打开」框对「目录 + 文件名」这种混合写法
+    # 在部分机器上会报「找不到文件」并且一直不关闭（线上 2026-11-18 复现）。
     return " ".join(f'"{path}"' for path in cleaned)
 
 
@@ -24169,21 +24167,12 @@ def _select_files_in_open_dialog(
     dialog_hwnd = int(window.get("hwnd") or 0)
     root = window.get("root") or _uia_main_root(dialog_hwnd)
     if len(paths) > 1:
-        try:
-            _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_multi")
-            return
-        except RuntimeError as exc:
-            steps.append(
-                {
-                    "step": "moments_multi_select_failed",
-                    "ok": False,
-                    "error": str(exc)[:200],
-                    "fallback": "one_by_one",
-                }
-            )
-            _dismiss_open_dialog(dialog_hwnd, steps)
-            _add_moments_files_one_by_one(hwnd, files, steps)
-            return
+        # 多选 spec 在部分系统上会让文件框报错且不关闭；直接逐张添加，
+        # 每张都是完整路径，最稳。先关掉当前这个多选框。
+        steps.append({"step": "moments_multi_select_skipped", "ok": True, "reason": "use_one_by_one"})
+        _dismiss_open_dialog(dialog_hwnd, steps)
+        _add_moments_files_one_by_one(hwnd, files, steps)
+        return
     _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_single")
 
 
