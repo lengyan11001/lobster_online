@@ -10879,6 +10879,37 @@ def _capture_auto_reply_scan_page(
     return captures
 
 
+def _force_session_list_top(account_id: str) -> bool:
+    """Real mouse wheel on the left session list, then let wxauto read it.
+
+    UIA WheelUp / box.go_top() can silently no-op on WeChat 4.1.7.59 when the
+    list hasn't received a real wheel event.  Auto-reply then scans only the
+    stale rows it can see (现场：只剩 3 个群 + 一个旧单聊，新私聊完全看不到，
+    用户侧就是"个微不回消息"）。这里把真实滚轮打到左侧会话列表上。
+    """
+    try:
+        import win32api  # type: ignore
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+
+        hwnd = int(_local_wechat_hwnd(account_id) or 0)
+        if not hwnd:
+            return False
+        _activate_window(hwnd)
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        x = int(left + min(150, max(80, (right - left) // 5)))
+        y = int(top + min(300, max(150, (bottom - top) // 2)))
+        win32api.SetCursorPos((x, y))
+        for _ in range(30):
+            win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, 120, 0)
+            time.sleep(0.01)
+        time.sleep(0.35)
+        return True
+    except Exception as exc:
+        logger.debug("[native-wechat] force session list top failed: %s", str(exc)[:120])
+        return False
+
+
 def _sync_recent_sessions_from_wxauto4(
     account_id: str,
     *,
@@ -10915,6 +10946,7 @@ def _sync_recent_sessions_from_wxauto4(
     capture_attempted: set[str] = set()
     try:
         _ui_progress_tick("scan:go_top")
+        _force_session_list_top(account_id)
         try:
             box.go_top()
             time.sleep(0.15)
