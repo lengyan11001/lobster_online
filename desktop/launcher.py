@@ -1188,6 +1188,69 @@ def command_line_looks_this_root_service(cmd: str) -> bool:
     )
 
 
+def command_line_looks_this_root_launcher(cmd: str) -> bool:
+    """Identify an older launcher process for this exact client root."""
+    if not cmd:
+        return False
+    normalized_cmd = os.path.normcase(cmd).replace("/", "\\")
+    try:
+        normalized_root = os.path.normcase(str(ROOT.resolve())).replace("/", "\\").rstrip("\\")
+    except Exception:
+        normalized_root = os.path.normcase(str(ROOT)).replace("/", "\\").rstrip("\\")
+    if f"{normalized_root}\\" not in normalized_cmd:
+        return False
+    lower = normalized_cmd.lower()
+    if "launcher" not in lower:
+        return False
+    if "run_backend" in lower or "run_mcp" in lower or "backend\\run.py" in lower:
+        return False
+    return True
+
+
+def stop_other_root_launchers() -> None:
+    """Kill older launcher processes for this root before starting services.
+
+    A previous launcher's daemon watchdog can keep restarting the backend after
+    the window is closed.  The new launcher then fights it for port 8000 and
+    startup loops for minutes.  Only processes whose command line contains this
+    exact root and ``launcher`` are touched.
+    """
+    if os.name != "nt":
+        return
+    current_pid = os.getpid()
+    try:
+        rows = subprocess.check_output(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            ],
+            text=True,
+            errors="ignore",
+            creationflags=creation_flags(),
+            timeout=8,
+        )
+        parsed = json.loads(rows or "[]")
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        for row in parsed if isinstance(parsed, list) else []:
+            try:
+                pid = int(row.get("ProcessId"))
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0 or pid == current_pid:
+                continue
+            cmd = str(row.get("CommandLine") or "")
+            if command_line_looks_this_root_launcher(cmd):
+                log(f"Launcher: stopping previous launcher pid={pid}")
+                kill_pid_tree(pid, "PreviousLauncher")
+    except Exception as exc:
+        log(f"Launcher: previous-launcher scan failed: {exc}")
+
+
 def process_looks_this_root_service(pid: int) -> bool:
     return command_line_looks_this_root_service(process_command_line(pid))
 
@@ -1710,6 +1773,7 @@ def start_services_blocking(
     ensure_runtime: bool = True,
 ) -> tuple[bool, str, subprocess.Popen | None, subprocess.Popen | None, str]:
     set_startup_status("ports", "检查本地端口", detail=f"Backend {port} / MCP {mcp_port}", percent=4)
+    stop_other_root_launchers()
     stop_other_root_backends(port)
     port = choose_backend_port(port)
     mcp_port = choose_mcp_port(mcp_port, port)
