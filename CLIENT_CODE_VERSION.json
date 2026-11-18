@@ -1,7 +1,7 @@
 {
-  "version": "2.0.300",
-  "build": 607,
-  "applied_at": "2026-11-18T13:27:55+08:00",
-  "note": "robot 能力层 + main 合并（正常打包，剔除大体积资源目录）",
-  "bundle_sha256": "5fd7e7acac9061d75c41adcf53abbd7b4f07cab612ea0a4d962c4cf2e8ceb1f4"
+  "version": "2.0.301",
+  "build": 608,
+  "applied_at": "2026-11-18T13:55:32+08:00",
+  "note": "wxid 优先 + 昵称兜底（默认 wxid 搜不到）；robot 发送身份统一",
+  "bundle_sha256": "8e7d6a7ebb75c1120e9b32bd0803313273afae3876def1b7e19ebca4b5a652c1"
 }
