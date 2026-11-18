@@ -5043,18 +5043,23 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
     known_type = _normalize_local_chat_type(
         session.get("chat_type") or _known_local_peer_chat_type(account_id, peer_id)
     )
-    # 2026-11-18：库/快照已经确认是好友单聊时，不要再用"预览文本像群消息"去否定它。
-    # 现场：军争 的最后一条是 "robot自开会话 12:27:48"，冒号让 _looks_like_group_session
-    # 判成群 → skip_group → 客户侧"不回复"。
+    # 2026-11-18：区分"确定的群/公众号"和"只是预览看起来像群消息"。
+    # 现场：军争 最后一条是 "robot自开会话 12:27:48"，冒号让 _looks_like_group_session
+    # 判成群 → 直接 skip_group → 客户侧"不回复"。
     known_private = known_type in _LOCAL_PRIVATE_CHAT_TYPES
-    looks_group = (
+    peer_key = str(session.get("peer_id") or session.get("display_name") or "")
+    authoritative_group = (
         _local_chat_type_is_group(known_type)
         or known_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
-        or (not known_private and _looks_like_group_session({**session, "chat_type": known_type}))
         or _is_non_private_session_entry(session)
+        or "@chatroom" in peer_key.lower()
+        or "群" in peer_key
     )
-    if looks_group:
+    if authoritative_group:
         return {"action": "skip_group", "reason": "known_non_private", "chat_type": known_type}
+    if not known_private and _looks_like_group_session({**session, "chat_type": known_type}):
+        # 只有"预览文本像群消息"这一条证据 → 打开看一眼再决定，不要直接丢
+        return {"action": "open", "reason": "group_heuristic_verify", "chat_type": known_type}
     if (
         not session.get("session_snapshot_fresh")
         and not _session_has_explicit_private_evidence(account_id, session, known_type)
