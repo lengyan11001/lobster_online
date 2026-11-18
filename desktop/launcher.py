@@ -1736,6 +1736,17 @@ def start_services_blocking(
         set_startup_status("backend_ready", "本地服务已在运行", percent=82)
     set_startup_status("backend_wait", "等待本地服务就绪", detail="正在检测健康状态...", percent=72)
     ok = wait_for_own_backend(port, wait_seconds)
+    if not ok:
+        # 真机：后端被旧 watchdog 重新拉起时，健康检查经常在 3 分钟刚过才恢复，
+        # 原来 180s 直接判失败，白屏后用户只能关掉重开。这里再给一次 120s 窗口。
+        log(f"Backend: health wait {wait_seconds}s not ready; retrying 120s")
+        set_startup_status(
+            "backend_retry",
+            "本地服务启动较慢，继续等待",
+            detail="正在重试健康检查...",
+            percent=86,
+        )
+        ok = wait_for_own_backend(port, 120)
     if ok:
         set_startup_status("ready", "启动完成，正在进入工作台", percent=100)
     else:
@@ -2636,6 +2647,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         log(f"Desktop recovery: backend port {port} is owned by another process")
                         return {"ok": False, "error": "backend port is occupied"}
 
+                if runtime["closing"].is_set():
+                    # 用户已经关窗口/正在退出：旧 watchdog 不要再拉起新后端，
+                    # 否则会和下一次启动的后端抢 8000，表现就是白屏几分钟。
+                    return {"ok": False, "closing": True}
                 preserve_service_log(ROOT / "backend.log", "backend recovery")
                 clear_service_log(ROOT / "backend.log", "backend recovery")
                 recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
@@ -3031,7 +3046,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Lobster desktop launcher")
     parser.add_argument("--browser", action="store_true", help="Skip WebView and open the system browser.")
     parser.add_argument("--port", type=int, default=0, help="Backend port override.")
-    parser.add_argument("--wait", type=int, default=180, help="Seconds to wait for backend startup.")
+    parser.add_argument("--wait", type=int, default=300, help="Seconds to wait for backend startup.")
     parser.add_argument("--title", default="", help="Window title override.")
     parser.add_argument("--width", type=int, default=1440)
     parser.add_argument("--height", type=int, default=920)
