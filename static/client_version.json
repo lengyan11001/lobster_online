@@ -1,7 +1,7 @@
 {
-  "version": "2.0.319",
-  "build": 627,
-  "applied_at": "2026-11-18T19:42:03+08:00",
-  "note": "robot 发送点击已校验的发送按钮（不再只按 Enter）",
-  "bundle_sha256": "ef1fed0dc4597563c7d3a3c4512cd5557b08f1814ce7f4987e0e268a989102e0"
+  "version": "2.0.322",
+  "build": 630,
+  "applied_at": "2026-11-18T20:17:47+08:00",
+  "note": "UIA 打开会话后重绑 wxauto 再读消息；读空不再当已回复",
+  "bundle_sha256": "7da744ff5ce98828f0971c2c16445b533c5c0b2b45d6db4fb3c8b1d4fb1ec0de"
 }
