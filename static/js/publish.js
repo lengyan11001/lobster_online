@@ -2610,7 +2610,8 @@ function _assetOpenMomentsPublish(asset) {
           images: imageRefs,
           source: String(asset.source || '').trim(),
           source_id: String(asset.source_id || '').trim(),
-          media_type: 'image_text'
+          media_type: 'image_text',
+          auto_submit: true
         });
         resolve();
         return;

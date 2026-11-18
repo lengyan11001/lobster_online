@@ -2102,7 +2102,8 @@
           images: images,
           source: 'ip_daily',
           source_id: String(rec.record_id || '').trim(),
-          media_type: 'image_text'
+          media_type: 'image_text',
+          auto_submit: true
         });
         return;
       }
