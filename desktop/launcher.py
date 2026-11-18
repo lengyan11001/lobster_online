@@ -1246,7 +1246,21 @@ def stop_other_root_launchers() -> None:
             cmd = str(row.get("CommandLine") or "")
             if command_line_looks_this_root_launcher(cmd):
                 log(f"Launcher: stopping previous launcher pid={pid}")
-                kill_pid_tree(pid, "PreviousLauncher")
+                # 只杀 launcher 本身，不要 /T 连 msedgewebview2 一起杀：
+                # 新旧 launcher 共用 browser_data/desktop_webview，树杀会把
+                # 新窗口刚接上的 WebView2 browser process 一起干掉，结果就是
+                # CoreWebView2 is no longer valid / 白屏。
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/F"],
+                        cwd=str(ROOT),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=creation_flags(),
+                        timeout=8,
+                    )
+                except Exception as exc:
+                    log(f"PreviousLauncher: kill failed pid={pid}: {exc}")
     except Exception as exc:
         log(f"Launcher: previous-launcher scan failed: {exc}")
 
