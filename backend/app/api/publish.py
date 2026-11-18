@@ -2458,7 +2458,8 @@ async def create_publish_task(
                     body.description,
                     body.tags,
                 )
-        eff_tags = _sanitize_internal_publish_tags(eff_tags)
+        # 用户手填了标签就强制用用户标签，AI 只负责标题/正文。
+        eff_tags = _sanitize_internal_publish_tags(body_tags_raw_s or eff_tags)
     else:
         if asset is not None:
             eff_title, eff_desc, eff_tags = _effective_publish_copy_from_asset(

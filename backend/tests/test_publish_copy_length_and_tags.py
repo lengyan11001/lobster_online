@@ -22,3 +22,11 @@ def test_publish_api_normalizes_legacy_hash_tags():
     assert _sanitize_internal_publish_tags("#热点 #干货, AI") == "热点,干货,AI"
     assert _sanitize_internal_publish_tags("sutui.transfer_url, 正常") == "正常"
     assert _sanitize_internal_publish_tags("a，b a") == "a,b"
+
+
+def test_douyin_tag_list_splits_legacy_hash_and_caps():
+    from skills.douyin_publish.driver import _douyin_tag_list
+
+    assert _douyin_tag_list("#热点 #干货, 测评") == ["热点", "干货", "测评"]
+    assert _douyin_tag_list("a, a, b") == ["a", "b"]
+    assert _douyin_tag_list("a,b,c,d,e,f") == ["a", "b", "c", "d", "e"]

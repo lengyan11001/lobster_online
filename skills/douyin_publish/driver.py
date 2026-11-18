@@ -29,16 +29,28 @@ _DOUYIN_MAX_TAGS = 5
 
 
 def _douyin_tag_list(tags: str) -> List[str]:
-    raw = [t.strip() for t in (tags or "").split(",") if t.strip()]
-    if len(raw) > _DOUYIN_MAX_TAGS:
+    # 上游可能传 "a,b"，也可能传老格式 "#a #b"；统一按逗号/空白/# 切开并去重。
+    raw = [
+        t.lstrip("#").strip()
+        for t in re.split(r"[,，\s#]+", str(tags or ""))
+        if t.lstrip("#").strip()
+    ]
+    out: List[str] = []
+    seen: set[str] = set()
+    for tag in raw:
+        if tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag)
+    if len(out) > _DOUYIN_MAX_TAGS:
         logger.warning(
             "[DOUYIN] 标签超过平台上限 %d 个，已仅保留前 %d 个（共传入 %d 个）",
             _DOUYIN_MAX_TAGS,
             _DOUYIN_MAX_TAGS,
-            len(raw),
+            len(out),
         )
-        return raw[:_DOUYIN_MAX_TAGS]
-    return raw
+        return out[:_DOUYIN_MAX_TAGS]
+    return out
 
 
 def _douyin_video_wait_rounds(file_size: int) -> int:
@@ -74,6 +86,43 @@ async def _douyin_type_text(page: Any, text: str, limit: int) -> str:
     else:
         await page.keyboard.type(value)
     return value
+
+
+async def _douyin_fill_description(page: Any, element: Any, text: str, limit: int) -> str:
+    """填写作品描述。
+
+    抖音的 contenteditable 在逐字输入 # 时会弹话题下拉并抢光标，导致标签错位/重复。
+    这里优先用 insert_text 一次性插入（不触发 keydown），失败再回退逐字输入。
+    """
+    value = (text or "")[:limit]
+    if not value:
+        return ""
+    try:
+        await element.click()
+        await _human_delay(0.15, 0.3)
+        try:
+            await element.fill("")
+        except Exception:
+            await page.keyboard.press("Control+KeyA")
+            await page.keyboard.press("Delete")
+        await _human_delay(0.1, 0.2)
+        await page.keyboard.insert_text(value)
+        await asyncio.sleep(0.15)
+        try:
+            current = (await element.inner_text() or "").strip()
+        except Exception:
+            current = ""
+        if current:
+            return value
+    except Exception:
+        logger.warning("[DOUYIN] 一次性插入描述失败，回退逐字输入", exc_info=True)
+        try:
+            await element.click()
+            await page.keyboard.press("Control+KeyA")
+            await page.keyboard.press("Delete")
+        except Exception:
+            pass
+    return await _douyin_type_text(page, value, limit)
 
 
 async def _douyin_clear_and_type(page: Any, element: Any, text: str, limit: int) -> str:
@@ -3196,11 +3245,7 @@ class DouyinDriver(BaseDriver):
             '[contenteditable="true"]',
         ], "image_editor")
         if content_editor:
-            await content_editor.click()
-            await _human_delay(0.2, 0.4)
-            await page.keyboard.press("Control+KeyA")
-            await page.keyboard.press("Delete")
-            await _douyin_type_text(page, text, 500)
+            await _douyin_fill_description(page, content_editor, text, 500)
             _step("填写描述/文案", True, length=len(text))
             if "#" in text or (tags and str(tags).strip()):
                 await _douyin_dismiss_hashtag_suggestion(page, "image_after_desc")
@@ -3595,20 +3640,14 @@ class DouyinDriver(BaseDriver):
             '.zone-container[contenteditable="true"]',
         ], "video_desc")
         if zone and text:
-            await zone.click()
-            await _human_delay(0.2, 0.4)
-            await page.keyboard.press("Control+KeyA")
-            await page.keyboard.press("Delete")
-            await _douyin_type_text(page, text, 500)
+            await _douyin_fill_description(page, zone, text, 500)
             _step("填写描述/文案", True, length=len(text))
         else:
             ce = await _scroll_and_find(page, [
                 '[contenteditable="true"]',
             ], "video_desc_ce")
             if ce and text:
-                await ce.click()
-                await _human_delay(0.2, 0.4)
-                await _douyin_type_text(page, text, 500)
+                await _douyin_fill_description(page, ce, text, 500)
                 _step("填写描述/文案", True, length=len(text))
             else:
                 _step("填写描述/文案", False)
