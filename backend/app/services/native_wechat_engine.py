@@ -11423,10 +11423,17 @@ def _peer_name_map_from_db() -> Dict[str, str]:
 
 
 def resolve_peer_username(account_id: str, value: str) -> str:
-    """把界面传进来的名字映射成 username（聊天记录表按 username 建）。"""
+    """把界面传进来的名字映射成 username（聊天记录表按 username 建）。
+
+    2026-11-19：以微信 session.db 为准（实时、全量、不依赖界面同步）；
+    查不到才退回本地 peers 表，最后才原样返回。
+    """
     name = str(value or "").strip()
     if not name:
         return ""
+    mapped = _peer_name_map_from_db().get(name)
+    if mapped:
+        return mapped
     account = str(account_id or "").strip()
     try:
         with _connect() as conn:
@@ -11446,9 +11453,7 @@ def resolve_peer_username(account_id: str, value: str) -> str:
                 return candidate
     except Exception:
         pass
-    # 本地同步表没有就直接问微信库
-    mapped = _peer_name_map_from_db().get(name)
-    return mapped or name
+    return name
 
 
 def prime_messages_from_db(account_id: str, peer_username: str, *, limit: int = 50) -> Dict[str, Any]:
