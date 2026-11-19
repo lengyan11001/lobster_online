@@ -1313,8 +1313,7 @@
     var sequence = beginRequest('messages');
     state.messageHistory.loading = append;
     renderMessageHistoryState();
-    var path = '/api/native-wechat/messages?account_id=' + encodeURIComponent(id) +
-      '&peer_id=' + encodeURIComponent(peerId) + '&limit=' + state.messageHistory.limit + '&offset=' + offset;
+    var path = '/api/native-wechat/db/chat-messages?peer=' + encodeURIComponent(peerId) + '&limit=' + Math.min(300, (state.messageHistory.limit || 50) + offset);
     return apiJson(path).then(function(data) {
       if (!isCurrentRequest('messages', sequence) || id !== activeAccountId() || peerId !== state.activePeerId) return;
       var items = Array.isArray(data.items) ? data.items : [];

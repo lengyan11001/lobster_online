@@ -11395,6 +11395,29 @@ def rebuild_local_messages_from_db(account_id: str, *, limit_per_chat: int = 20)
                 continue
     return {"ok": True, "removed": removed, "written": written}
 
+def prime_messages_from_db(account_id: str, peer_username: str, *, limit: int = 50) -> Dict[str, Any]:
+    """界面点开某个会话时，直接从微信本地库把这个会话最近 N 条写进缓存。"""
+    from . import wechat_transport_replica as _rt
+
+    peer = str(peer_username or "").strip()
+    if not peer:
+        return {"ok": False, "error": "missing peer"}
+    data = _rt.history(peer, limit=limit)
+    written = 0
+    for msg in data.get("messages") or []:
+        try:
+            _persist_message_obj(
+                account_id,
+                peer,
+                msg,
+                download_attachments=False,
+                created_at_override=str(msg.get("time") or ""),
+            )
+            written += 1
+        except Exception:
+            continue
+    return {"ok": True, "peer": peer, "written": written, "self": data.get("self")}
+
 def summarize_wechat_day_via_db(account_id: str, *, day: str = "", limit_per_chat: int = 50) -> Dict[str, Any]:
     """把某一天（默认今天）所有会话的消息从本地库汇总出来，交给上层做 AI 归纳。"""
     from . import wechat_transport_replica as _rt

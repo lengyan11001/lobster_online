@@ -1194,3 +1194,58 @@ async def native_wechat_db_group_members(
         )
     return {"ok": True, "chatroom": chatroom, "count": len(members), "members": members}
 
+class PrimeMessagesBody(BaseModel):
+    account_id: str
+    peer_id: str
+    limit: int = 50
+
+
+@router.post("/api/native-wechat/db/prime-messages")
+async def native_wechat_db_prime_messages(
+    body: PrimeMessagesBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """点开会话时直接从微信本地库读最近消息（毫秒级），写进缓存供界面展示。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        return await asyncio.to_thread(
+            engine.prime_messages_from_db, body.account_id, body.peer_id, limit=max(1, min(int(body.limit), 200))
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+
+@router.get("/api/native-wechat/db/chat-messages")
+async def native_wechat_db_chat_messages(
+    peer: str,
+    limit: int = Query(default=100, ge=1, le=300),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """直接从微信本地库读某个会话的消息（不经我们的缓存表）。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled", "items": [], "count": 0}
+    try:
+        data = await asyncio.to_thread(_rt.history, peer, limit)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300], "items": [], "count": 0}
+    items = []
+    for m in reversed(list(data.get("messages") or [])):
+        items.append(
+            {
+                "id": str(m.get("id") or ""),
+                "peer_id": peer,
+                "direction": "out" if str(m.get("attr")) == "self" else "in",
+                "msg_type": str(m.get("type") or "text"),
+                "content": str(m.get("content") or ""),
+                "created_at": str(m.get("time") or ""),
+                "raw_json": {"sender": str(m.get("sender") or "")},
+            }
+        )
+    return {"ok": True, "peer_id": peer, "items": items, "count": len(items)}
+
