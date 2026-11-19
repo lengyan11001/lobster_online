@@ -5109,6 +5109,37 @@ def _looks_like_non_private_session_name(name: str) -> bool:
     )
 
 
+_SESSION_NAME_INDEX: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
+def _session_name_index() -> Dict[str, Any]:
+    """微信 session.db 的“显示名 -> username 集合”，60 秒缓存。
+
+    2026-11-19：重名判定/找号一律以微信自己的会话表为准，不再拿我们同步的
+    wechat_peers / wechat_contacts 当依据（那些表会残留历史脏行）。
+    """
+    now = time.time()
+    cached = _SESSION_NAME_INDEX.get("data") or {}
+    if cached and now - float(_SESSION_NAME_INDEX.get("at") or 0) < 60:
+        return cached
+    index: Dict[str, Any] = {}
+    try:
+        from . import wechat_transport_replica as _rt
+
+        for row in (_rt.sessions_db(2000).get("sessions") or []):
+            name = str(row.get("name") or "").strip()
+            username = str(row.get("username") or "").strip()
+            if not name or not username:
+                continue
+            index.setdefault(name, set()).add(username)
+    except Exception:
+        index = {}
+    if index:
+        _SESSION_NAME_INDEX["data"] = index
+        _SESSION_NAME_INDEX["at"] = now
+    return index
+
+
 def _peer_wxids_by_display_name(account_id: str, display_name: str) -> List[str]:
     """库里这个显示名对应的 wxid 列表；>1 说明重名，不能按名字打开。"""
     name = str(display_name or "").strip()
@@ -5116,6 +5147,10 @@ def _peer_wxids_by_display_name(account_id: str, display_name: str) -> List[str]
         return []
     found: List[str] = []
     acct = str(account_id or "")
+    # 微信自己的会话表里有这个名字 -> 直接按它判重名（唯一就说明不是重名）。
+    _hit = _session_name_index().get(name) or set()
+    if _hit:
+        return sorted(_hit)
     try:
         with _connect() as conn:
             for row in conn.execute(
