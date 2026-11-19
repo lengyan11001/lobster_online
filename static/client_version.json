@@ -1,7 +1,7 @@
 {
-  "version": "2.0.348",
-  "build": 656,
-  "applied_at": "2026-11-19T15:41:32+08:00",
-  "note": "好友申请按库判定 + alias 发送",
-  "bundle_sha256": "3f4218df78d116103daa229f2d6ea755d47d5fdaa847f74aae0ed9f409eea983"
+  "version": "2.0.349",
+  "build": 657,
+  "applied_at": "2026-11-19T15:53:07+08:00",
+  "note": "读走本地库，写走 replica；去重复回复",
+  "bundle_sha256": "3a3f6efb09384eaa4bce6ca2bb73ce48220e462c33f3344bc31f880f920f8e9a"
 }
