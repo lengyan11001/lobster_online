@@ -1244,14 +1244,14 @@ async def native_wechat_db_chat_messages(
     except Exception as exc:
         err = str(exc)[:200]
         try:
-            ui = await asyncio.to_thread(_rt.read_messages, resolved, limit)
+            ui = await asyncio.to_thread(_rt.read_messages, resolved, max_messages=limit)
             raw_messages = list(ui.get("messages") or [])
             err += " | fallback_ui_ok"
         except Exception as exc2:
             err += " | fallback_ui_failed: " + str(exc2)[:120]
     if not raw_messages:
         try:
-            ui = await asyncio.to_thread(_rt.read_messages, resolved, limit)
+            ui = await asyncio.to_thread(_rt.read_messages, resolved, max_messages=limit)
             raw_messages = list(ui.get("messages") or [])
             if raw_messages:
                 err += " | empty_then_ui_ok"
