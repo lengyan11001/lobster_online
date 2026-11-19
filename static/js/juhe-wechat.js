@@ -1436,7 +1436,22 @@
         method: 'POST',
         body: { account_id: id, limit: 2000 }
       }).then(function(groupData) {
-        setMsg('同步完成：' + sessionCount + ' 条，会话中识别群聊 ' + (groupData.count || 0) + ' 个', false);
+        var _summary = '同步完成：' + sessionCount + ' 条，会话中识别群聊 ' + (groupData.count || 0) + ' 个';
+        // 2026-11-19：会话/通讯录都改读本地库了；顺手把"好友申请"也读出来提示。
+        return apiJson('/api/native-wechat/db/friend-requests?limit=50', { method: 'GET' }).then(function(fr) {
+          var reqs = (fr && fr.requests) || [];
+          var pending = reqs.filter(function(x) { return String(x.is_sender) !== '1'; });
+          if (pending.length) {
+            _summary += '；好友申请 ' + pending.length + ' 条：' + pending.slice(0, 3).map(function(x) {
+              return String(x.content || '').slice(0, 20);
+            }).join(' / ');
+          } else {
+            _summary += '；无待处理好友申请';
+          }
+          setMsg(_summary, false);
+        }).catch(function() {
+          setMsg(_summary, false);
+        });
       }).catch(function() {
         setMsg('同步完成：' + sessionCount + ' 条', false);
       }).then(function() {
