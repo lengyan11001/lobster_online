@@ -3664,6 +3664,39 @@ def _known_local_peer_chat_type(account_id: str, peer_id: str) -> str:
         return ""
 
 
+def _infer_chat_type_from_db(account_id: str, peer_id: str, display_name: str = "") -> str:
+    """界面拿不到会话类型时，直接用微信本地库判定单聊/群/公众号。
+
+    2026-11-19：WeChat 4.1 上 ChatInfo 经常给不出 chat_type（unknown），
+    结果每个会话打开后都被 skipped_unknown_chat_type 丢掉，一条都不回。
+    规则和微信自己一致：username 带 @chatroom 才是群，gh_/brandservicesessionholder
+    是公众号，session.db 能唯一定位到普通 username 的就是单聊。
+    """
+    mapped = ""
+    try:
+        mapped = str(resolve_peer_username(account_id, peer_id) or "").strip() if peer_id else ""
+    except Exception:
+        mapped = ""
+    values = [mapped, str(peer_id or "").strip(), str(display_name or "").strip()]
+    for value in values:
+        low = value.lower()
+        if not low:
+            continue
+        if low.endswith("@chatroom"):
+            return "group"
+        if low.startswith("gh_") or low.startswith("brandservicesessionholder"):
+            return "official"
+    known = (
+        _known_local_peer_chat_type(account_id, str(peer_id or ""))
+        or _known_local_peer_chat_type(account_id, str(display_name or ""))
+    )
+    if known:
+        return known
+    if mapped and mapped != str(peer_id or "") and _looks_like_wechat_id(mapped):
+        return "friend"
+    return ""
+
+
 def _raw_local_message_is_group(raw: Dict[str, Any]) -> bool:
     """Detect group messages from wxauto4 data without opening a profile."""
     if not isinstance(raw, dict):
@@ -6093,6 +6126,10 @@ async def run_auto_reply_once(
                     fresh_latest_direction=str(diagnostic_latest.get("direction") or ""),
                     **_message_diagnostic_fields(diagnostic_latest, prefix="latest_"),
                 )
+                if not _local_chat_type_is_private(chat_type) and not _local_chat_type_is_group(chat_type):
+                    _inferred_chat_type = _infer_chat_type_from_db(account_id, actual_peer or peer_id, display_name)
+                    if _inferred_chat_type:
+                        chat_type = _normalize_local_chat_type(_inferred_chat_type)
                 if (
                     _local_chat_type_is_group(chat_type)
                     or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
@@ -6934,6 +6971,10 @@ async def run_auto_reply_once(
                     chat_type = _normalize_local_chat_type(sync_result.get("message_chat_type"))
                 if chat_type in {"", "unknown"} and not session.get("session_snapshot_fresh"):
                     chat_type = _normalize_local_chat_type(_known_local_peer_chat_type(account_id, actual_peer))
+                if not _local_chat_type_is_private(chat_type) and not _local_chat_type_is_group(chat_type):
+                    _inferred_chat_type = _infer_chat_type_from_db(account_id, actual_peer or peer_id, display_name)
+                    if _inferred_chat_type:
+                        chat_type = _normalize_local_chat_type(_inferred_chat_type)
                 if _local_chat_type_is_group(chat_type) or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES or _looks_like_group_session(
                     {
                         "peer_id": actual_peer,
