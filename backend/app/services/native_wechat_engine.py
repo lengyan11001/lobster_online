@@ -11395,6 +11395,31 @@ def rebuild_local_messages_from_db(account_id: str, *, limit_per_chat: int = 20)
                 continue
     return {"ok": True, "removed": removed, "written": written}
 
+def resolve_peer_username(account_id: str, value: str) -> str:
+    """把界面传进来的显示名映射成 username（聊天记录表按 username 建）。"""
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    account = str(account_id or "").strip()
+    try:
+        with _connect() as conn:
+            if account:
+                row = conn.execute(
+                    "select peer_id from wechat_peers where account_id=? and (peer_id=? or display_name=?) limit 1",
+                    (account, name, name),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "select peer_id from wechat_peers where peer_id=? or display_name=? limit 1",
+                    (name, name),
+                ).fetchone()
+        if row and str(row[0] or "").strip():
+            return str(row[0]).strip()
+    except Exception:
+        pass
+    return name
+
+
 def prime_messages_from_db(account_id: str, peer_username: str, *, limit: int = 50) -> Dict[str, Any]:
     """界面点开某个会话时，直接从微信本地库把这个会话最近 N 条写进缓存。"""
     from . import wechat_transport_replica as _rt
