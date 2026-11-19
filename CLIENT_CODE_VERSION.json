@@ -1,7 +1,7 @@
 {
-  "version": "2.0.339",
-  "build": 647,
-  "applied_at": "2026-11-19T13:44:15+08:00",
-  "note": "预览变化也视为新消息",
-  "bundle_sha256": "1f41d74cfe72ba65068ca412024070d3f747dc321e02459b28e209f9d2748cdf"
+  "version": "2.0.340",
+  "build": 648,
+  "applied_at": "2026-11-19T14:47:15+08:00",
+  "note": "已回过的入站不再重复回",
+  "bundle_sha256": "b7f4a052882dab0c0bbefda462cde2993df9da2056fa3bf5357a7160977562ab"
 }
