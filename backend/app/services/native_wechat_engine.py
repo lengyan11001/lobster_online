@@ -11357,6 +11357,44 @@ def sync_local_groups_via_db(account_id: str) -> Dict[str, Any]:
         conn.commit()
     return {"ok": True, "count": written, "member_count": members_written, "source": "wechat_db"}
 
+def rebuild_local_messages_from_db(account_id: str, *, limit_per_chat: int = 20) -> Dict[str, Any]:
+    """清掉本地消息缓存，按本地库重新落库（修正历史时间/顺序）。"""
+    from . import wechat_transport_replica as _rt
+
+    data = _rt.sessions_db(200)
+    self_user = str(data.get("self") or "")
+    removed = 0
+    written = 0
+    with _connect() as conn:
+        removed = conn.execute(
+            "delete from wechat_messages where account_id=?", (account_id,)
+        ).rowcount or 0
+        conn.commit()
+    for sess in data.get("sessions") or []:
+        username = str(sess.get("username") or "").strip()
+        if not username or username == self_user:
+            continue
+        if username.startswith("gh_"):
+            continue
+        try:
+            hist = _rt.history(username, limit=limit_per_chat)
+        except Exception:
+            continue
+        name = str(sess.get("name") or username)
+        for msg in hist.get("messages") or []:
+            try:
+                _persist_message_obj(
+                    account_id,
+                    username,
+                    msg,
+                    download_attachments=False,
+                    created_at_override=str(msg.get("time") or ""),
+                )
+                written += 1
+            except Exception:
+                continue
+    return {"ok": True, "removed": removed, "written": written}
+
 def summarize_wechat_day_via_db(account_id: str, *, day: str = "", limit_per_chat: int = 50) -> Dict[str, Any]:
     """把某一天（默认今天）所有会话的消息从本地库汇总出来，交给上层做 AI 归纳。"""
     from . import wechat_transport_replica as _rt
@@ -15933,6 +15971,8 @@ def _sync_local_messages_via_replica(
                 actual_peer,
                 raw,
                 download_attachments=download_attachments,
+                # 用微信里的真实消息时间落库，保证界面顺序/日期正确
+                created_at_override=str(raw.get("time") or "").strip() or str(raw.get("created_at") or ""),
             )
         )
     latest = _latest_message_record(account_id, actual_peer)

@@ -223,14 +223,21 @@ def _history(peer_username: str, limit: int = 20):
     out = []
     for m in rows:
         sender = str(m.get("sender_username") or "")
+        try:
+            _ts = int(m.get("create_time") or 0)
+        except Exception:
+            _ts = 0
+        _label = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(_ts)) if _ts else ""
         out.append({
             "type": _TYPE_MAP.get(str(m.get("type") or ""), "text"),
             "content": str(m.get("content") or ""),
             "attr": "self" if sender and sender == self_name else "friend",
             "sender": sender,
+            # 2026-11-19：必须带真实消息时间，否则落库全部用"现在"，
+            # 界面按 created_at 排序就会串日期/串顺序。
+            "time": _label,
             "id": "%s:%s" % (m.get("shard") or "", m.get("local_id")),
             "hash": "%s:%s" % (m.get("shard") or "", m.get("local_id")),
-            "time": "",
             "create_time": m.get("create_time"),
         })
     return {"ok": True, "self": self_name, "messages": out}
