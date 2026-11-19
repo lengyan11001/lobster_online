@@ -1,7 +1,7 @@
 {
-  "version": "2.0.325",
-  "build": 633,
-  "applied_at": "2026-11-19T11:01:50+08:00",
-  "note": "接入 replica 传输层：修复 4.1.7+ 发送",
-  "bundle_sha256": "a82f73468673493249d64fba1bc1917488fdaa4c3fb7db55b06528fd1b703990"
+  "version": "2.0.326",
+  "build": 634,
+  "applied_at": "2026-11-19T11:33:02+08:00",
+  "note": "只回有未读的会话；回复阶段 4s/条",
+  "bundle_sha256": "caaa5976fa213421cd8cfaa9bdf0c1585478bfe1e03d53c1a7f5ed88378c8a76"
 }
