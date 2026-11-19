@@ -1,7 +1,7 @@
 {
-  "version": "2.0.328",
-  "build": 636,
-  "applied_at": "2026-11-19T12:07:29+08:00",
-  "note": "仅发送改走 replica sidecar",
-  "bundle_sha256": "1741b1f1738d2e385bbcefd99cfde87bb81a0a421e2abfbf4e16e856b0739407"
+  "version": "2.0.329",
+  "build": 637,
+  "applied_at": "2026-11-19T12:18:28+08:00",
+  "note": "会话列表/读/发走 replica，剔除公众号与群",
+  "bundle_sha256": "f4141eac62da011b78d3c001e03dde8b6718313278e1420b81e63a7bdeeceff1"
 }
