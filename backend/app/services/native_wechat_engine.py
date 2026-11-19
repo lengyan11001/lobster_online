@@ -3634,30 +3634,16 @@ def _local_chat_type_is_private(value: Any) -> bool:
 
 
 def _looks_like_group_session(item: Dict[str, Any]) -> bool:
+    """只认精确信号：公众号/服务号，或 username 带 @chatroom。
+
+    2026-11-19：删掉"预览里 某某: 内容 就当群"的文本启发式 —— 单聊里
+    "时间：明天3点""备注：xxx"都会被误判成群，整条会话被丢掉（军争就是这么被跳过的）。
+    群/好友一律以微信自己的 username 后缀和 ChatInfo.chat_type 为准。
+    """
     if _non_personal_session_reason(item):
         return True
     peer_id = str(item.get("peer_id") or item.get("display_name") or "").strip()
-    if "@chatroom" in peer_id.lower():
-        return True
-    if "群" in peer_id:
-        return True
-    preview = str(item.get("last_content") or "").strip()
-    first_line = next((line.strip() for line in preview.splitlines() if line.strip()), "")
-    m = re.match(r"^([^:：]{1,40})[:：]", first_line)
-    if m:
-        head = m.group(1).strip()
-        # 2026-11-18：真机误判——单聊最后一条是 "robot自开会话 12:27:48"，
-        # 冒号前的 "robot自开会话 12" 被当成"群成员名: 内容"，整个单聊被 skip_group 跳过，
-        # 客户侧就是"不回复"。
-        # 时间戳、URL、纯数字/纯符号前缀都不算"群成员名"。
-        looks_like_time = bool(re.match(r"^\d{1,2}:\d{2}(:\d{2})?$", head)) or bool(
-            re.search(r"\d{1,2}:\d{2}", head)
-        )
-        looks_like_url = "http" in head.lower() or "www." in head.lower()
-        has_name_shape = bool(re.search(r"[A-Za-z\u4e00-\u9fff]", head))
-        if not looks_like_time and not looks_like_url and has_name_shape:
-            return True
-    return False
+    return "@chatroom" in peer_id.lower()
 
 
 def _known_local_peer_chat_type(account_id: str, peer_id: str) -> str:
