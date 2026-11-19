@@ -177,6 +177,10 @@ _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
 _LOCAL_WECHAT_WINDOW_SIGNATURE: tuple[int, int] = (0, 0)
 _LOCAL_WECHAT_DRIVER_RECOVERY: Dict[str, Dict[str, Any]] = {}
 _LOCAL_WXAUTO4_CLIENTS: Dict[tuple[str, int], Any] = {}
+
+# 2026-11-19：每轮开始时用 replica 的 GetSession 刷新「谁有未读」，
+# 没有未读、库里也没有待回复消息的会话直接不打开（用户：没消息的人搜出来干啥）。
+_AUTO_REPLY_UNREAD_HINTS: Dict[str, Dict[str, int]] = {}
 # Accounts doing an automatic-takeover scan use wxauto4's precise timestamps.
 # The public sync_local_sessions API keeps its existing UIA behavior.
 _AUTO_REPLY_TIME_SCAN_ACCOUNTS: set[str] = set()
@@ -5164,6 +5168,18 @@ async def run_auto_reply_once(
     # 每轮先把被挪到屏幕外的微信主窗口拉回来：窗口在 -32000 时 UIA 能读到控件树，
     # 但点击落空、wxauto 读消息恒为空（线上 19:52 之后所有会话 scan_capture_missing）。
     try:
+        from . import wechat_transport_replica as _replica_hint
+
+        if _replica_hint.enabled():
+            _hint_sessions = _replica_hint.list_sessions()
+            _AUTO_REPLY_UNREAD_HINTS[account_id] = {
+                item["name"]: int(item.get("unread") or 0) for item in _hint_sessions if item.get("name")
+            }
+            log_event("unread_hint_loaded", count=len(_AUTO_REPLY_UNREAD_HINTS[account_id]))
+    except Exception as _hint_exc:
+        log_event("unread_hint_failed", error=str(_hint_exc)[:200])
+
+    try:
         _main_hwnd = _local_wechat_hwnd(account_id)
         if _main_hwnd:
             _onscreen = _ensure_local_wechat_on_screen(_main_hwnd)
@@ -5478,6 +5494,27 @@ async def run_auto_reply_once(
             # 2026-11-19 提速：会话列表的预览就是对方/自己最后一句。没有未读、且预览
             # 和我们库里最后一条（已发出）一致 -> 这条没有任何新消息，不用打开会话。
             # 以前不管有没有新消息都点一遍，14 个会话光扫描就要 67 秒。
+            _hints = _AUTO_REPLY_UNREAD_HINTS.get(account_id) or {}
+            if _hints:
+                _unread_hint = int(_hints.get(display_name, 0) or 0)
+                if _unread_hint <= 0 and not _latest_strict_auto_reply_candidate(account_id, peer_id):
+                    result["skipped"] += 1
+                    result["items"].append(
+                        {
+                            "peer_id": peer_id,
+                            "display_name": display_name,
+                            "status": "no_unread",
+                            "skip_reason": "no_new_message",
+                        }
+                    )
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="no_unread",
+                        reason="no_new_message",
+                    )
+                    continue
             if not int(session.get("unread_count") or 0) and str(session.get("last_content") or "").strip():
                 _cached_latest = _latest_message_record(account_id, peer_id, include_system=False)
                 if (
@@ -10849,6 +10886,14 @@ def _capture_auto_reply_scan_page(
                 session_time_reliable=bool(reliability.get("reliable")),
             )
             continue
+        # 2026-11-19：replica 的 GetSession 给了未读数；没有未读、库里也没有待回复入站
+        # 的会话，扫描阶段连点都不用点（用户：没消息的人搜出来干啥）。
+        _scan_hints = _AUTO_REPLY_UNREAD_HINTS.get(account_id) or {}
+        if _scan_hints:
+            _scan_unread = int(_scan_hints.get(display_name, 0) or 0)
+            if _scan_unread <= 0 and not _latest_strict_auto_reply_candidate(account_id, peer_id):
+                capture_skip("no_unread")
+                continue
         # 2026-11-19 提速：没有未读、且列表预览和我们库里最后一条（已发出）一致
         # -> 这条没有任何新消息，不用点开它（以前 14 个会话挨个点一遍要 67 秒）。
         if (
