@@ -5169,6 +5169,12 @@ async def run_auto_reply_once(
             _onscreen = _ensure_local_wechat_on_screen(_main_hwnd)
             if _onscreen.get("changed"):
                 log_event("wechat_window_restored", account_id=account_id, **_onscreen)
+            # 拉回屏幕后仍然不健康（无响应 / 读不到会话树）-> 重启一次微信客户端。
+            _health = _wechat_main_window_health(hwnd=_main_hwnd)
+            if not _health.get("ok"):
+                log_event("wechat_window_unhealthy", account_id=account_id, health=_health)
+                _restart = _restart_local_wechat(account_id)
+                log_event("wechat_window_restarted", account_id=account_id, result=_restart)
     except Exception:
         pass
 
@@ -12047,6 +12053,103 @@ def _ensure_local_wechat_on_screen(hwnd: int) -> Dict[str, Any]:
     except Exception:
         pass
     return info
+
+
+_LAST_WECHAT_RESTART_AT: float = 0.0
+
+
+def _restart_local_wechat(account_id: str = "") -> Dict[str, Any]:
+    """微信"能收消息但界面点不出来/点不动"时，重启一次客户端。
+
+    登录态在本地，正常重启后会自动登录并恢复主窗口；只在健康检查确认
+    （窗口在屏幕外且拉不回来 / SendMessageTimeout 超时 / 会话树读不到）时才调用，
+    并且 3 分钟内最多一次，避免来回杀进程。
+    """
+    global _LAST_WECHAT_RESTART_AT
+    result: Dict[str, Any] = {"ok": False, "killed": [], "launched": False, "hwnd": 0}
+    now = time.time()
+    if now - float(_LAST_WECHAT_RESTART_AT or 0.0) < 180:
+        result["skipped"] = "cooldown"
+        result["seconds_since_last"] = round(now - float(_LAST_WECHAT_RESTART_AT or 0.0), 1)
+        return result
+    _LAST_WECHAT_RESTART_AT = now
+
+    exe = ""
+    try:
+        import psutil  # type: ignore
+
+        for proc in psutil.process_iter(["name", "exe"]):
+            if str(proc.info.get("name") or "").lower() == "weixin.exe" and proc.info.get("exe"):
+                exe = str(proc.info["exe"])
+                break
+    except Exception:
+        exe = ""
+    if not exe:
+        for candidate in (
+            r"C:\Program Files\Tencent\Weixin\Weixin.exe",
+            r"C:\Program Files (x86)\Tencent\Weixin\Weixin.exe",
+        ):
+            if os.path.isfile(candidate):
+                exe = candidate
+                break
+    result["exe"] = exe
+
+    try:
+        import psutil  # type: ignore
+
+        for proc in list(psutil.process_iter(["name", "pid"])):
+            if str(proc.info.get("name") or "").lower() != "weixin.exe":
+                continue
+            pid = int(proc.info["pid"])
+            try:
+                subprocess.run(["taskkill", "/PID", str(pid)], capture_output=True, timeout=10)
+                result["killed"].append(pid)
+            except Exception:
+                pass
+    except Exception as exc:
+        result["error"] = str(exc)[:200]
+
+    deadline = time.time() + 8.0
+    while time.time() < deadline:
+        if not _local_wechat_hwnd(account_id):
+            break
+        time.sleep(0.6)
+    try:
+        import psutil  # type: ignore
+
+        for proc in list(psutil.process_iter(["name", "pid"])):
+            if str(proc.info.get("name") or "").lower() == "weixin.exe":
+                try:
+                    subprocess.run(["taskkill", "/F", "/PID", str(int(proc.info["pid"]))], capture_output=True, timeout=10)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    if exe:
+        try:
+            subprocess.Popen([exe], close_fds=True)
+            result["launched"] = True
+        except Exception as exc:
+            result["error"] = str(exc)[:200]
+
+    deadline = time.time() + 90.0
+    while time.time() < deadline:
+        hwnd = _local_wechat_hwnd(account_id)
+        if hwnd:
+            try:
+                _ensure_local_wechat_on_screen(int(hwnd))
+            except Exception:
+                pass
+            result["hwnd"] = int(hwnd)
+            result["ok"] = True
+            break
+        time.sleep(1.0)
+    try:
+        _reset_local_automation_clients()
+    except Exception:
+        pass
+    return result
 
 def _open_local_session_by_uia(
     account_id: str,
@@ -24461,7 +24564,31 @@ def _wechat_main_window_health(
             send_error = f"SendMessageTimeout err={ctypes.get_last_error()}"
     except Exception as exc:
         send_error = str(exc)[:200]
-    healthy = bool(visible and not iconic and not hung and responsive)
+    # 2026-11-19：微信"假死"最常见的一种是窗口被挪到屏幕外（x=-32000）：
+    # IsWindowVisible / IsHungAppWindow / SendMessageTimeout 全部正常，用户却点不出来，
+    # 自动化点击也全落空。这里必须把窗口位置算进健康判定。
+    offscreen = False
+    rect_values = []
+    try:
+        rect_values = [int(v) for v in win32gui.GetWindowRect(target)]
+        left, top, right, bottom = rect_values
+        offscreen = bool(
+            left <= -30000
+            or top <= -30000
+            or right <= 0
+            or bottom <= 0
+            or left > 10000
+            or top > 10000
+        )
+    except Exception:
+        pass
+    healthy = bool(visible and not iconic and not hung and responsive and not offscreen)
+    if healthy:
+        error = ""
+    elif offscreen:
+        error = "微信主窗口被挪到屏幕外 rect=%s" % rect_values
+    else:
+        error = send_error or "微信主窗口无响应/不可见"
     return {
         "ok": healthy,
         "hwnd": target,
@@ -24469,7 +24596,9 @@ def _wechat_main_window_health(
         "iconic": iconic,
         "hung": hung,
         "responsive": responsive,
-        "error": "" if healthy else (send_error or "微信主窗口无响应/不可见"),
+        "offscreen": offscreen,
+        "rect": rect_values,
+        "error": error,
     }
 
 
@@ -24508,8 +24637,16 @@ def _close_wechat_popups(
     if not main or not win32gui.IsWindow(main):
         return {"ok": False, "closed": [], "error": "微信主窗口不存在"}
     health = _wechat_main_window_health(hwnd=main)
+    if not health.get("ok") and health.get("offscreen"):
+        # 2026-11-19：窗口被挪到屏幕外（-32000）时先拉回来再继续，不要直接判死。
+        try:
+            _ensure_local_wechat_on_screen(main)
+            time.sleep(0.4)
+            health = _wechat_main_window_health(hwnd=main)
+        except Exception:
+            pass
     if not health.get("ok"):
-        return {"ok": False, "closed": [], "hung": bool(health.get("hung")), "health": health, "error": "微信主窗口卡死/不可见/无响应"}
+        return {"ok": False, "closed": [], "hung": bool(health.get("hung")), "offscreen": bool(health.get("offscreen")), "health": health, "error": "微信主窗口卡死/不可见/无响应"}
     main_pid = _window_process_id(main)
     if not main_pid:
         return {"ok": False, "closed": [], "error": "无法读取微信主窗口进程"}
