@@ -15597,6 +15597,20 @@ def _sync_local_messages_once(
                 )
                 if _early:
                     return _early
+                # replica 明确读到 0 条时也不回落到 wxauto4：
+                # 建 wxauto 客户端本身就会卡 40~47 秒（日志 wxauto4_client:ready），
+                # 这条会话本轮直接判"读不到"，下一轮再试。
+                return {
+                    "ok": False,
+                    "peer_id": peer_id,
+                    "chat_info": {},
+                    "items": [],
+                    "count": 0,
+                    "seen_count": 0,
+                    "deduped_count": 0,
+                    "fresh_latest_message": None,
+                    "error": "replica_read_empty",
+                }
         except Exception as _early_exc:
             _write_auto_reply_diagnostic(
                 "replica_read_failed", error=str(_early_exc)[:300]
