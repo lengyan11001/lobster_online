@@ -3014,9 +3014,14 @@
   <script defer src="/static/js/i18n.js?v=20260824-personal-digital-resource-picker-v2"></script>
 <script defer src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
 <script defer src="/static/js/client-version-guard.js?v=20260928-guard-once-per-session-v2"></script>
-  <script defer src="/static/js/view-loader.js?v=20261119-db-read-v7"></script>
-  <script defer src="/static/js/view-registry.js?v=20261119-db-read-v7"></script>
   <script>
+  (function () {
+    var v = '20261119c';
+    document.write('<script defer src="/static/js/view-loader.js?v=' + v + '"><\/script>');
+    document.write('<script defer src="/static/js/view-registry.js?v=' + v + '"><\/script>');
+  })();
+</script>
+    <script>
   (function () {
     // 唯一事实来源：本机 data/installation_identity.json（+ %LOCALAPPDATA% 备份）。
     // 页面不再自己随机生成槽位：文件没有就让本机后端当场创建并落盘。
