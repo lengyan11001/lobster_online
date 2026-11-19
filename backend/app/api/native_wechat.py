@@ -7,7 +7,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
+import logging
+
 from ..services import native_wechat_engine as engine
+
+logger = logging.getLogger(__name__)
 from .auth import _ServerUser, get_current_user_for_local
 from .creative_film_studio import _installation_id_from_request, _raw_token_from_request
 
