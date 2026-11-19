@@ -604,6 +604,9 @@ async def native_wechat_contacts(
             continue
         if username in system_names or username.startswith("gh_"):
             continue
+        # 只保留真正的联系人（微信 contact.local_type=3 是好友；1=公众号/系统，2=群）
+        if int(row.get("local_type") or 0) != 3:
+            continue
         nick = str(row.get("nick_name") or "").strip()
         remark = str(row.get("remark") or "").strip()
         alias = str(row.get("alias") or "").strip()
