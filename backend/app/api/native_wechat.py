@@ -1233,7 +1233,7 @@ async def native_wechat_db_chat_messages(
     try:
         # 界面可能传显示名，先映射成 username（聊天记录表按 username 建）
         peer = await asyncio.to_thread(engine.resolve_peer_username, "", peer)
-        data = await asyncio.to_thread(_rt.history, peer, limit)
+        data = await asyncio.to_thread(_rt.history, peer, limit=limit)
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:300], "items": [], "count": 0}
     # 2026-11-19：公众号/服务号的聊天记录不在 message_N.db（在 biz_message_0.db），
