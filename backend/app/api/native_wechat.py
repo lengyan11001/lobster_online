@@ -672,21 +672,59 @@ async def native_wechat_peers(
     account_id: str,
     chat_type: str = "",
     keyword: str = "",
-    limit: int = Query(default=100, ge=1, le=200),
+    limit: int = Query(default=100, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return {
-        "ok": True,
-        **engine.list_peers(
-            account_id,
-            limit=limit,
-            offset=offset,
-            chat_type=chat_type,
-            keyword=keyword,
-        ),
-    }
+    """会话列表直接用微信 session.db（实时、按最后消息时间倒序），不用本地旧表。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
 
+    if not _rt.enabled():
+        return {"ok": True, **engine.list_peers(account_id, limit=limit, offset=offset, chat_type=chat_type, keyword=keyword)}
+    try:
+        data = await asyncio.to_thread(_rt.sessions_db, 2000)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200], "items": [], "count": 0, "total": 0}
+    self_user = str(data.get("self") or "")
+    rows = []
+    for r in data.get("sessions") or []:
+        u = str(r.get("username") or "").strip()
+        if not u or u == self_user:
+            continue
+        lowered = u.lower()
+        if lowered.endswith("@chatroom"):
+            ct = "group"
+        elif lowered.startswith("gh_") or lowered == "brandsessionholder":
+            ct = "official"
+        else:
+            ct = "friend"
+        if chat_type and ct != chat_type:
+            continue
+        name = str(r.get("name") or u)
+        if keyword and keyword not in name and keyword not in u:
+            continue
+        try:
+            ts = int(r.get("last_time") or 0)
+        except Exception:
+            ts = 0
+        rows.append(
+            {
+                "peer_id": u,
+                "display_name": name,
+                "chat_type": ct,
+                "last_content": str(r.get("summary") or ""),
+                "last_message_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "",
+                "unread_count": int(r.get("unread") or 0),
+                "_ts": ts,
+            }
+        )
+    rows.sort(key=lambda x: x["_ts"], reverse=True)
+    total = len(rows)
+    page = rows[offset: offset + limit]
+    for item in page:
+        item.pop("_ts", None)
+    return {"ok": True, "items": page, "count": len(page), "total": total}
 
 @router.get("/api/native-wechat/messages")
 async def native_wechat_messages(
