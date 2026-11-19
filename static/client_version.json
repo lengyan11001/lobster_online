@@ -1,7 +1,7 @@
 {
-  "version": "2.0.322",
-  "build": 630,
-  "applied_at": "2026-11-18T20:17:47+08:00",
-  "note": "UIA 打开会话后重绑 wxauto 再读消息；读空不再当已回复",
-  "bundle_sha256": "7da744ff5ce98828f0971c2c16445b533c5c0b2b45d6db4fb3c8b1d4fb1ec0de"
+  "version": "2.0.323",
+  "build": 631,
+  "applied_at": "2026-11-19T09:42:26+08:00",
+  "note": "屏幕外微信窗口自动拉回 + UIA 读空重建客户端",
+  "bundle_sha256": "6ad49185d3e6c2848e86dc76415daa86f4c59189facdf10a5ae60a04850eac45"
 }
