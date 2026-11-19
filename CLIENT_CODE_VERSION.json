@@ -1,7 +1,7 @@
 {
-  "version": "2.0.344",
-  "build": 652,
-  "applied_at": "2026-11-19T15:25:05+08:00",
-  "note": "无新消息不拉界面",
-  "bundle_sha256": "f879b67d6abb5d391e2f6fcfdab14859f9c8a96dc14466224950d6836f091e9e"
+  "version": "2.0.345",
+  "build": 653,
+  "applied_at": "2026-11-19T15:34:57+08:00",
+  "note": "会话/通讯录同步改读本地库",
+  "bundle_sha256": "b6b4dc78fae66cfa8a915afd4b52d0ab03c4a61ee5853cdfb13088b9500c5acd"
 }
