@@ -5609,13 +5609,16 @@ async def run_auto_reply_once(
                     continue
                 else:
                     if not scanned_wechat_id and str(session.get("source") or "").startswith("pc_wechat_uia_sessions"):
-                        # wxauto 漏了这条；UIA 可见行还在。按 UIA 行点击打开，
-                        # 再读当前会话（老路由的 UIA 会话读取方式）。
+                        # wxauto 的 GetSession 漏掉了这条（置顶 / 折叠置顶里的会话）。
+                        # 2026-11-19 本机实测：UIA 点开会话后 wxauto4 的 ChatBox 会脱离
+                        # 当前会话（ChatInfo 拿不到名字、GetAllMessage() 恒为 0），而
+                        # wxauto 自己的 ChatWith（搜索框）打开同一个置顶会话能正常读到
+                        # 消息。所以先按昵称走老路由 ChatWith，读空才退回 UIA 行点击。
                         nickname_identity = True
                         collection_target = peer_id
                         collection_target_source = "uia_session_row"
                         log_event(
-                            "session_open_uia_row",
+                            "session_open_chatwith_row",
                             peer_id=peer_id,
                             display_name=display_name,
                         )
@@ -5624,7 +5627,7 @@ async def run_auto_reply_once(
                             account_id,
                             peer_id,
                             load_more_pages=0,
-                            select_via_uia=True,
+                            select_via_uia=False,
                             uia_session_max_rounds=1,
                             current_selected=False,
                             read_chat_info=True,
@@ -5636,9 +5639,38 @@ async def run_auto_reply_once(
                                 "session_preview": session.get("last_content") or "",
                                 "expected_display_name": display_name,
                                 "nickname_identity": True,
-                                "collection_target_source": "uia_session_row",
+                                "collection_target_source": "uia_session_row_chatwith",
                             },
                         )
+                        if (
+                            int(sync_result.get("seen_count") or 0) <= 0
+                            and not sync_result.get("session_target_mismatch")
+                        ):
+                            log_event(
+                                "session_open_uia_row",
+                                peer_id=peer_id,
+                                display_name=display_name,
+                            )
+                            sync_result = await _run_local_wechat_async(
+                                sync_local_messages,
+                                account_id,
+                                peer_id,
+                                load_more_pages=0,
+                                select_via_uia=True,
+                                uia_session_max_rounds=1,
+                                current_selected=False,
+                                read_chat_info=True,
+                                download_attachments=False,
+                                diagnostic_context={
+                                    "account_id": account_id,
+                                    "run_id": run_id,
+                                    "stage": "collect",
+                                    "session_preview": session.get("last_content") or "",
+                                    "expected_display_name": display_name,
+                                    "nickname_identity": True,
+                                    "collection_target_source": "uia_session_row",
+                                },
+                            )
                     elif not scanned_wechat_id:
                         # 本轮没抓到这一行的页面快照，也没有可用的 wxid。
                         # 不按昵称盲搜（会点错同名会话），跳过这个候选人，
@@ -5847,6 +5879,7 @@ async def run_auto_reply_once(
                     latest_message_time=str(diagnostic_latest.get("created_at") or ""),
                     latest_preview=str(diagnostic_latest.get("content") or "")[:500],
                     fresh_latest_available="fresh_latest_message" in sync_result,
+                    chat_info_from_fallback=bool((chat_info or {}).get("_name_from_fallback")),
                     fresh_latest_direction=str(diagnostic_latest.get("direction") or ""),
                     **_message_diagnostic_fields(diagnostic_latest, prefix="latest_"),
                 )
@@ -15135,6 +15168,9 @@ def _current_local_chat_info(wx: Any, *, fallback_name: str = "") -> Dict[str, A
         fallback_info["chat_type"] = attr_type
     if fallback_name and not str(fallback_info.get("chat_name") or "").strip():
         fallback_info["chat_name"] = fallback_name
+        # 这个名字是兜底填的，不是 wxauto 真读到当前会话：调用方据此判断
+        # "会话页其实没读出来"，不能再拿它当同名校验通过。
+        fallback_info["_name_from_fallback"] = True
     return fallback_info or {"chat_name": fallback_name or "current", "chat_type": "unknown"}
 
 
