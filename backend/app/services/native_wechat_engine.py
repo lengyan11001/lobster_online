@@ -5224,6 +5224,47 @@ async def run_auto_reply_once(
     def log_event(event: str, **fields: Any) -> None:
         _write_auto_reply_diagnostic(event, account_id=account_id, run_id=run_id, **fields)
 
+    # 2026-11-19：先查本地库。没有任何新消息就直接结束这一轮，不启动界面、不拉窗口。
+    try:
+        from . import wechat_transport_replica as _rt_probe
+
+        if _rt_probe.enabled():
+            _probe = _rt_probe.sessions_db(200)
+            _self_user = str(_probe.get("self") or "")
+            with _connect() as _pc:
+                _pc.execute(
+                    "create table if not exists wechat_auto_reply_cursor("
+                    "account_id text primary key, last_ts integer not null)"
+                )
+                _prow = _pc.execute(
+                    "select last_ts from wechat_auto_reply_cursor where account_id=?",
+                    (account_id,),
+                ).fetchone()
+            _pcursor = int(_prow[0]) if _prow else int(time.time()) - 1800
+            _fresh = 0
+            for _s in (_probe.get("sessions") or []):
+                _u = str(_s.get("username") or "")
+                if not _u or "@chatroom" in _u or _u.startswith("gh_"):
+                    continue
+                if _u in {"brandsessionholder", "filehelper", "fmessage", "weixin", _self_user}:
+                    continue
+                try:
+                    _ts = int(_s.get("last_time") or 0)
+                except Exception:
+                    _ts = 0
+                if _ts > _pcursor or int(_s.get("unread") or 0) > 0:
+                    _fresh += 1
+            if _fresh == 0:
+                log_event("run_skipped_no_new_messages", cursor=_pcursor)
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "no_new_messages",
+                    "config": cfg,
+                }
+    except Exception as _probe_exc:
+        log_event("db_probe_failed", error=str(_probe_exc)[:200])
+
     # 每轮先把被挪到屏幕外的微信主窗口拉回来：窗口在 -32000 时 UIA 能读到控件树，
     # 但点击落空、wxauto 读消息恒为空（线上 19:52 之后所有会话 scan_capture_missing）。
     try:
