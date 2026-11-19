@@ -576,12 +576,50 @@ async def native_wechat_contacts(
     account_id: str,
     keyword: str = "",
     has_wx: str = Query(default="all", pattern="^(all|yes|no)$"),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return {"ok": True, **engine.list_contacts(account_id, limit=limit, offset=offset, keyword=keyword, has_wx=has_wx)}
+    """通讯录直接读微信 contact.db（实时、全量），不用本地同步表。"""
+    del current_user, account_id
+    from ..services import wechat_transport_replica as _rt
 
+    if not _rt.enabled():
+        return {"ok": True, **engine.list_contacts("", limit=limit, offset=offset, keyword=keyword, has_wx=has_wx)}
+    try:
+        data = await asyncio.to_thread(_rt.contacts, 20000)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200], "items": [], "count": 0, "total": 0}
+    items = []
+    kw = str(keyword or "").strip().lower()
+    for row in data.get("contacts") or []:
+        username = str(row.get("username") or "").strip()
+        if not username:
+            continue
+        nick = str(row.get("nick_name") or "").strip()
+        remark = str(row.get("remark") or "").strip()
+        alias = str(row.get("alias") or "").strip()
+        if kw and kw not in nick.lower() and kw not in remark.lower() and kw not in alias.lower() and kw not in username.lower():
+            continue
+        if has_wx == "yes" and not alias:
+            continue
+        if has_wx == "no" and alias:
+            continue
+        items.append(
+            {
+                "peer_id": username,
+                "contact_key": username,
+                "display_name": remark or nick or username,
+                "remark": remark,
+                "nick_name": nick,
+                "wx_no": alias,
+                "chat_type": "friend",
+            }
+        )
+    items.sort(key=lambda x: x["display_name"])
+    total = len(items)
+    page = items[offset: offset + limit]
+    return {"ok": True, "items": page, "count": len(page), "total": total}
 
 @router.post("/api/native-wechat/groups/sync")
 async def native_wechat_sync_groups(
