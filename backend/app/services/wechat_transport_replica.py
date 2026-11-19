@@ -144,6 +144,13 @@ def list_sessions() -> List[Dict[str, Any]]:
     return list(res.get("sessions") or [])
 
 
+def sessions_db(limit: int = 200) -> Dict[str, Any]:
+    res = _call("sessions_db", timeout=60.0, max=int(limit))
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "sessions_db failed")[:300])
+    return res
+
+
 def history(peer_username: str, *, limit: int = 20) -> Dict[str, Any]:
     """从本地消息库读最近 N 条（跨分片、按时间倒序、带发送者），不走界面。"""
     res = _call("history", timeout=60.0, peer=str(peer_username), max=int(limit))

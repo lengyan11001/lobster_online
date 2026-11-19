@@ -30,6 +30,31 @@ def _client():
     return _CLIENT
 
 
+
+def _sessions_db(limit: int = 200):
+    db = _db()
+    info = db.get_self_info() or {}
+    self_name = str(info.get("username") or "")
+    out = []
+    for row in db.get_sessions(int(limit)):
+        u = str(row.get("username") or "").strip()
+        if not u:
+            continue
+        name = ""
+        try:
+            name = str(db.get_nickname(u) or "").strip()
+        except Exception:
+            name = ""
+        out.append({
+            "username": u,
+            "name": name or u,
+            "unread": int(row.get("unread") or 0),
+            "summary": str(row.get("summary") or ""),
+            "last_time": row.get("last_time"),
+            "last_sender": str(row.get("last_sender") or ""),
+        })
+    return {"ok": True, "self": self_name, "sessions": out}
+
 def _me():
     wx = _client()
     name = ""
@@ -37,7 +62,7 @@ def _me():
         name = str(getattr(wx, "nickname", "") or "").strip()
     except Exception:
         name = ""
-    return {"ok": True, "nickname": name}
+    return {"ok": True, "nickname": name, "username": str((_db().get_self_info() or {}).get("username") or "")}
 
 
 def _sessions():
@@ -182,6 +207,8 @@ def main() -> int:
         try:
             if op == "ping":
                 res = {"ok": True}
+            elif op == "sessions_db":
+                res = _sessions_db(int(req.get("max") or 200))
             elif op == "me":
                 res = _me()
             elif op == "sessions":

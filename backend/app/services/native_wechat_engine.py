@@ -5107,6 +5107,9 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
             return {"action": "skip_group", "reason": "known_non_private"}
         if _looks_like_non_private_session_name(name):
             return {"action": "skip_group", "reason": "known_non_private_name"}
+        if bool(session.get("_replica_last_self")):
+            # 本地库里最后一条就是自己发的 -> 没有待回复的新消息
+            return {"action": "skip", "reason": "last_message_out"}
         if int(session.get("unread_count") or 0) <= 0:
             # 未读可能被清掉（我们自己打开过会话，或用户在手机上读了）。两种例外要处理：
             #   1) 库里还有"最后一条是对方、且没回过"的入站；
@@ -11201,7 +11204,20 @@ def _sync_recent_sessions_from_wxauto4(
         from . import wechat_transport_replica as _replica_scan
 
         if _replica_scan.enabled():
-            _rows = _replica_scan.list_sessions()
+            # 2026-11-19：一次性从本地库拿全部会话（username/未读/最后一条/发送者），
+            # 不再走界面 GetSession；last_sender 直接给出"最后一条是谁发的"。
+            _db_sessions = _replica_scan.sessions_db(200)
+            _rows = [
+                {
+                    "name": item.get("name") or item.get("username"),
+                    "username": item.get("username"),
+                    "unread": item.get("unread"),
+                    "summary": item.get("summary"),
+                    "last_sender": item.get("last_sender"),
+                }
+                for item in (_db_sessions.get("sessions") or [])
+            ]
+            _SELF_USERNAME_CACHE = str(_db_sessions.get("self") or "")
             try:
                 _self_nick = _replica_scan.my_nickname()
             except Exception:
@@ -11220,6 +11236,9 @@ def _sync_recent_sessions_from_wxauto4(
                         "source": "replica_sessions",
                         "_replica_row": True,
                         "_replica_username": str(row.get("username") or ""),
+                        "_replica_last_self": bool(
+                            row.get("last_sender") and str(row.get("last_sender")).strip() == _SELF_USERNAME_CACHE
+                        ),
                         "_replica_summary": str(row.get("summary") or ""),
                     }
                     for row in _rows
