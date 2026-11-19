@@ -82,25 +82,36 @@ def _call(op: str, timeout: float = 120.0, **payload: Any) -> Dict[str, Any]:
         except Exception:
             _PROC = None
             raise
-        deadline = time.time() + max(1.0, float(timeout))
-        while time.time() < deadline:
-            line = proc.stdout.readline()
-            if not line:
-                _PROC = None
-                raise RuntimeError("replica sidecar 退出")
-            line = line.strip()
-            if not line:
-                continue
+        # readline() 会一直阻塞，不能靠循环里的 deadline 判断；放到线程里 join(timeout)。
+        box: Dict[str, Any] = {}
+
+        def _reader() -> None:
             try:
-                res = json.loads(line)
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        res = json.loads(line)
+                    except Exception:
+                        continue
+                    if int(res.get("id") or 0) == rid:
+                        box.update(res)
+                        break
             except Exception:
-                continue
-            if int(res.get("id") or 0) != rid:
-                continue
-            _START_FAILURES = 0
-            return res
-        _PROC = None
-        raise TimeoutError("replica sidecar 超时")
+                pass
+
+        waiter = threading.Thread(target=_reader, daemon=True)
+        waiter.start()
+        waiter.join(max(1.0, float(timeout)))
+        if not box:
+            reset()
+            raise TimeoutError("replica sidecar 超时（已重置，下一轮重启）")
+        _START_FAILURES = 0
+        return box
 
 
 def reset() -> None:
@@ -122,7 +133,7 @@ def list_sessions() -> List[Dict[str, Any]]:
 
 
 def read_messages(peer: str, *, max_messages: int = 50) -> Dict[str, Any]:
-    res = _call("read", timeout=180.0, peer=str(peer), max=int(max_messages))
+    res = _call("read", timeout=30.0, peer=str(peer), max=int(max_messages))
     if not res.get("ok"):
         raise RuntimeError(str(res.get("error") or "read failed")[:300])
     return res
