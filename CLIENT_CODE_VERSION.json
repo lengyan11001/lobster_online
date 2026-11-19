@@ -1,7 +1,7 @@
 {
-  "version": "2.0.329",
-  "build": 637,
-  "applied_at": "2026-11-19T12:18:28+08:00",
-  "note": "会话列表/读/发走 replica，剔除公众号与群",
-  "bundle_sha256": "f4141eac62da011b78d3c001e03dde8b6718313278e1420b81e63a7bdeeceff1"
+  "version": "2.0.330",
+  "build": 638,
+  "applied_at": "2026-11-19T12:30:50+08:00",
+  "note": "读消息走 replica，不再建 wxauto 客户端",
+  "bundle_sha256": "6f3a14e05834f4d3717ade7ce7095fd72223ea2b446d0f48179f436c82fb9423"
 }
