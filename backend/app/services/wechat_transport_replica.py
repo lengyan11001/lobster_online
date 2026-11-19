@@ -144,6 +144,20 @@ def list_sessions() -> List[Dict[str, Any]]:
     return list(res.get("sessions") or [])
 
 
+def contacts(limit: int = 5000) -> Dict[str, Any]:
+    res = _call("contacts", timeout=90.0, max=int(limit))
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "contacts failed")[:300])
+    return res
+
+
+def friend_requests(limit: int = 50) -> Dict[str, Any]:
+    res = _call("friend_requests", timeout=60.0, max=int(limit))
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "friend_requests failed")[:300])
+    return res
+
+
 def sessions_db(limit: int = 200) -> Dict[str, Any]:
     res = _call("sessions_db", timeout=60.0, max=int(limit))
     if not res.get("ok"):

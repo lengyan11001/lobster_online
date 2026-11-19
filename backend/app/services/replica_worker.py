@@ -55,6 +55,47 @@ def _sessions_db(limit: int = 200):
         })
     return {"ok": True, "self": self_name, "sessions": out}
 
+
+def _contacts_db(limit: int = 5000):
+    db = _db()
+    out = []
+    for rel, path, _ in db._db_files:
+        if not path.endswith('contact.db'):
+            continue
+        conn = db._open(rel)
+        try:
+            rows = conn.execute(
+                'SELECT username, nick_name, remark, alias, local_type FROM contact LIMIT ?',
+                (int(limit),),
+            ).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            out.append({'username': r[0], 'nick_name': r[1], 'remark': r[2], 'alias': r[3], 'local_type': r[4]})
+        break
+    return {'ok': True, 'contacts': out}
+
+
+def _friend_requests_db(limit: int = 50):
+    db = _db()
+    out = []
+    for rel, path, _ in db._db_files:
+        if not path.endswith('general.db'):
+            continue
+        conn = db._open(rel)
+        try:
+            rows = conn.execute(
+                'SELECT user_name_, type_, timestamp_, content_, is_sender_, scene_ FROM FMessageTable '
+                'ORDER BY timestamp_ DESC LIMIT ?',
+                (int(limit),),
+            ).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            out.append({'username': r[0], 'type': r[1], 'timestamp': r[2], 'content': r[3], 'is_sender': r[4], 'scene': r[5]})
+        break
+    return {'ok': True, 'requests': out}
+
 def _me():
     wx = _client()
     name = ""
@@ -209,6 +250,10 @@ def main() -> int:
                 res = {"ok": True}
             elif op == "sessions_db":
                 res = _sessions_db(int(req.get("max") or 200))
+            elif op == "contacts":
+                res = _contacts_db(int(req.get("max") or 5000))
+            elif op == "friend_requests":
+                res = _friend_requests_db(int(req.get("max") or 50))
             elif op == "me":
                 res = _me()
             elif op == "sessions":

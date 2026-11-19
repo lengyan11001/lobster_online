@@ -11228,6 +11228,98 @@ def _force_session_list_top(account_id: str) -> bool:
         return False
 
 
+def sync_local_contacts_via_db(account_id: str, *, limit: int = 5000) -> Dict[str, Any]:
+    """从本地库读通讯录写进我们自己的表（不再点界面翻列表）。"""
+    from . import wechat_transport_replica as _rt
+
+    data = _rt.contacts(limit)
+    rows = list(data.get("contacts") or [])
+    now = _now_iso()
+    written = 0
+    with _connect() as conn:
+        for row in rows:
+            username = str(row.get("username") or "").strip()
+            if not username:
+                continue
+            display = str(row.get("remark") or row.get("nick_name") or username).strip()
+            alias = str(row.get("alias") or "").strip()
+            conn.execute(
+                """
+                insert into wechat_contacts(id, account_id, contact_key, display_name, remark, wx_no, source, raw_json, created_at, updated_at)
+                values(?,?,?,?,?,?,?,?,?,?)
+                on conflict(account_id, contact_key) do update set
+                  display_name=excluded.display_name,
+                  remark=excluded.remark,
+                  wx_no=excluded.wx_no,
+                  source=excluded.source,
+                  raw_json=excluded.raw_json,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    _stable_key(account_id, username),
+                    account_id,
+                    username,
+                    display,
+                    str(row.get("remark") or ""),
+                    alias,
+                    "wechat_db",
+                    _json_dumps(row),
+                    now,
+                    now,
+                ),
+            )
+            written += 1
+        conn.commit()
+    return {"ok": True, "count": written, "source": "wechat_db"}
+
+
+def sync_local_sessions_via_db(account_id: str, *, limit: int = 200) -> Dict[str, Any]:
+    """从本地库读会话列表写进 wechat_peers（不再点界面）。"""
+    from . import wechat_transport_replica as _rt
+
+    data = _rt.sessions_db(limit)
+    rows = list(data.get("sessions") or [])
+    self_user = str(data.get("self") or "")
+    now = _now_iso()
+    written = 0
+    with _connect() as conn:
+        for row in rows:
+            username = str(row.get("username") or "").strip()
+            if not username or username == self_user:
+                continue
+            lowered = username.lower()
+            if lowered.endswith("@chatroom"):
+                chat_type = "group"
+            elif lowered.startswith("gh_"):
+                chat_type = "official"
+            else:
+                chat_type = "friend"
+            display = str(row.get("name") or username).strip()
+            conn.execute(
+                """
+                insert into wechat_peers(id, account_id, peer_id, display_name, chat_type, raw_json, created_at, updated_at)
+                values(?,?,?,?,?,?,?,?)
+                on conflict(account_id, peer_id) do update set
+                  display_name=excluded.display_name,
+                  chat_type=excluded.chat_type,
+                  raw_json=excluded.raw_json,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    _stable_key(account_id, username),
+                    account_id,
+                    username,
+                    display,
+                    chat_type,
+                    _json_dumps(row),
+                    now,
+                    now,
+                ),
+            )
+            written += 1
+        conn.commit()
+    return {"ok": True, "count": written, "source": "wechat_db"}
+
 def _sync_recent_sessions_from_wxauto4(
     account_id: str,
     *,

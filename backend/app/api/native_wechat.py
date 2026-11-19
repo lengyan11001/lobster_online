@@ -498,6 +498,14 @@ async def native_wechat_sync_contacts(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
+        # 2026-11-19：通讯录优先直接读微信本地库（5000 条约 0.1s）。
+        try:
+            from ..services import wechat_transport_replica as _rt
+
+            if _rt.enabled():
+                return await asyncio.to_thread(engine.sync_local_contacts_via_db, body.account_id, limit=body.limit)
+        except Exception:
+            pass
         return await asyncio.to_thread(engine.sync_local_contacts, body.account_id, limit=body.limit)
     except Exception as exc:
         _raise_native_wechat_error("contacts_sync", exc, account_id=body.account_id)
@@ -546,6 +554,14 @@ async def native_wechat_sync_sessions(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     try:
+        # 2026-11-19：会话列表优先直接读微信本地库（不点界面、不滚列表）。
+        try:
+            from ..services import wechat_transport_replica as _rt
+
+            if _rt.enabled():
+                return await asyncio.to_thread(engine.sync_local_sessions_via_db, body.account_id)
+        except Exception:
+            pass
         return await asyncio.to_thread(engine.sync_local_sessions, body.account_id)
     except Exception as exc:
         _raise_native_wechat_error("sessions_sync", exc, account_id=body.account_id)
