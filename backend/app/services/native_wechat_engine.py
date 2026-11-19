@@ -35,6 +35,9 @@ from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# 日志写失败（句柄被关/磁盘抖动）不允许冒泡成业务异常。
+logging.raiseExceptions = False
+
 ROOT_DIR = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT_DIR / "openclaw" / "openclaw-weixin"
 ACCOUNTS_DIR = STATE_DIR / "accounts"
@@ -15662,7 +15665,21 @@ def _sync_local_messages_once(
                 time.sleep(0.3)
         except Exception:
             pass
-    messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    try:
+        messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    except Exception as read_exc:
+        # 2026-11-19 线上：wxauto4 日志句柄被关掉后读消息抛
+        # "I/O operation on closed file"，整轮被判失败。这里不再让它拖垮会话，
+        # 记一条诊断后走下面的 replica 兜底读。
+        _write_auto_reply_diagnostic(
+            "wxauto_read_failed",
+            account_id=diagnostic_account_id,
+            run_id=diagnostic_run_id,
+            target_peer_id=target,
+            target_display_name=display_target,
+            error=str(read_exc)[:300],
+        )
+        messages = []
     if select_via_uia and not list(messages or []):
         # 2026-11-18 本机实测：外部 UIA 点击切会话后，这个常驻 wxauto 客户端的
         # ChatBox 会脱离当前会话 —— ChatInfo 能读到新会话名，但 GetAllMessage()
