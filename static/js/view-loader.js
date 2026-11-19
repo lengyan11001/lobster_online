@@ -177,7 +177,9 @@
       var attempt = 0;
       function append() {
         var script = document.createElement('script');
-        script.src = retryUrl(src, attempt);
+        // 2026-11-19：每次加载视图脚本都带时间戳，避免 WebView 复用旧缓存
+        var _u = retryUrl(src, attempt);
+        script.src = _u + (_u.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now();
         script.async = false;
         script.onload = resolve;
         script.onerror = function() {
