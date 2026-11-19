@@ -30,6 +30,16 @@ def _client():
     return _CLIENT
 
 
+def _me():
+    wx = _client()
+    name = ""
+    try:
+        name = str(getattr(wx, "nickname", "") or "").strip()
+    except Exception:
+        name = ""
+    return {"ok": True, "nickname": name}
+
+
 def _sessions():
     wx = _client()
     out = []
@@ -100,6 +110,8 @@ def main() -> int:
         try:
             if op == "ping":
                 res = {"ok": True}
+            elif op == "me":
+                res = _me()
             elif op == "sessions":
                 res = _sessions()
             elif op == "read":

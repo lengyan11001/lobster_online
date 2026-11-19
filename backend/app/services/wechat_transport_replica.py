@@ -125,6 +125,18 @@ def reset() -> None:
         _PROC = None
 
 
+_MY_NICKNAME = ""
+
+
+def my_nickname() -> str:
+    global _MY_NICKNAME
+    if _MY_NICKNAME:
+        return _MY_NICKNAME
+    res = _call("me", timeout=30.0)
+    _MY_NICKNAME = str(res.get("nickname") or "").strip()
+    return _MY_NICKNAME
+
+
 def list_sessions() -> List[Dict[str, Any]]:
     res = _call("sessions", timeout=60.0)
     if not res.get("ok"):

@@ -11169,6 +11169,12 @@ def _sync_recent_sessions_from_wxauto4(
 
         if _replica_scan.enabled():
             _rows = _replica_scan.list_sessions()
+            try:
+                _self_nick = _replica_scan.my_nickname()
+            except Exception:
+                _self_nick = ""
+            if _self_nick:
+                _rows = [row for row in _rows if str(row.get("name") or "").strip() != _self_nick]
             if _rows:
                 _items = [
                     {
