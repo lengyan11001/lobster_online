@@ -1,7 +1,7 @@
 {
-  "version": "2.0.326",
-  "build": 634,
-  "applied_at": "2026-11-19T11:33:02+08:00",
-  "note": "只回有未读的会话；回复阶段 4s/条",
-  "bundle_sha256": "caaa5976fa213421cd8cfaa9bdf0c1585478bfe1e03d53c1a7f5ed88378c8a76"
+  "version": "2.0.327",
+  "build": 635,
+  "applied_at": "2026-11-19T11:45:14+08:00",
+  "note": "读消息异常不再判失败，转 replica 兜底",
+  "bundle_sha256": "178d41e84f25d84d8053c0e89e814806c97286fbf9a39a37c6ad0306a7e3e633"
 }
