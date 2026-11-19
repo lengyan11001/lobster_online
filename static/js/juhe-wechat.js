@@ -2697,28 +2697,107 @@
     var momentsPublishBtn = $('nativeWechatMomentsPublishBtn');
     if (momentsPublishBtn) momentsPublishBtn.addEventListener('click', submitMomentsPublish);
 
-  function installWechatDbExtras() {
-    // 1) 今日总结
-    var head = document.querySelector('[data-native-wechat-panel="messages"] .native-wechat-card-head .native-wechat-actions');
-    if (head && !document.getElementById('nativeWechatSummaryBtn')) {
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'btn btn-ghost btn-sm';
-      btn.id = 'nativeWechatSummaryBtn';
-      btn.textContent = '今日总结';
-      head.appendChild(btn);
-      btn.addEventListener('click', function() {
+
+  function applyWechatUiCleanup() {
+    // 1) 去掉"同步会话/收消息/通讯录同步/清除缓存/同步群成员"：现在都直接读本地库
+    ['nativeWechatSyncSessionsBtn', 'nativeWechatPollBtn', 'nativeWechatSyncContactsBtn',
+     'nativeWechatClearContactsBtn', 'nativeWechatSyncGroupMembersBtn'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+
+    // 2) 接管设置挪到右上角「设置」按钮
+    var cfg = document.querySelector('.native-wechat-takeover-config');
+    var headActions = document.querySelector('.native-wechat-head .native-wechat-actions');
+    if (cfg && headActions && !document.getElementById('nativeWechatSettingsBtn')) {
+      var sbtn = document.createElement('button');
+      sbtn.type = 'button';
+      sbtn.id = 'nativeWechatSettingsBtn';
+      sbtn.className = 'btn btn-ghost btn-sm';
+      sbtn.textContent = '设置';
+      headActions.appendChild(sbtn);
+      var holder = document.createElement('div');
+      holder.style.display = 'none';
+      cfg.parentNode.insertBefore(holder, cfg);
+      holder.appendChild(cfg);
+      sbtn.addEventListener('click', function() {
+        cfg.style.display = 'block';
+        showHtmlOverlay('接管设置', cfg, function() { holder.appendChild(cfg); });
+      });
+    }
+
+    // 3) 独立的「总结」tab，保留上次结果
+    var tabs = document.querySelector('.native-wechat-tabs');
+    if (tabs && !document.querySelector('[data-native-wechat-tab="summary"]')) {
+      var tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'native-wechat-tab';
+      tab.setAttribute('data-native-wechat-tab', 'summary');
+      tab.textContent = '总结';
+      tabs.appendChild(tab);
+
+      var panel = document.createElement('section');
+      panel.className = 'native-wechat-panel';
+      panel.setAttribute('data-native-wechat-panel', 'summary');
+      panel.innerHTML = '<div class="native-wechat-card"><div class="native-wechat-card-head"><div><h3>今日消息总结</h3>'
+        + '<div class="native-wechat-muted">把今天所有会话的消息交给 AI 归纳；保留上一次结果。</div></div>'
+        + '<div class="native-wechat-actions"><button type="button" class="btn btn-primary btn-sm" id="nativeWechatSummaryRunBtn">生成今日总结</button></div></div>'
+        + '<div id="nativeWechatSummaryBox" style="white-space:pre-wrap;line-height:1.6;font-size:13px;color:#173f37;"></div></div>';
+      tabs.parentNode.insertBefore(panel, tabs.nextSibling);
+
+      var saved = '';
+      try { saved = localStorage.getItem('lb:wx:lastSummary') || ''; } catch (e) {}
+      var box = panel.querySelector('#nativeWechatSummaryBox');
+      if (saved) box.textContent = saved;
+
+      tab.addEventListener('click', function() {
+        tabs.querySelectorAll('.native-wechat-tab').forEach(function(b) { b.classList.remove('active'); });
+        tab.classList.add('active');
+        document.querySelectorAll('.native-wechat-panel').forEach(function(pn) { pn.classList.remove('active'); });
+        panel.classList.add('active');
+      });
+
+      panel.querySelector('#nativeWechatSummaryRunBtn').addEventListener('click', function() {
         var id = activeAccountId();
         if (!id) return setMsg('请先选择账号', true);
+        var btn = this;
         btn.disabled = true; btn.textContent = '归纳中…';
         apiJson('/api/native-wechat/db/summary', { method: 'POST', body: { account_id: id } })
           .then(function(data) {
-            showTextOverlay('今日总结（' + (data.day || '') + ' / ' + (data.count || 0) + ' 条）', data.summary || data.error || '无内容');
+            var text = '【' + (data.day || '') + ' / ' + (data.count || 0) + ' 条】\n\n' + (data.summary || data.error || '');
+            box.textContent = text;
+            try { localStorage.setItem('lb:wx:lastSummary', text); } catch (e) {}
           })
           .catch(function(err) { setMsg(err.message || '总结失败', true); })
-          .then(function() { btn.disabled = false; btn.textContent = '今日总结'; });
+          .then(function() { btn.disabled = false; btn.textContent = '生成今日总结'; });
       });
     }
+  }
+
+  function showHtmlOverlay(title, node, onClose) {
+    var old = document.getElementById('nativeWechatHtmlOverlay');
+    if (old) old.remove();
+    var mask = document.createElement('div');
+    mask.id = 'nativeWechatHtmlOverlay';
+    mask.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.46);padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'width:min(760px,96vw);max-height:86vh;overflow:auto;background:#fbfffd;border-radius:18px;padding:18px;box-shadow:0 24px 70px rgba(15,23,42,.3);';
+    var h = document.createElement('div');
+    h.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-weight:900;';
+    h.textContent = title || '';
+    var close = document.createElement('button');
+    close.className = 'btn btn-ghost btn-sm';
+    close.textContent = '关闭';
+    close.addEventListener('click', function() { if (onClose) onClose(); mask.remove(); });
+    h.appendChild(close);
+    box.appendChild(h);
+    node.style.display = 'block';
+    box.appendChild(node);
+    mask.appendChild(box);
+    document.body.appendChild(mask);
+  }
+
+  function installWechatDbExtras() {
     // 2) 导出群成员
     var ghead = document.querySelector('[data-native-wechat-panel="groups"] .native-wechat-card-head .native-wechat-actions');
     if (ghead && !document.getElementById('nativeWechatGroupExportBtn')) {
@@ -2773,6 +2852,7 @@
     var syncSessionBtn = $('nativeWechatSyncSessionsBtn');
     if (syncSessionBtn) syncSessionBtn.addEventListener('click', syncSessions);
     installWechatDbExtras();
+    applyWechatUiCleanup();
     var syncContactsBtn = $('nativeWechatSyncContactsBtn');
     if (syncContactsBtn) syncContactsBtn.addEventListener('click', syncContacts);
     var clearContactsBtn = $('nativeWechatClearContactsBtn');
