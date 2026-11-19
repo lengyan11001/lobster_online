@@ -741,9 +741,12 @@
     list.innerHTML = state.groups.map(function(item) {
       var key = item.group_key || item.display_name || '';
       var active = key === state.activeGroupKey ? ' active' : '';
-      return '<div class="native-wechat-item' + active + '" data-native-group="' + esc(key) + '">' +
-        '<div class="native-wechat-item-title">' + esc(groupTitle(item)) + '</div>' +
-        '<div class="native-wechat-meta">' + esc(groupSub(item)) + '</div>' +
+      return '<div class="native-wechat-item' + active + '" data-native-group="' + esc(key) + '" style="display:flex;align-items:center;gap:8px;">' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div class="native-wechat-item-title">' + esc(groupTitle(item)) + '</div>' +
+          '<div class="native-wechat-meta">' + esc(groupSub(item)) + '</div>' +
+        '</div>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-native-group-export="' + esc(key) + '" data-native-group-export-name="' + esc(groupTitle(item)) + '" title="导出该群成员">导出</button>' +
       '</div>';
     }).join('');
     renderPagination('groups');
@@ -1723,6 +1726,48 @@
       browserDownload();
     }).catch(function(err) {
       setMsg('导出失败：' + ((err && err.message) || err), true);
+    });
+  }
+
+  // 导出单个群的成员：点哪个群就导哪个（CSV，Excel 可直接打开）
+  function exportGroupMembers(chatroom, groupName) {
+    if (!chatroom) return setMsg('缺少群 ID', true);
+    setMsg('正在导出群成员…', false);
+    var path = '/api/native-wechat/db/group-members?format=csv&chatroom=' + encodeURIComponent(chatroom);
+    return fetch(path, { credentials: 'same-origin' }).then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.text();
+    }).then(function(content) {
+      if (!content) throw new Error('该群没有读到成员');
+      var lines = content.split('\n').filter(function(x) { return x.trim(); });
+      var rows = Math.max(0, lines.length - 1);
+      var stamp = new Date().toISOString().slice(0, 10);
+      var safe = String(groupName || chatroom).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || '群成员';
+      var filename = '群成员_' + safe + '_' + stamp + '.csv';
+      var okMsg = '已导出 ' + safe + ' 的 ' + rows + ' 位成员';
+
+      function browserDownload() {
+        var blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url; link.download = filename; link.style.display = 'none';
+        document.body.appendChild(link); link.click();
+        window.setTimeout(function() { link.remove(); URL.revokeObjectURL(url); }, 1000);
+        setMsg(okMsg, false);
+      }
+      if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file === 'function') {
+        return Promise.resolve(window.pywebview.api.save_text_file(filename, content)).then(function(result) {
+          if (result && result.cancelled) return;
+          if (result && result.ok) setMsg(okMsg + '：' + (result.path || result.filename || ''), false);
+          else browserDownload();
+        }).catch(function() { browserDownload(); });
+      }
+      if (window.LobsterAndroid && typeof window.LobsterAndroid.saveTextFile === 'function') {
+        try { window.LobsterAndroid.saveTextFile(filename, 'text/csv', content); setMsg(okMsg, false); return; } catch (_) {}
+      }
+      browserDownload();
+    }).catch(function(err) {
+      setMsg('导出群成员失败：' + ((err && err.message) || err), true);
     });
   }
 
@@ -2817,33 +2862,7 @@
   }
 
   function installWechatDbExtras() {
-    // 2) 导出群成员
-    var ghead = document.querySelector('[data-native-wechat-panel="groups"] .native-wechat-card-head .native-wechat-actions');
-    if (ghead && !document.getElementById('nativeWechatGroupExportBtn')) {
-      var sel = document.createElement('select');
-      sel.className = 'native-wechat-select';
-      sel.id = 'nativeWechatGroupExportSelect';
-      sel.innerHTML = '<option value="">选择群…</option>';
-      var gbtn = document.createElement('button');
-      gbtn.type = 'button';
-      gbtn.className = 'btn btn-ghost btn-sm';
-      gbtn.id = 'nativeWechatGroupExportBtn';
-      gbtn.textContent = '导出成员';
-      ghead.appendChild(sel); ghead.appendChild(gbtn);
-      apiJson('/api/native-wechat/db/groups', { method: 'GET' }).then(function(d) {
-        (d.groups || []).forEach(function(g) {
-          var opt = document.createElement('option');
-          opt.value = g.username || '';
-          opt.textContent = (g.name || g.username) + ' (' + (g.member_count || 0) + ')';
-          sel.appendChild(opt);
-        });
-      }).catch(function() {});
-      gbtn.addEventListener('click', function() {
-        var chatroom = sel.value;
-        if (!chatroom) return setMsg('先选一个群', true);
-        window.open('/api/native-wechat/db/group-members?format=csv&chatroom=' + encodeURIComponent(chatroom), '_blank');
-      });
-    }
+    // 群成员导出改成群列表每行一个「导出」按钮（见 renderGroups），不再在顶部放下拉框。
   }
 
   function showTextOverlay(title, text) {
@@ -3032,6 +3051,14 @@
         if (contactSelect.checked) state.contactSelected[contactKey] = contactName;
         else delete state.contactSelected[contactKey];
         renderContactSelectionState();
+        return;
+      }
+      var groupExportBtn = evt.target.closest('[data-native-group-export]');
+      if (groupExportBtn) {
+        evt.preventDefault();
+        var exportKey = groupExportBtn.getAttribute('data-native-group-export') || '';
+        var exportName = groupExportBtn.getAttribute('data-native-group-export-name') || exportKey;
+        if (exportKey) exportGroupMembers(exportKey, exportName);
         return;
       }
       var group = evt.target.closest('[data-native-group]');
