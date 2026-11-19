@@ -5469,6 +5469,33 @@ async def run_auto_reply_once(
                 break
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = _session_display_name(session.get("display_name") or peer_id)
+            # 2026-11-19 提速：会话列表的预览就是对方/自己最后一句。没有未读、且预览
+            # 和我们库里最后一条（已发出）一致 -> 这条没有任何新消息，不用打开会话。
+            # 以前不管有没有新消息都点一遍，14 个会话光扫描就要 67 秒。
+            if not int(session.get("unread_count") or 0) and str(session.get("last_content") or "").strip():
+                _cached_latest = _latest_message_record(account_id, peer_id, include_system=False)
+                if (
+                    _cached_latest
+                    and str(_cached_latest.get("direction") or "").strip().lower() == "out"
+                    and _session_preview_matches_message(session, _cached_latest)
+                ):
+                    result["skipped"] += 1
+                    result["items"].append(
+                        {
+                            "peer_id": peer_id,
+                            "display_name": display_name,
+                            "status": "preview_unchanged",
+                            "skip_reason": "no_new_message",
+                        }
+                    )
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="preview_unchanged",
+                        reason="no_new_message",
+                    )
+                    continue
             if _auto_reply_recover_circuit_open(account_id, peer_id):
                 fail_count = _auto_reply_recover_failure_count(account_id, peer_id)
                 result["skipped"] += 1
@@ -15266,7 +15293,39 @@ def _sync_local_messages_once(
         if use_verified_contact_search
         else ("uia" if select_via_uia else "exact_chat")
     )
+    # 2026-11-19 提速：执行阶段每条消息都要走一遍"搜索联系人→打开资料→读号→关资料"
+    # （实测 14.3s/条）。如果发送前当前打开的会话已经是目标会话，这一步纯属浪费。
+    # 先核对当前会话名（0.2s）；一致就跳过搜索，后面 _verify_local_send_chat 仍会严格校验。
+    already_current = False
     if target and not current_selected:
+        try:
+            _pre_info = _current_local_chat_info(wx, fallback_name="")
+            _pre_name = str((_pre_info or {}).get("chat_name") or "").strip()
+            _pre_type = _normalize_local_chat_type((_pre_info or {}).get("chat_type"))
+            _expected = str(diagnostic_context.get("expected_display_name") or display_target or "").strip()
+            if (
+                _pre_name
+                and not bool((_pre_info or {}).get("_name_from_fallback"))
+                and _expected
+                and _normalize_contact_lookup_key(_pre_name) == _normalize_contact_lookup_key(_expected)
+                and (_local_chat_type_is_private(_pre_type) or _pre_type in {"", "unknown"})
+            ):
+                already_current = True
+                use_verified_contact_search = False
+                click_mode = "current_verified"
+                _write_auto_reply_diagnostic(
+                    "chat_already_current",
+                    account_id=diagnostic_account_id,
+                    run_id=diagnostic_run_id,
+                    target_peer_id=target,
+                    target_display_name=display_target,
+                    chat_name=_pre_name,
+                    chat_type=_pre_type or "unknown",
+                )
+        except Exception:
+            already_current = False
+
+    if target and not current_selected and not already_current:
         _write_auto_reply_diagnostic(
             "chat_click_started",
             account_id=diagnostic_account_id,
@@ -15278,7 +15337,7 @@ def _sync_local_messages_once(
             current_selected=False,
             read_chat_info=bool(read_chat_info),
         )
-    if target and not current_selected:
+    if target and not current_selected and not already_current:
         try:
             if use_verified_contact_search:
                 search_steps: List[Dict[str, Any]] = []
