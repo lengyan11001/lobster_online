@@ -5642,35 +5642,6 @@ async def run_auto_reply_once(
                                 "collection_target_source": "uia_session_row_chatwith",
                             },
                         )
-                        if (
-                            int(sync_result.get("seen_count") or 0) <= 0
-                            and not sync_result.get("session_target_mismatch")
-                        ):
-                            log_event(
-                                "session_open_uia_row",
-                                peer_id=peer_id,
-                                display_name=display_name,
-                            )
-                            sync_result = await _run_local_wechat_async(
-                                sync_local_messages,
-                                account_id,
-                                peer_id,
-                                load_more_pages=0,
-                                select_via_uia=True,
-                                uia_session_max_rounds=1,
-                                current_selected=False,
-                                read_chat_info=True,
-                                download_attachments=False,
-                                diagnostic_context={
-                                    "account_id": account_id,
-                                    "run_id": run_id,
-                                    "stage": "collect",
-                                    "session_preview": session.get("last_content") or "",
-                                    "expected_display_name": display_name,
-                                    "nickname_identity": True,
-                                    "collection_target_source": "uia_session_row",
-                                },
-                            )
                     elif not scanned_wechat_id:
                         # 本轮没抓到这一行的页面快照，也没有可用的 wxid。
                         # 不按昵称盲搜（会点错同名会话），跳过这个候选人，
@@ -11908,6 +11879,50 @@ def _open_next_visible_session(
         cells = next_cells
 
 
+def _capture_wechat_read_failure_png(account_id: str) -> Dict[str, Any]:
+    """读不到消息时留现场：窗口位置、是否最小化、前台窗口，外加一张截图。
+
+    诊断包会把 logs/wechat_read_fail.png 一起带走（logs_api.py 里有二进制块）。
+    只看日志无法区分"会话页根本没渲染"和"渲染了但 wxauto 解析失败"，截图能。
+    """
+    info: Dict[str, Any] = {"snapshot": "", "snapshot_bytes": 0}
+    try:
+        import win32gui  # type: ignore
+    except Exception as exc:
+        info["snapshot_error"] = f"missing win32: {exc}"
+        return info
+    try:
+        hwnd = int(_local_wechat_hwnd(account_id) or 0)
+        if not hwnd:
+            info["snapshot_error"] = "no wechat hwnd"
+            return info
+        rect = win32gui.GetWindowRect(hwnd)
+        info["window_rect"] = [int(v) for v in rect]
+        info["window_minimized"] = bool(win32gui.IsIconic(hwnd))
+        try:
+            fg = win32gui.GetForegroundWindow()
+            info["foreground_title"] = str(win32gui.GetWindowText(fg) or "")[:80]
+        except Exception:
+            pass
+        try:
+            from PIL import ImageGrab  # type: ignore
+
+            img = ImageGrab.grab(bbox=rect)
+            if max(img.size) > 900:
+                ratio = 900 / float(max(img.size))
+                img = img.resize((max(1, int(img.size[0] * ratio)), max(1, int(img.size[1] * ratio))))
+            path = LOG_DIR / "wechat_read_fail.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            img.save(path, format="PNG")
+            info["snapshot"] = str(path)
+            info["snapshot_bytes"] = int(path.stat().st_size)
+        except Exception as exc:
+            info["snapshot_error"] = str(exc)[:200]
+    except Exception as exc:
+        info["snapshot_error"] = str(exc)[:200]
+    return info
+
+
 def _ensure_local_wechat_on_screen(hwnd: int) -> Dict[str, Any]:
     """把被挪到屏幕外（x=-32000，托盘/最小化后常见）的微信主窗口拉回可见区域。
 
@@ -15357,6 +15372,28 @@ def _sync_local_messages_once(
                 time.sleep(random.uniform(0.5, 0.9))
             except Exception:
                 break
+    if target and not current_selected:
+        # 读之前保证窗口在屏幕内并且是前台：被挪到 -32000 或被别的窗口盖住时，
+        # UIA 还能读到控件树，但 wxauto 的会话页解析会返回空列表。
+        try:
+            _main_hwnd = _local_wechat_hwnd(account_id) or 0
+            if _main_hwnd:
+                _ensure_local_wechat_on_screen(int(_main_hwnd))
+                _focus_local_wechat(int(_main_hwnd))
+                time.sleep(0.25)
+        except Exception:
+            pass
+    if target and not current_selected:
+        # 通讯录同步/拉资料会把微信切到「通讯录」页；停在那一页时 wxauto 的
+        # ChatInfo 还能读到会话名，GetAllMessage() 却是空列表（线上一直 seen_count=0）。
+        # 读之前先切回聊天页，切不动就算了，不影响后面的读取。
+        try:
+            switcher = getattr(wx, "SwitchToChat", None)
+            if callable(switcher):
+                switcher()
+                time.sleep(0.3)
+        except Exception:
+            pass
     messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
     if select_via_uia and not list(messages or []):
         # 2026-11-18 本机实测：外部 UIA 点击切会话后，这个常驻 wxauto 客户端的
@@ -15463,6 +15500,29 @@ def _sync_local_messages_once(
             )
             if messages:
                 break
+    if not list(messages or []):
+        # 读空先试一次"切回聊天页"再读（wxauto 的会话页有时停在联系人页）。
+        try:
+            switcher = getattr(wx, "SwitchToChat", None)
+            if callable(switcher):
+                switcher()
+                time.sleep(0.8)
+                messages = list(wx.GetAllMessage() or [])
+        except Exception:
+            pass
+    if not list(messages or []):
+        snapshot_info = _capture_wechat_read_failure_png(account_id)
+        _write_auto_reply_diagnostic(
+            "chat_read_empty",
+            account_id=diagnostic_account_id,
+            run_id=diagnostic_run_id,
+            target_peer_id=target,
+            target_display_name=display_target,
+            click_mode=click_mode,
+            chat_info_name=str((info or {}).get("chat_name") or ""),
+            chat_info_from_fallback=bool((info or {}).get("_name_from_fallback")),
+            **snapshot_info,
+        )
     message_chat_type = "group" if any(
         _raw_local_message_is_group(_obj_dict(msg)) for msg in (messages or [])
     ) else ""
@@ -22933,12 +22993,43 @@ def _send_text_local_slow(
     # 已验证的「打开会话 -> 粘贴 -> 点击发送按钮 -> 回读」链路。
     # 老代码 retry_on_failure=True 会在验证失败时重复打字，这里保持 False，
     # 避免一次失败把同一句话打多遍。
-    return _run_local_driver_operation(
-        account_id,
-        "发送微信自动回复",
-        lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
-        retry_on_failure=False,
-    )
+    try:
+        return _run_local_driver_operation(
+            account_id,
+            "发送微信自动回复",
+            lambda: _send_text_local_slow_once(account_id, peer_id, text, raw_meta, use_current_chat),
+            retry_on_failure=False,
+        )
+    except Exception as exc:
+        # 微信 4.x 输入框是自绘控件，读不回正文 → 老链路判"没写进去"并阻止点击发送
+        # （用户机器上看到的就是：字已经打进输入框了，但没按发送）。
+        # 这一步确定还没点过发送，交给 robot 层清空草稿后重写并回车（真机验证可用）。
+        if "未能写入微信聊天输入框" not in str(exc or ""):
+            raise
+        try:
+            log_send_event(
+                "reply_send_robot_fallback_started",
+                click_target=str(peer_id or ""),
+                reason="input_text_unreadable",
+            )
+        except Exception:
+            pass
+        result = None
+        try:
+            result = _robot_send_first(account_id, peer_id, text)
+        except Exception as robot_exc:
+            logger.warning("[native-wechat] robot 兜底发送异常: %s", str(robot_exc)[:200])
+        if isinstance(result, dict) and result.get("ok"):
+            try:
+                log_send_event(
+                    "reply_send_robot_fallback_ok",
+                    click_target=str(peer_id or ""),
+                    result={k: v for k, v in result.items() if k in {"ok", "driver", "client_id", "peer_id"}},
+                )
+            except Exception:
+                pass
+            return result
+        raise
 
 
 def _auto_reply_send_uses_current_chat() -> bool:
