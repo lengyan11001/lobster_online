@@ -1,7 +1,7 @@
 {
-  "version": "2.0.343",
-  "build": 651,
-  "applied_at": "2026-11-19T15:18:56+08:00",
-  "note": "按游标只处理新消息",
-  "bundle_sha256": "4e422a6c2bd55e44791124df172d3972108e66fd80cc1a340fe2266326cdd96c"
+  "version": "2.0.344",
+  "build": 652,
+  "applied_at": "2026-11-19T15:25:05+08:00",
+  "note": "无新消息不拉界面",
+  "bundle_sha256": "f879b67d6abb5d391e2f6fcfdab14859f9c8a96dc14466224950d6836f091e9e"
 }
