@@ -11530,18 +11530,24 @@ def sync_local_sessions_via_db(account_id: str, *, limit: int = 200) -> Dict[str
             lowered = username.lower()
             if lowered.endswith("@chatroom"):
                 chat_type = "group"
-            elif lowered.startswith("gh_"):
+            elif lowered.startswith("gh_") or lowered == "brandsessionholder":
                 chat_type = "official"
             else:
                 chat_type = "friend"
             display = str(row.get("name") or username).strip()
+            try:
+                _lt = int(row.get("last_time") or 0)
+            except Exception:
+                _lt = 0
+            last_at = datetime.fromtimestamp(_lt).strftime("%Y-%m-%d %H:%M:%S") if _lt else ""
             conn.execute(
                 """
-                insert into wechat_peers(id, account_id, peer_id, display_name, chat_type, raw_json, created_at, updated_at)
-                values(?,?,?,?,?,?,?,?)
+                insert into wechat_peers(id, account_id, peer_id, display_name, chat_type, last_inbound_at, raw_json, created_at, updated_at)
+                values(?,?,?,?,?,?,?,?,?)
                 on conflict(account_id, peer_id) do update set
                   display_name=excluded.display_name,
                   chat_type=excluded.chat_type,
+                  last_inbound_at=excluded.last_inbound_at,
                   raw_json=excluded.raw_json,
                   updated_at=excluded.updated_at
                 """,
@@ -11551,6 +11557,7 @@ def sync_local_sessions_via_db(account_id: str, *, limit: int = 200) -> Dict[str
                     username,
                     display,
                     chat_type,
+                    last_at,
                     _json_dumps(row),
                     now,
                     now,
@@ -11559,6 +11566,7 @@ def sync_local_sessions_via_db(account_id: str, *, limit: int = 200) -> Dict[str
             written += 1
         conn.commit()
     return {"ok": True, "count": written, "source": "wechat_db"}
+
 
 def _sync_recent_sessions_from_wxauto4(
     account_id: str,

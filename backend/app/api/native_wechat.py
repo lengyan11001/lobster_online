@@ -1234,6 +1234,14 @@ async def native_wechat_db_chat_messages(
         data = await asyncio.to_thread(_rt.history, peer, limit)
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:300], "items": [], "count": 0}
+    # 2026-11-19：公众号/服务号的聊天记录不在 message_N.db（在 biz_message_0.db），
+    # 库里读不到时回落到"打开会话读界面"，保证点开能看到内容。
+    if not (data.get("messages") or []):
+        try:
+            ui = await asyncio.to_thread(_rt.read_messages, peer, 50)
+            data = {"ok": True, "messages": ui.get("messages") or [], "self": data.get("self")}
+        except Exception:
+            pass
     items = []
     for m in reversed(list(data.get("messages") or [])):
         items.append(
