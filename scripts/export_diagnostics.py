@@ -34,6 +34,7 @@ CANDIDATES = [
     "logs/native_wechat_send.jsonl",
     "logs/native_wechat_contact_sync.jsonl",
     "logs/client_ui_trace.jsonl",
+    "logs/wechat_read_fail.png",
     "logs/native_whatsapp.jsonl",
     "backend.log",
     "mcp.log",

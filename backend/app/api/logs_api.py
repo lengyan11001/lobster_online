@@ -294,6 +294,17 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
             zf.writestr(arcname, _redact_text(text))
             summary["files"].append({"path": rel, "size": size, "truncated": truncated})
 
+        # 微信读消息失败现场截图（二进制，不能走上面的文本流程）
+        try:
+            shot = (_BASE / "logs" / "wechat_read_fail.png").resolve()
+            if shot.is_file() and budget_left > 0:
+                data = shot.read_bytes()[:1_500_000]
+                zf.writestr("wechat_read_fail.png", data)
+                budget_left -= len(data)
+                summary["files"].append({"path": "wechat_read_fail.png", "size": len(data), "binary": True})
+        except Exception as e:
+            summary["files"].append({"path": "wechat_read_fail.png", "error": str(e)[:120]})
+
         for arcname, path in _external_log_candidates():
             try:
                 text, size, truncated = _read_tail_text(path, _DIAGNOSTIC_TAIL_BYTES)
