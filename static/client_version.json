@@ -1,7 +1,7 @@
 {
-  "version": "2.0.346",
-  "build": 654,
-  "applied_at": "2026-11-19T15:37:08+08:00",
-  "note": "群/草稿/好友申请读库 + 重试",
-  "bundle_sha256": "09d6b3447c465ed1228c5673d967c7725dbf5a35a1ba58f16ffe93d63d02d1fc"
+  "version": "2.0.347",
+  "build": 655,
+  "applied_at": "2026-11-19T15:38:06+08:00",
+  "note": "同步后展示好友申请",
+  "bundle_sha256": "da810d6d3bcdf99d52fe49788f535657f09413a688cf680135f6f8b3266ba34a"
 }
