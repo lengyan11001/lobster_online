@@ -32,7 +32,16 @@ async def client_tasks_status(current_user: _ServerUser = Depends(get_current_us
 @router.post("/api/client/tasks/stop-all")
 async def client_tasks_stop_all(current_user: _ServerUser = Depends(get_current_user_for_local)):
     del current_user
-    return {"ok": True, **task_control.stop_all(reason="api")}
+    result = {"ok": True, **task_control.stop_all(reason="api")}
+    # 2026-11-19：停止必须连微信接管一起停 —— 以前只写暂停标记，自动回复
+    # 后台循环照旧在点微信（用户：任务都没了，微信还在被操作）。
+    try:
+        from ..services import native_wechat_engine as _wx_engine
+
+        result["auto_reply_stop"] = _wx_engine.request_auto_reply_stop_all()
+    except Exception as exc:
+        result["auto_reply_stop"] = {"ok": False, "error": str(exc)[:200]}
+    return result
 
 
 @router.post("/api/client/tasks/resume")

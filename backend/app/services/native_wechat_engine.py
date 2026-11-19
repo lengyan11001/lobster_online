@@ -3316,6 +3316,19 @@ def request_auto_reply_stop(account_id: str) -> Dict[str, Any]:
     return {"ok": True, "account_id": normalized, "requested": active}
 
 
+def request_auto_reply_stop_all() -> Dict[str, Any]:
+    """任务中心点「停止」时把所有在跑的自动回复一起停掉。
+
+    以前 stop_all 只写 task_control 的暂停标记，自动回复这条后台循环还以为
+    自己在干活（用户看到的：任务都没了，微信还在被点）。
+    """
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        accounts = [str(item) for item in _AUTO_REPLY_ACTIVE_RUNS.keys()]
+        for item in accounts:
+            _AUTO_REPLY_STOP_REQUESTS.add(item)
+    return {"ok": True, "accounts": accounts, "count": len(accounts)}
+
+
 def _auto_reply_stop_requested(account_id: str) -> bool:
     with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
         return str(account_id or "").strip() in _AUTO_REPLY_STOP_REQUESTS
@@ -5450,6 +5463,10 @@ async def run_auto_reply_once(
         prepared_by_work_id: Dict[str, Dict[str, Any]] = {}
         batch_requests: List[Dict[str, Any]] = []
         for session in sessions:
+            if _auto_reply_stop_requested(account_id) or _task_stop_requested():
+                result["stop_reason"] = result.get("stop_reason") or "cancelled"
+                log_event("run_stop_requested", stage="collect_loop")
+                break
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = _session_display_name(session.get("display_name") or peer_id)
             if _auto_reply_recover_circuit_open(account_id, peer_id):
@@ -10048,6 +10065,17 @@ def _paused_guard() -> None:
     _ui_progress_tick("action")
     if _task_stop_requested():
         raise TaskPaused(PAUSED_MESSAGE)
+    # 2026-11-19：任务中心点「停止」→ stop_all 只影响这一轮，但如果用户在自动回复
+    # 面板点了停止（request_auto_reply_stop），底层动作也必须立刻收手，不能只在
+    # "下一次 _run_local_driver_operation" 才生效。
+    try:
+        with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+            if _AUTO_REPLY_STOP_REQUESTS:
+                raise TaskPaused(PAUSED_MESSAGE)
+    except TaskPaused:
+        raise
+    except Exception:
+        pass
 
 
 # ── UIA 执行器 + 卡死看门狗（抄竞品 ai-bot-pc 的 _UIAExecutor）────────────────
