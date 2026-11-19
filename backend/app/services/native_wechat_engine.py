@@ -5082,23 +5082,32 @@ def _peer_wxids_by_display_name(account_id: str, display_name: str) -> List[str]
     if not name:
         return []
     found: List[str] = []
+    acct = str(account_id or "")
     try:
         with _connect() as conn:
             for row in conn.execute(
                 "select peer_id from wechat_peers where account_id=? and display_name=?",
-                (str(account_id or ""), name),
+                (acct, name),
             ).fetchall():
                 value = str(row[0] or "").strip()
                 if _looks_like_wechat_id(value):
                     found.append(value)
-            for row in conn.execute(
-                "select contact_key, wx_no from wechat_contacts where display_name=?",
-                (name,),
-            ).fetchall():
-                for value in (row[0], row[1]):
-                    value = str(value or "").strip()
-                    if _looks_like_wechat_id(value):
-                        found.append(value)
+            # 2026-11-19：同一个联系人在 wechat_contacts 里会同时有 contact_key 和 wx_no
+            # （微信号），这两个是"同一个人"，不能再算成两个同名的人。只看 contact_key。
+            if acct:
+                rows = conn.execute(
+                    "select contact_key from wechat_contacts where account_id=? and display_name=?",
+                    (acct, name),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "select contact_key from wechat_contacts where display_name=?",
+                    (name,),
+                ).fetchall()
+            for row in rows:
+                value = str(row[0] or "").strip()
+                if _looks_like_wechat_id(value):
+                    found.append(value)
     except Exception:
         return []
     return sorted(set(found))
@@ -5136,7 +5145,12 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
                 else:
                     return {"action": "skip", "reason": "no_unread"}
         if len(_peer_wxids_by_display_name(account_id, name)) > 1:
-            return {"action": "skip", "reason": "ambiguous_display_name"}
+            # 本地 peers/contacts 里同名多条（群成员也叫这个名、历史脏行）很常见。
+            # 微信自己的会话列表是唯一的：能用 session.db 唯一定位就直接用那个 username。
+            resolved = str(_peer_name_map_from_db().get(name) or "").strip()
+            if not resolved or resolved == name or not _looks_like_wechat_id(resolved):
+                return {"action": "skip", "reason": "ambiguous_display_name"}
+            session["peer_id"] = resolved
         return {"action": "open", "reason": "replica_private_verify", "chat_type": "unknown"}
     # The time-driven wxauto4 snapshot deliberately omits rows without a
     # trustworthy exact timestamp.  Keep this guard here as well so a stale
