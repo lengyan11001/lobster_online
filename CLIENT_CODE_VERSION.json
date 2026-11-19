@@ -1,7 +1,7 @@
 {
-  "version": "2.0.332",
-  "build": 640,
-  "applied_at": "2026-11-19T12:57:04+08:00",
-  "note": "friend 不再被误判成群",
-  "bundle_sha256": "32b423cee3e9823ffb2e0e3a24f55dff9256848c1ddf835059fee12c6b5362a1"
+  "version": "2.0.333",
+  "build": 641,
+  "applied_at": "2026-11-19T13:02:48+08:00",
+  "note": "只认 @chatroom / ChatInfo 判群",
+  "bundle_sha256": "ece94461f8a10b609d84ef7319d81c8bc0c9df0db81fb09af41f6ead255c6c4b"
 }
