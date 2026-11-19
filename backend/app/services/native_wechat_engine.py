@@ -6371,6 +6371,32 @@ async def run_auto_reply_once(
                     "customer_language": customer_language,
                     "group_invite_already_verified": group_invite_already_verified,
                 }
+                # 2026-11-19：同一条入站已经回过（history.status=sent）就不再回一次。
+                # 线上 14:01 / 14:36 对何总同一条消息回了两次，原因是 replica 读回来的
+                # "最新一条"仍是他那条（我们自己的回复没出现在读取结果里）。
+                try:
+                    _hist = _auto_reply_history_state(account_id, actual_peer, inbound)
+                except Exception:
+                    _hist = {}
+                if str(_hist.get("status") or "") == "sent":
+                    result["skipped"] += 1
+                    collection_result.update(
+                        {
+                            "status": "already_replied",
+                            "skip_reason": "already_replied",
+                            "inbound_message_id": str(_hist.get("inbound_message_id") or ""),
+                        }
+                    )
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="already_replied",
+                        reason="already_replied",
+                    )
+                    result["items"].append(collection_result)
+                    continue
                 prepared = {
                     "work_id": work_id,
                     "session": dict(session),
