@@ -16147,6 +16147,40 @@ def _sync_local_messages_via_replica(
     if rep is None:
         rep = _rt.read_messages(peer, max_messages=50)
     raw_messages = [dict(item) for item in (rep.get("messages") or [])]
+    # 2026-11-19：解密副本可能停在旧快照（微信一直在追加 WAL），于是"最近消息"
+    # 是几周前的，AI 会去回一条早就过期的消息，而刚来的新消息永远看不到。
+    # 这里加一道新鲜度闸门：最后一条超过 1 小时（或一条都没读到）就强制重建再读一次。
+    if _username:
+        def _newest_ts(items):
+            best = 0
+            for _it in items:
+                try:
+                    best = max(best, int(_it.get("create_time") or 0))
+                except Exception:
+                    continue
+            return best
+
+        _before_ts = _newest_ts(raw_messages)
+        if (not raw_messages) or (_before_ts and time.time() - _before_ts > 3600):
+            try:
+                _fresh = _rt.history(_username, limit=20, force=True)
+                _fresh_msgs = [dict(x) for x in (_fresh.get("messages") or [])]
+                _after_ts = _newest_ts(_fresh_msgs)
+                _write_auto_reply_diagnostic(
+                    "replica_force_refresh",
+                    peer_id=peer,
+                    before_ts=_before_ts,
+                    after_ts=_after_ts,
+                    before_count=len(raw_messages),
+                    after_count=len(_fresh_msgs),
+                )
+                if _fresh_msgs and _after_ts >= _before_ts:
+                    raw_messages = _fresh_msgs
+                    rep = _fresh
+            except Exception as _force_exc:
+                _write_auto_reply_diagnostic(
+                    "replica_force_refresh_failed", peer_id=peer, error=str(_force_exc)[:200]
+                )
     info = dict(rep.get("chat_info") or {})
     if not raw_messages:
         _write_auto_reply_diagnostic("replica_read_empty", peer_id=peer)

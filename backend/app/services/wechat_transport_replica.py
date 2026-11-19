@@ -186,9 +186,9 @@ def sessions_db(limit: int = 200) -> Dict[str, Any]:
     return res
 
 
-def history(peer_username: str, *, limit: int = 20) -> Dict[str, Any]:
+def history(peer_username: str, *, limit: int = 20, force: bool = False) -> Dict[str, Any]:
     """从本地消息库读最近 N 条（跨分片、按时间倒序、带发送者），不走界面。"""
-    res = _call("history", timeout=60.0, peer=str(peer_username), max=int(limit))
+    res = _call("history", timeout=90.0, peer=str(peer_username), max=int(limit), force=bool(force))
     if not res.get("ok"):
         raise RuntimeError(str(res.get("error") or "history failed")[:300])
     return res

@@ -238,8 +238,36 @@ def _db():
     raise last
 
 
-def _history(peer_username: str, limit: int = 20):
+def _invalidate_message_cache(db) -> int:
+    """删掉 message_*.db 的解密副本，逼下一次从微信实时文件重建。
+
+    2026-11-19：解密副本按 src/WAL 的 mtime+size 判断是否重建；微信长时间运行时
+    追加写 WAL，副本可能停在旧快照，于是"最近消息"读到几周前的内容，
+    AI 会去回一条早就过期的消息。
+    """
+    removed = 0
+    try:
+        for rel, path, _ in db._db_files:
+            name = os.path.basename(path)
+            if not (name.startswith("message_") and name.endswith(".db")):
+                continue
+            dst = os.path.join(db.workdir, rel.replace(os.sep, "__"))
+            for target in (dst, dst + ".stamp"):
+                try:
+                    if os.path.exists(target):
+                        os.remove(target)
+                        removed += 1
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return removed
+
+
+def _history(peer_username: str, limit: int = 20, force: bool = False):
     db = _db()
+    if force:
+        _invalidate_message_cache(db)
     self_name = str((db.get_self_info() or {}).get("username") or "")
     rows = db.get_messages(str(peer_username), limit=max(1, int(limit)))
     out = []
@@ -343,7 +371,7 @@ def main() -> int:
             elif op == "sessions":
                 res = _sessions()
             elif op == "history":
-                res = _history(str(req.get("peer") or ""), int(req.get("max") or 20))
+                res = _history(str(req.get("peer") or ""), int(req.get("max") or 20), bool(req.get("force")))
             elif op == "read":
                 res = _read(str(req.get("peer") or ""), int(req.get("max") or 50))
             elif op == "send":
