@@ -5052,8 +5052,8 @@ def _latest_strict_auto_reply_candidate(account_id: str, peer_id: str) -> Option
 
 def _replica_row_is_private(row: Dict[str, Any]) -> bool:
     """replica 的 username 是精确标识：@chatroom=群，gh_/brandsessionholder=公众号。"""
-    username = str(row.get("username") or "").strip().lower()
-    name = str(row.get("name") or "").strip()
+    username = str(row.get("username") or row.get("_replica_username") or "").strip().lower()
+    name = str(row.get("name") or row.get("display_name") or row.get("peer_id") or "").strip()
     if not username:
         return not _looks_like_non_private_session_name(name)
     if username.endswith("@chatroom"):
@@ -15486,6 +15486,93 @@ def _chat_info_peer_key(info: Dict[str, Any], fallback_name: str = "") -> str:
     return str(fallback_name or "").strip()
 
 
+def _sync_local_messages_via_replica(
+    account_id: str,
+    peer_id: str,
+    diagnostic_context: Dict[str, Any],
+    *,
+    download_attachments: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """只用 replica 打开会话并读消息（不创建 wxauto4 客户端，避免 47s 卡死）。"""
+    from . import wechat_transport_replica as _rt
+
+    peer = str(peer_id or "").strip()
+    if not peer:
+        return None
+    rep = _rt.read_messages(peer, max_messages=50)
+    raw_messages = [dict(item) for item in (rep.get("messages") or [])]
+    info = dict(rep.get("chat_info") or {})
+    if not raw_messages:
+        return None
+    actual_peer = str(info.get("chat_name") or peer).strip() or peer
+    _persist_peer_chat_info(account_id, actual_peer, info or {"chat_name": actual_peer})
+    previous_latest = _latest_message_record(account_id, actual_peer)
+    items: List[Dict[str, Any]] = []
+    for raw in raw_messages:
+        items.append(
+            _persist_message_obj(
+                account_id,
+                actual_peer,
+                raw,
+                download_attachments=download_attachments,
+            )
+        )
+    latest = _latest_message_record(account_id, actual_peer)
+    inserted = [
+        item
+        for item in items
+        if not item.get("deduped")
+        and item.get("direction") != "system"
+        and item.get("msg_type") != "time"
+    ]
+    fresh = [
+        item
+        for item in items
+        if str(item.get("direction") or "").lower() in {"in", "out"}
+        and str(item.get("msg_type") or "").lower() != "time"
+        and str(item.get("content") or "").strip()
+    ]
+    fresh_latest = dict(fresh[-1]) if fresh else None
+    if latest:
+        _persist_session(
+            account_id,
+            {
+                "peer_id": actual_peer,
+                "display_name": str(info.get("chat_name") or actual_peer),
+                "last_content": latest.get("content") or "",
+                "session_time": latest.get("created_at") or "",
+                "unread_count": 0,
+                "is_new": False,
+                "clear_unread": True,
+                "raw": {"source": "replica_current_message_sync", "chat_info": info or {}},
+            },
+            chat_type=(
+                str(info.get("chat_type") or "").strip().lower()
+                if str(info.get("chat_type") or "").strip().lower() not in {"", "unknown"}
+                else _known_local_peer_chat_type(account_id, actual_peer) or "unknown"
+            ),
+        )
+    has_new = _message_compare_key(previous_latest) != _message_compare_key(latest)
+    if previous_latest is None and latest is None:
+        has_new = False
+    return {
+        "ok": True,
+        "peer_id": actual_peer,
+        "chat_info": info or {},
+        "items": inserted,
+        "count": len(inserted),
+        "new_message_count": len(inserted),
+        "has_new_message": bool(has_new),
+        "previous_latest_message": previous_latest,
+        "latest_message": latest,
+        "fresh_latest_message": fresh_latest,
+        "current_selected": False,
+        "seen_count": len(items),
+        "deduped_count": len(items) - len(inserted),
+        "via": "replica",
+    }
+
+
 def _sync_local_messages_once(
     account_id: str,
     peer_id: str = "",
@@ -15500,42 +15587,24 @@ def _sync_local_messages_once(
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
+    if peer_id and not current_selected:
+        try:
+            from . import wechat_transport_replica as _rt_early
+
+            if _rt_early.enabled():
+                _early = _sync_local_messages_via_replica(
+                    account_id, peer_id, diagnostic_context, download_attachments=download_attachments
+                )
+                if _early:
+                    return _early
+        except Exception as _early_exc:
+            _write_auto_reply_diagnostic(
+                "replica_read_failed", error=str(_early_exc)[:300]
+            )
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
     display_target = _session_display_name(target)
 
-    # 2026-11-19：打开+读消息改由 replica 完成（子进程，不再和 wxauto4 抢窗口）。
-    # 名字只用于展示；重名在预过滤阶段已经跳过。读到了就不再走下面的 wxauto 点击/读取。
-    _replica_messages: List[Dict[str, Any]] = []
-    _replica_info: Dict[str, Any] = {}
-    if target or current_selected:
-        try:
-            from . import wechat_transport_replica as _replica_primary
-
-            if _replica_primary.enabled():
-                _rp = _replica_primary.read_messages(
-                    (target or display_target or "").strip(), max_messages=50
-                )
-                _replica_messages = [dict(item) for item in (_rp.get("messages") or [])]
-                _replica_info = dict(_rp.get("chat_info") or {})
-                _write_auto_reply_diagnostic(
-                    "replica_read_primary",
-                    account_id=diagnostic_account_id,
-                    run_id=diagnostic_run_id,
-                    target_peer_id=target,
-                    target_display_name=display_target,
-                    message_count=len(_replica_messages),
-                )
-        except Exception as _rp_exc:
-            _write_auto_reply_diagnostic(
-                "replica_read_primary_failed",
-                account_id=diagnostic_account_id,
-                run_id=diagnostic_run_id,
-                target_peer_id=target,
-                target_display_name=display_target,
-                error=str(_rp_exc)[:300],
-            )
-    _use_replica_read = bool(_replica_messages)
     diagnostic_context = dict(diagnostic_context or {})
     diagnostic_account_id = str(diagnostic_context.get("account_id") or account_id)
     diagnostic_run_id = str(diagnostic_context.get("run_id") or "")
@@ -15589,7 +15658,7 @@ def _sync_local_messages_once(
         except Exception:
             already_current = False
 
-    if target and not current_selected and not already_current and not _use_replica_read:
+    if target and not current_selected and not already_current:
         _write_auto_reply_diagnostic(
             "chat_click_started",
             account_id=diagnostic_account_id,
@@ -15601,7 +15670,7 @@ def _sync_local_messages_once(
             current_selected=False,
             read_chat_info=bool(read_chat_info),
         )
-    if target and not current_selected and not already_current and not _use_replica_read:
+    if target and not current_selected and not already_current:
         try:
             if use_verified_contact_search:
                 search_steps: List[Dict[str, Any]] = []
@@ -15745,12 +15814,7 @@ def _sync_local_messages_once(
                 time.sleep(0.3)
         except Exception:
             pass
-    if _use_replica_read:
-        messages = list(_replica_messages)
-        if _replica_info:
-            info = _replica_info
-    else:
-        messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
     if select_via_uia and not list(messages or []):
         # 2026-11-18 本机实测：外部 UIA 点击切会话后，这个常驻 wxauto 客户端的
         # ChatBox 会脱离当前会话 —— ChatInfo 能读到新会话名，但 GetAllMessage()
