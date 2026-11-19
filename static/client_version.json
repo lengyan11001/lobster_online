@@ -1,7 +1,7 @@
 {
-  "version": "2.0.327",
-  "build": 635,
-  "applied_at": "2026-11-19T11:45:14+08:00",
-  "note": "读消息异常不再判失败，转 replica 兜底",
-  "bundle_sha256": "178d41e84f25d84d8053c0e89e814806c97286fbf9a39a37c6ad0306a7e3e633"
+  "version": "2.0.328",
+  "build": 636,
+  "applied_at": "2026-11-19T12:07:29+08:00",
+  "note": "仅发送改走 replica sidecar",
+  "bundle_sha256": "1741b1f1738d2e385bbcefd99cfde87bb81a0a421e2abfbf4e16e856b0739407"
 }
