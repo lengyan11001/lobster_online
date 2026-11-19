@@ -10486,6 +10486,13 @@ def _get_wxauto4_client_unlocked(
                 return cached
         except Exception:
             pass
+        # 2026-11-19：微信窗口还在就别丢客户端。IsOnline() 在窗口被挪到屏幕外/
+        # 被别的窗口挡住时会误报 False，导致每条会话都重建一次客户端（实测 3.6s）。
+        try:
+            if _local_wechat_hwnd(account_id):
+                return cached
+        except Exception:
+            pass
         _LOCAL_WXAUTO4_CLIENTS.pop(cache_key, None)
     if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
         client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab, check_online=check_online)
