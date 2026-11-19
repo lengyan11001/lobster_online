@@ -1,7 +1,7 @@
 {
-  "version": "2.0.334",
-  "build": 642,
-  "applied_at": "2026-11-19T13:05:06+08:00",
-  "note": "sidecar 调用加硬超时",
-  "bundle_sha256": "b96b4931b1993556d5dbde46b5c6223005965ebca6673085632834f8eb2e72ed"
+  "version": "2.0.335",
+  "build": 643,
+  "applied_at": "2026-11-19T13:06:12+08:00",
+  "note": "跳过与自身昵称同名的会话",
+  "bundle_sha256": "3c9db6ded6a9b32b31466911470873135c3b07e685730f33e7b4ae8f630828d0"
 }
