@@ -97,6 +97,13 @@ def _send(peer: str, text: str):
 
 
 def main() -> int:
+    # 2026-11-19：Windows 下管道默认用 GBK，UTF-8 的中文名字会被解成"鍐涗簤"这种乱码，
+    # 然后拿乱码去搜索会话。这里强制 stdin/stdout 都用 UTF-8。
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:
