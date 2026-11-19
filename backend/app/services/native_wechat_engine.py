@@ -16147,6 +16147,13 @@ def _sync_local_messages_via_replica(
     if rep is None:
         rep = _rt.read_messages(peer, max_messages=50)
     raw_messages = [dict(item) for item in (rep.get("messages") or [])]
+    # 2026-11-19：wechatauto 的 get_messages 是"新 -> 旧"倒序返回。
+    # 这里统一排成"旧 -> 新"，否则下面的 fresh[-1] 取到的是最老的一条，
+    # 回复就会去回几周前的消息，而刚发来的新消息永远看不到。
+    try:
+        raw_messages.sort(key=lambda _m: int(_m.get("create_time") or 0))
+    except Exception:
+        raw_messages.reverse()
     # 2026-11-19：解密副本可能停在旧快照（微信一直在追加 WAL），于是"最近消息"
     # 是几周前的，AI 会去回一条早就过期的消息，而刚来的新消息永远看不到。
     # 这里加一道新鲜度闸门：最后一条超过 1 小时（或一条都没读到）就强制重建再读一次。
