@@ -2696,8 +2696,83 @@
     }
     var momentsPublishBtn = $('nativeWechatMomentsPublishBtn');
     if (momentsPublishBtn) momentsPublishBtn.addEventListener('click', submitMomentsPublish);
+
+  function installWechatDbExtras() {
+    // 1) 今日总结
+    var head = document.querySelector('[data-native-wechat-panel="messages"] .native-wechat-card-head .native-wechat-actions');
+    if (head && !document.getElementById('nativeWechatSummaryBtn')) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-ghost btn-sm';
+      btn.id = 'nativeWechatSummaryBtn';
+      btn.textContent = '今日总结';
+      head.appendChild(btn);
+      btn.addEventListener('click', function() {
+        var id = activeAccountId();
+        if (!id) return setMsg('请先选择账号', true);
+        btn.disabled = true; btn.textContent = '归纳中…';
+        apiJson('/api/native-wechat/db/summary', { method: 'POST', body: { account_id: id } })
+          .then(function(data) {
+            showTextOverlay('今日总结（' + (data.day || '') + ' / ' + (data.count || 0) + ' 条）', data.summary || data.error || '无内容');
+          })
+          .catch(function(err) { setMsg(err.message || '总结失败', true); })
+          .then(function() { btn.disabled = false; btn.textContent = '今日总结'; });
+      });
+    }
+    // 2) 导出群成员
+    var ghead = document.querySelector('[data-native-wechat-panel="groups"] .native-wechat-card-head .native-wechat-actions');
+    if (ghead && !document.getElementById('nativeWechatGroupExportBtn')) {
+      var sel = document.createElement('select');
+      sel.className = 'native-wechat-select';
+      sel.id = 'nativeWechatGroupExportSelect';
+      sel.innerHTML = '<option value="">选择群…</option>';
+      var gbtn = document.createElement('button');
+      gbtn.type = 'button';
+      gbtn.className = 'btn btn-ghost btn-sm';
+      gbtn.id = 'nativeWechatGroupExportBtn';
+      gbtn.textContent = '导出成员';
+      ghead.appendChild(sel); ghead.appendChild(gbtn);
+      apiJson('/api/native-wechat/db/groups', { method: 'GET' }).then(function(d) {
+        (d.groups || []).forEach(function(g) {
+          var opt = document.createElement('option');
+          opt.value = g.username || '';
+          opt.textContent = (g.name || g.username) + ' (' + (g.member_count || 0) + ')';
+          sel.appendChild(opt);
+        });
+      }).catch(function() {});
+      gbtn.addEventListener('click', function() {
+        var chatroom = sel.value;
+        if (!chatroom) return setMsg('先选一个群', true);
+        window.open('/api/native-wechat/db/group-members?format=csv&chatroom=' + encodeURIComponent(chatroom), '_blank');
+      });
+    }
+  }
+
+  function showTextOverlay(title, text) {
+    var old = document.getElementById('nativeWechatTextOverlay');
+    if (old) old.remove();
+    var mask = document.createElement('div');
+    mask.id = 'nativeWechatTextOverlay';
+    mask.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.46);padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'width:min(860px,96vw);max-height:86vh;overflow:auto;background:#fbfffd;border-radius:18px;padding:18px;box-shadow:0 24px 70px rgba(15,23,42,.3);';
+    var h = document.createElement('div');
+    h.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;font-weight:900;';
+    h.textContent = title;
+    var close = document.createElement('button');
+    close.textContent = '关闭';
+    close.className = 'btn btn-ghost btn-sm';
+    close.addEventListener('click', function() { mask.remove(); });
+    h.appendChild(close);
+    var body = document.createElement('div');
+    body.style.cssText = 'white-space:pre-wrap;line-height:1.6;font-size:13px;color:#173f37;';
+    body.textContent = text;
+    box.appendChild(h); box.appendChild(body); mask.appendChild(box);
+    document.body.appendChild(mask);
+  }
     var syncSessionBtn = $('nativeWechatSyncSessionsBtn');
     if (syncSessionBtn) syncSessionBtn.addEventListener('click', syncSessions);
+    installWechatDbExtras();
     var syncContactsBtn = $('nativeWechatSyncContactsBtn');
     if (syncContactsBtn) syncContactsBtn.addEventListener('click', syncContacts);
     var clearContactsBtn = $('nativeWechatClearContactsBtn');

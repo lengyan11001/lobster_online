@@ -11299,6 +11299,56 @@ def _force_session_list_top(account_id: str) -> bool:
         return False
 
 
+def summarize_wechat_day_via_db(account_id: str, *, day: str = "", limit_per_chat: int = 50) -> Dict[str, Any]:
+    """把某一天（默认今天）所有会话的消息从本地库汇总出来，交给上层做 AI 归纳。"""
+    from . import wechat_transport_replica as _rt
+
+    if not day:
+        day = datetime.now().strftime("%Y-%m-%d")
+    try:
+        start = int(datetime.strptime(day, "%Y-%m-%d").timestamp())
+    except Exception:
+        start = int(time.time()) - 86400
+    end = start + 86400
+    data = _rt.sessions_db(200)
+    self_user = str(data.get("self") or "")
+    lines: List[str] = []
+    count = 0
+    for sess in data.get("sessions") or []:
+        username = str(sess.get("username") or "").strip()
+        if not username or username == self_user:
+            continue
+        try:
+            last_ts = int(sess.get("last_time") or 0)
+        except Exception:
+            last_ts = 0
+        if last_ts and last_ts < start:
+            continue
+        try:
+            hist = _rt.history(username, limit=limit_per_chat)
+        except Exception:
+            continue
+        name = str(sess.get("name") or username)
+        for msg in hist.get("messages") or []:
+            try:
+                ts = int(msg.get("create_time") or 0)
+            except Exception:
+                ts = 0
+            if ts and (ts < start or ts >= end):
+                continue
+            who = "我" if str(msg.get("attr")) == "self" else name
+            content = str(msg.get("content") or "").strip()
+            if not content:
+                continue
+            lines.append(f"[{name}] {who}: {content[:200]}")
+            count += 1
+            if count >= 400:
+                break
+        if count >= 400:
+            break
+    digest = "\n".join(lines)
+    return {"ok": True, "day": day, "count": count, "digest": digest[:12000]}
+
 def sync_local_contacts_via_db(account_id: str, *, limit: int = 5000) -> Dict[str, Any]:
     """从本地库读通讯录写进我们自己的表（不再点界面翻列表）。"""
     from . import wechat_transport_replica as _rt

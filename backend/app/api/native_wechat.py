@@ -1104,3 +1104,85 @@ async def native_wechat_db_drafts(
     except Exception as exc:
         return {"ok": False, "error": str(exc)[:300]}
 
+class SummaryBody(BaseModel):
+    account_id: str
+    day: Optional[str] = None
+
+
+@router.post("/api/native-wechat/db/summary")
+async def native_wechat_db_summary(
+    body: SummaryBody,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """把当天所有会话消息汇总，交给 AI 归纳。"""
+    try:
+        data = await asyncio.to_thread(engine.summarize_wechat_day_via_db, body.account_id, day=body.day or "")
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+    digest = str(data.get("digest") or "")
+    if not digest.strip():
+        return {"ok": True, "day": data.get("day"), "count": 0, "summary": "今天没有可归纳的消息。"}
+    prompt = (
+        "以下是微信里今天的聊天记录（格式：[会话] 发送人: 内容）。请用中文帮我归纳：\n"
+        "1) 有哪些重要事项/待办；2) 哪些客户有明确需求或成交意向；3) 需要我本人回复但还没回的；\n"
+        "4) 按会话分组给出 1~2 句摘要。不确定的不要编造。\n\n" + digest
+    )
+    summary = ""
+    try:
+        auth_context = {
+            "token": _raw_token_from_request(request),
+            "user_id": current_user.id,
+            "installation_id": _installation_id_from_request(request, current_user.id),
+        }
+        summary = await engine._call_sutui_chat_for_native_task(
+            auth_context,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            timeout=180.0,
+        )
+    except Exception as exc:
+        summary = "AI 归纳失败：" + str(exc)[:200]
+    return {
+        "ok": True,
+        "day": data.get("day"),
+        "count": int(data.get("count") or 0),
+        "summary": summary or digest[:4000],
+    }
+
+
+@router.get("/api/native-wechat/db/group-members")
+async def native_wechat_db_group_members(
+    chatroom: str,
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """导出某个群的全部成员（本地库）。format=csv 直接下载。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        data = await asyncio.to_thread(_rt.group_members, chatroom)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+    members = data.get("members") or []
+    if format == "csv":
+        import csv as _csv
+        import io as _io
+
+        buf = _io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(["username", "nick_name", "remark", "is_owner"])
+        for m in members:
+            writer.writerow([m.get("username", ""), m.get("nick_name", ""), m.get("remark", ""), m.get("is_owner", "")])
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(
+            buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="group_{chatroom}.csv"'},
+        )
+    return {"ok": True, "chatroom": chatroom, "count": len(members), "members": members}
+
