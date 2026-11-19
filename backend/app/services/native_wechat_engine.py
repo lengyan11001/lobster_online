@@ -2136,12 +2136,8 @@ def _migrate_legacy_local_account_data() -> None:
             for row in conn.execute("select * from wechat_group_members where account_id=?", (old_id,)).fetchall():
                 conn.execute(
                     """
-                    insert into wechat_group_members(id, account_id, group_key, member_key, display_name, raw_json, created_at, updated_at)
+                    insert or replace into wechat_group_members(id, account_id, group_key, member_key, display_name, raw_json, created_at, updated_at)
                     values(?,?,?,?,?,?,?,?)
-                    on conflict(account_id, group_key, member_key) do update set
-                      display_name=excluded.display_name,
-                      raw_json=excluded.raw_json,
-                      updated_at=excluded.updated_at
                     """,
                     (
                         _stable_key(target, row["group_key"], row["member_key"]),
@@ -11298,6 +11294,68 @@ def _force_session_list_top(account_id: str) -> bool:
         logger.debug("[native-wechat] force session list top failed: %s", str(exc)[:120])
         return False
 
+
+def sync_local_groups_via_db(account_id: str) -> Dict[str, Any]:
+    """从本地库读群和群成员，写进 wechat_groups / wechat_group_members。"""
+    from . import wechat_transport_replica as _rt
+
+    data = _rt.groups()
+    groups = list(data.get("groups") or [])
+    now = _now_iso()
+    written = 0
+    members_written = 0
+    with _connect() as conn:
+        for g in groups:
+            key = str(g.get("username") or "").strip()
+            if not key:
+                continue
+            name = str(g.get("name") or key).strip()
+            conn.execute(
+                """
+                insert or replace into wechat_groups(id, account_id, group_key, display_name, member_count, remark, source, raw_json, created_at, updated_at)
+                values(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    _stable_key(account_id, key),
+                    account_id,
+                    key,
+                    name,
+                    int(g.get("member_count") or 0),
+                    "",
+                    "wechat_db",
+                    _json_dumps({k: v for k, v in g.items() if k != "members"}),
+                    now,
+                    now,
+                ),
+            )
+            written += 1
+            for m in (g.get("members") or []):
+                mkey = str(m.get("username") or "").strip()
+                if not mkey:
+                    continue
+                conn.execute(
+                    """
+                    insert into wechat_group_members(id, account_id, group_key, member_key, display_name, raw_json, created_at, updated_at)
+                    values(?,?,?,?,?,?,?,?)
+                    on conflict(account_id, group_key, member_key) do update set
+                      display_name=excluded.display_name,
+                      raw_json=excluded.raw_json,
+                      updated_at=excluded.updated_at
+                    """,
+                    (
+                        _stable_key(account_id, key, mkey),
+                        account_id,
+                        key,
+                        mkey,
+                        str(m.get("remark") or m.get("nick_name") or mkey),
+                        _json_dumps(m),
+                        now,
+                        now,
+                    ),
+                )
+                members_written += 1
+        conn.commit()
+    return {"ok": True, "count": written, "member_count": members_written, "source": "wechat_db"}
 
 def summarize_wechat_day_via_db(account_id: str, *, day: str = "", limit_per_chat: int = 50) -> Dict[str, Any]:
     """把某一天（默认今天）所有会话的消息从本地库汇总出来，交给上层做 AI 归纳。"""

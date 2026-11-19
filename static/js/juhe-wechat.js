@@ -2698,6 +2698,21 @@
     if (momentsPublishBtn) momentsPublishBtn.addEventListener('click', submitMomentsPublish);
 
 
+
+  var _lastDbRefresh = 0;
+  function refreshFromDb(force) {
+    var id = activeAccountId();
+    if (!id) return Promise.resolve();
+    var now = Date.now();
+    if (!force && now - _lastDbRefresh < 60000) return Promise.resolve();
+    _lastDbRefresh = now;
+    return apiJson('/api/native-wechat/sessions/sync', { method: 'POST', body: { account_id: id, limit: 2000 } })
+      .then(function() { return apiJson('/api/native-wechat/contacts/sync', { method: 'POST', body: { account_id: id, limit: 10000 } }).catch(function() {}); })
+      .then(function() { return apiJson('/api/native-wechat/groups/sync', { method: 'POST', body: { account_id: id, limit: 2000 } }).catch(function() {}); })
+      .then(function() { return Promise.all([loadPeers(), loadContacts(), loadGroups()]); })
+      .catch(function() {});
+  }
+
   function applyWechatUiCleanup() {
     // 1) 去掉"同步会话/收消息/通讯录同步/清除缓存/同步群成员"：现在都直接读本地库
     ['nativeWechatSyncSessionsBtn', 'nativeWechatPollBtn', 'nativeWechatSyncContactsBtn',
@@ -2725,6 +2740,11 @@
         showHtmlOverlay('接管设置', cfg, function() { holder.appendChild(cfg); });
       });
     }
+
+    // 切到消息/通讯录时从本地库刷新（60 秒节流）
+    document.querySelectorAll('[data-native-wechat-tab="messages"],[data-native-wechat-tab="contacts"]').forEach(function(b) {
+      b.addEventListener('click', function() { refreshFromDb(false); });
+    });
 
     // 3) 独立的「总结」tab，保留上次结果
     var tabs = document.querySelector('.native-wechat-tabs');
@@ -2853,6 +2873,7 @@
     if (syncSessionBtn) syncSessionBtn.addEventListener('click', syncSessions);
     installWechatDbExtras();
     applyWechatUiCleanup();
+    refreshFromDb(true);
     var syncContactsBtn = $('nativeWechatSyncContactsBtn');
     if (syncContactsBtn) syncContactsBtn.addEventListener('click', syncContacts);
     var clearContactsBtn = $('nativeWechatClearContactsBtn');
