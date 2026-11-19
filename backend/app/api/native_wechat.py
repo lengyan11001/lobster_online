@@ -1230,6 +1230,119 @@ async def native_wechat_db_chat_messages(
 
     if not _rt.enabled():
         return {"ok": False, "error": "replica transport disabled", "items": [], "count": 0}
+    resolved = peer
+    raw_messages: list = []
+    err = ""
+    try:
+        resolved = await asyncio.to_thread(engine.resolve_peer_username, "", peer)
+        data = await asyncio.to_thread(_rt.history, resolved, limit=limit)
+        raw_messages = list(data.get("messages") or [])
+    except Exception as exc:
+        err = str(exc)[:200]
+        try:
+            ui = await asyncio.to_thread(_rt.read_messages, resolved, limit)
+            raw_messages = list(ui.get("messages") or [])
+            err += " | fallback_ui_ok"
+        except Exception as exc2:
+            err += " | fallback_ui_failed: " + str(exc2)[:120]
+    if not raw_messages:
+        try:
+            ui = await asyncio.to_thread(_rt.read_messages, resolved, limit)
+            raw_messages = list(ui.get("messages") or [])
+            if raw_messages:
+                err += " | empty_then_ui_ok"
+        except Exception as exc3:
+            err += " | empty_ui_failed: " + str(exc3)[:120]
+    items = []
+    for m in reversed(list(raw_messages)):
+        items.append(
+            {
+                "id": str(m.get("id") or ""),
+                "peer_id": resolved,
+                "direction": "out" if str(m.get("attr")) == "self" else "in",
+                "msg_type": str(m.get("type") or "text"),
+                "content": str(m.get("content") or ""),
+                "created_at": str(m.get("time") or ""),
+                "raw_json": {"sender": str(m.get("sender") or "")},
+            }
+        )
+    logger.warning(
+        "[db-chat-messages] peer=%s resolved=%s count=%s err=%s",
+        peer, resolved, len(items), err or "-",
+    )
+    return {"ok": True, "peer_id": resolved, "items": items, "count": len(items), "note": err}
+
+@router.get("/api/native-wechat/db/group-members")
+async def native_wechat_db_group_members(
+    chatroom: str,
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """导出某个群的全部成员（本地库）。format=csv 直接下载。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        data = await asyncio.to_thread(_rt.group_members, chatroom)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+    members = data.get("members") or []
+    if format == "csv":
+        import csv as _csv
+        import io as _io
+
+        buf = _io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(["username", "nick_name", "remark", "is_owner"])
+        for m in members:
+            writer.writerow([m.get("username", ""), m.get("nick_name", ""), m.get("remark", ""), m.get("is_owner", "")])
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(
+            buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="group_{chatroom}.csv"'},
+        )
+    return {"ok": True, "chatroom": chatroom, "count": len(members), "members": members}
+
+class PrimeMessagesBody(BaseModel):
+    account_id: str
+    peer_id: str
+    limit: int = 50
+
+
+@router.post("/api/native-wechat/db/prime-messages")
+async def native_wechat_db_prime_messages(
+    body: PrimeMessagesBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """点开会话时直接从微信本地库读最近消息（毫秒级），写进缓存供界面展示。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        return await asyncio.to_thread(
+            engine.prime_messages_from_db, body.account_id, body.peer_id, limit=max(1, min(int(body.limit), 200))
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+
+@router.get("/api/native-wechat/db/chat-messages")
+async def native_wechat_db_chat_messages(
+    peer: str,
+    limit: int = Query(default=100, ge=1, le=300),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """直接从微信本地库读某个会话的消息（不经我们的缓存表）。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled", "items": [], "count": 0}
     try:
         # 界面可能传显示名，先映射成 username（聊天记录表按 username 建）
         peer = await asyncio.to_thread(engine.resolve_peer_username, "", peer)
