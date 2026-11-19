@@ -10836,6 +10836,21 @@ def _capture_auto_reply_scan_page(
                 session_time_reliable=bool(reliability.get("reliable")),
             )
             continue
+        # 2026-11-19 提速：没有未读、且列表预览和我们库里最后一条（已发出）一致
+        # -> 这条没有任何新消息，不用点开它（以前 14 个会话挨个点一遍要 67 秒）。
+        if (
+            live_session
+            and not int(session.get("unread_count") or 0)
+            and str(session.get("last_content") or "").strip()
+        ):
+            _cached_latest = _latest_message_record(account_id, peer_id, include_system=False)
+            if (
+                _cached_latest
+                and str(_cached_latest.get("direction") or "").strip().lower() == "out"
+                and _session_preview_matches_message(session, _cached_latest)
+            ):
+                capture_skip("no_new_message")
+                continue
         try:
             # For a live wxauto page click the actual SessionElement that was
             # returned for this screen.  Searching by the visible nickname
