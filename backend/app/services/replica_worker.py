@@ -56,22 +56,44 @@ def _sessions_db(limit: int = 200):
     return {"ok": True, "self": self_name, "sessions": out}
 
 
+# 微信 4.0 contact 表的真实语义（本机 7213 行实测）：
+#   local_type=1 好友/公众号/系统号，local_type=2 群，local_type=3 是群成员缓存（5644 行，非好友）
+# 通讯录好友 = local_type=1 且不是公众号(gh_)、不是微信内置系统号。本机实测 752，与微信界面一致。
+_CONTACT_SYSTEM_USERNAMES = (
+    'weixin', 'weibo', 'medianote', 'tmessage', 'qmessage', 'fmessage', 'floatbottle',
+    'qqmail', 'newsapp', 'notifymessage', 'weixinreminder', 'weixinsafecenter', 'brandsessionholder',
+    'filehelper', 'weixinpay', 'tenpay',
+)
+
+
 def _contacts_db(limit: int = 5000):
     db = _db()
     out = []
+    placeholders = ','.join('?' * len(_CONTACT_SYSTEM_USERNAMES))
     for rel, path, _ in db._db_files:
         if not path.endswith('contact.db'):
             continue
         conn = db._open(rel)
         try:
-            rows = conn.execute(
-                'SELECT username, nick_name, remark, alias, local_type FROM contact LIMIT ?',
-                (int(limit),),
-            ).fetchall()
+            sql = (
+                "SELECT username, nick_name, remark, alias, local_type, pin_yin_initial FROM contact "
+                "WHERE local_type = 1 "
+                "AND username NOT LIKE 'gh\\_%' ESCAPE '\\' "
+                "AND username NOT IN (" + placeholders + ") "
+                "ORDER BY pin_yin_initial, username LIMIT ?"
+            )
+            rows = conn.execute(sql, (*_CONTACT_SYSTEM_USERNAMES, int(limit))).fetchall()
         finally:
             conn.close()
         for r in rows:
-            out.append({'username': r[0], 'nick_name': r[1], 'remark': r[2], 'alias': r[3], 'local_type': r[4]})
+            out.append({
+                'username': r[0],
+                'nick_name': r[1],
+                'remark': r[2],
+                'alias': r[3],
+                'local_type': r[4],
+                'pinyin': r[5] or '',
+            })
         break
     return {'ok': True, 'contacts': out}
 

@@ -597,21 +597,21 @@ async def native_wechat_contacts(
     # 同时过滤掉没有任何名称的空行和系统账号。
     limit = 8000
     system_names = {"fmessage", "weixin", "filehelper", "brandsessionholder", "medianote",
-                    "notifymessage", "weibo", "qqmail", "floatbottle", "newsapp", "gh_"}
+                    "notifymessage", "weibo", "qqmail", "floatbottle", "newsapp",
+                    "tmessage", "qmessage", "weixinreminder", "weixinsafecenter", "weixinpay", "tenpay"}
     for row in data.get("contacts") or []:
         username = str(row.get("username") or "").strip()
         if not username:
             continue
         if username in system_names or username.startswith("gh_"):
             continue
-        # 只保留真正的联系人（微信 contact.local_type=3 是好友；1=公众号/系统，2=群）
-        if int(row.get("local_type") or 0) != 3:
+        # 微信 4.0 contact 表：local_type=1 才是好友/公众号/系统号，2=群，3=群成员缓存（非好友，几千行）。
+        # 公众号和系统号已在上面的 system_names / gh_ 前缀里排除。
+        if int(row.get("local_type") or 0) != 1:
             continue
         nick = str(row.get("nick_name") or "").strip()
         remark = str(row.get("remark") or "").strip()
         alias = str(row.get("alias") or "").strip()
-        if not (nick or remark or alias):
-            continue
         if kw and kw not in nick.lower() and kw not in remark.lower() and kw not in alias.lower() and kw not in username.lower():
             continue
         if has_wx == "yes" and not alias:
@@ -627,9 +627,13 @@ async def native_wechat_contacts(
                 "nick_name": nick,
                 "wx_no": alias,
                 "chat_type": "friend",
+                "_py": str(row.get("pinyin") or "").upper(),
             }
         )
-    items.sort(key=lambda x: x["display_name"])
+    # 与微信通讯录一致的排序：按拼音首字母，其次显示名。
+    items.sort(key=lambda x: (x.get("_py") or "~", x["display_name"]))
+    for item in items:
+        item.pop("_py", None)
     total = len(items)
     page = items[offset: offset + limit]
     return {"ok": True, "items": page, "count": len(page), "total": total}
