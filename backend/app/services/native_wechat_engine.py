@@ -11218,6 +11218,50 @@ def _sync_recent_sessions_from_wxauto4(
                 for item in (_db_sessions.get("sessions") or [])
             ]
             _SELF_USERNAME_CACHE = str(_db_sessions.get("self") or "")
+            # 2026-11-19：每轮只处理"上次游标之后有新动静"的会话。
+            # 游标存在本地库；第一次运行只回溯 30 分钟，避免一次把 200 个会话全拉起来。
+            try:
+                with _connect() as _cur_conn:
+                    _cur_conn.execute(
+                        "create table if not exists wechat_auto_reply_cursor("
+                        "account_id text primary key, last_ts integer not null)"
+                    )
+                    _cur_row = _cur_conn.execute(
+                        "select last_ts from wechat_auto_reply_cursor where account_id=?",
+                        (account_id,),
+                    ).fetchone()
+                _cursor = int(_cur_row[0]) if _cur_row else int(time.time()) - 1800
+            except Exception:
+                _cursor = 0
+            _max_ts = _cursor
+            _filtered_rows = []
+            for _row in _rows:
+                try:
+                    _ts = int(_row.get("last_time") or 0)
+                except Exception:
+                    _ts = 0
+                if _ts:
+                    _max_ts = max(_max_ts, _ts)
+                if _cursor and _ts and _ts <= _cursor:
+                    continue
+                _filtered_rows.append(_row)
+            _rows = _filtered_rows
+            _write_auto_reply_diagnostic(
+                "replica_cursor_filter",
+                account_id=account_id,
+                cursor=_cursor,
+                kept=len(_rows),
+                max_ts=_max_ts,
+            )
+            try:
+                with _connect() as _cur_conn:
+                    _cur_conn.execute(
+                        "insert into wechat_auto_reply_cursor(account_id, last_ts) values(?,?) "
+                        "on conflict(account_id) do update set last_ts=excluded.last_ts",
+                        (account_id, int(_max_ts or 0)),
+                    )
+            except Exception:
+                pass
             try:
                 _self_nick = _replica_scan.my_nickname()
             except Exception:
