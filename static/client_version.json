@@ -1,7 +1,7 @@
 {
-  "version": "2.0.349",
-  "build": 657,
-  "applied_at": "2026-11-19T15:53:07+08:00",
-  "note": "读走本地库，写走 replica；去重复回复",
-  "bundle_sha256": "3a3f6efb09384eaa4bce6ca2bb73ce48220e462c33f3344bc31f880f920f8e9a"
+  "version": "2.0.350",
+  "build": 658,
+  "applied_at": "2026-11-19T16:29:35+08:00",
+  "note": "今日总结 + 群成员导出；读走本地库",
+  "bundle_sha256": "a5370d10ac62973af8f8bf2603bd24ecb35f8f631f5d7b5c202b5a977c13f77a"
 }
