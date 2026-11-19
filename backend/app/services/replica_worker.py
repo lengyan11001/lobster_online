@@ -40,7 +40,15 @@ def _sessions():
         except Exception:
             continue
         if name:
-            out.append({"name": name, "unread": unread})
+            out.append(
+                {
+                    "name": name,
+                    "unread": unread,
+                    "username": str(getattr(item, "username", "") or "").strip(),
+                    "summary": str(getattr(item, "summary", "") or "").strip(),
+                    "last_time": str(getattr(item, "last_time", "") or "").strip(),
+                }
+            )
     return {"ok": True, "sessions": out}
 
 

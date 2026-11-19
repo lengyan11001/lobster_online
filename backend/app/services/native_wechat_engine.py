@@ -5050,6 +5050,60 @@ def _latest_strict_auto_reply_candidate(account_id: str, peer_id: str) -> Option
     return candidate
 
 
+def _replica_row_is_private(row: Dict[str, Any]) -> bool:
+    """replica 的 username 是精确标识：@chatroom=群，gh_/brandsessionholder=公众号。"""
+    username = str(row.get("username") or "").strip().lower()
+    name = str(row.get("name") or "").strip()
+    if not username:
+        return not _looks_like_non_private_session_name(name)
+    if username.endswith("@chatroom"):
+        return False
+    if username.startswith("gh_") or username in {"brandsessionholder", "weixin", "filehelper", "fmessage"}:
+        return False
+    return True
+
+
+def _looks_like_non_private_session_name(name: str) -> bool:
+    """会话名层面的非私聊判定：公众号/服务号/订阅号/文件传输助手/新闻/群都不该被打开。"""
+    text = str(name or "").strip()
+    if not text:
+        return True
+    if "@chatroom" in text.lower() or "群" in text:
+        return True
+    return any(
+        hint in text
+        for hint in ("公众号", "服务号", "订阅号", "文件传输助手", "腾讯新闻", "微信支付", "服务通知", "微信团队")
+    )
+
+
+def _peer_wxids_by_display_name(account_id: str, display_name: str) -> List[str]:
+    """库里这个显示名对应的 wxid 列表；>1 说明重名，不能按名字打开。"""
+    name = str(display_name or "").strip()
+    if not name:
+        return []
+    found: List[str] = []
+    try:
+        with _connect() as conn:
+            for row in conn.execute(
+                "select peer_id from wechat_peers where account_id=? and display_name=?",
+                (str(account_id or ""), name),
+            ).fetchall():
+                value = str(row[0] or "").strip()
+                if _looks_like_wechat_id(value):
+                    found.append(value)
+            for row in conn.execute(
+                "select contact_key, wx_no from wechat_contacts where display_name=?",
+                (name,),
+            ).fetchall():
+                for value in (row[0], row[1]):
+                    value = str(value or "").strip()
+                    if _looks_like_wechat_id(value):
+                        found.append(value)
+    except Exception:
+        return []
+    return sorted(set(found))
+
+
 def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> Dict[str, Any]:
     """Classify a visible row before opening it.
 
@@ -5061,6 +5115,17 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
     peer_id = str(session.get("peer_id") or "").strip()
     if not peer_id:
         return {"action": "skip", "reason": "missing_peer"}
+    if session.get("_replica_row"):
+        name = str(session.get("display_name") or peer_id).strip()
+        if not _replica_row_is_private(session):
+            return {"action": "skip_group", "reason": "known_non_private"}
+        if _looks_like_non_private_session_name(name):
+            return {"action": "skip_group", "reason": "known_non_private_name"}
+        if int(session.get("unread_count") or 0) <= 0:
+            return {"action": "skip", "reason": "no_unread"}
+        if len(_peer_wxids_by_display_name(account_id, name)) > 1:
+            return {"action": "skip", "reason": "ambiguous_display_name"}
+        return {"action": "open", "reason": "replica_private_verify", "chat_type": "unknown"}
     # The time-driven wxauto4 snapshot deliberately omits rows without a
     # trustworthy exact timestamp.  Keep this guard here as well so a stale
     # or externally supplied snapshot cannot reopen an undated session.
@@ -5658,7 +5723,10 @@ async def run_auto_reply_once(
                     )
                     continue
                 else:
-                    if not scanned_wechat_id and str(session.get("source") or "").startswith("pc_wechat_uia_sessions"):
+                    if not scanned_wechat_id and (
+                        str(session.get("source") or "").startswith("pc_wechat_uia_sessions")
+                        or str(session.get("source") or "").startswith("replica_sessions")
+                    ):
                         # wxauto 的 GetSession 漏掉了这条（置顶 / 折叠置顶里的会话）。
                         # 2026-11-19 本机实测：UIA 点开会话后 wxauto4 的 ChatBox 会脱离
                         # 当前会话（ChatInfo 拿不到名字、GetAllMessage() 恒为 0），而
@@ -11102,6 +11170,44 @@ def _sync_recent_sessions_from_wxauto4(
     GetSession is page-scoped. A stale row, including a pinned row, is only a
     per-row filter and must never terminate the scan.
     """
+    # 2026-11-19：会话列表改用 replica 的 GetSession（0.1s，带未读数），
+    # 不再逐个点开会话行去"抓快照"。
+    try:
+        from . import wechat_transport_replica as _replica_scan
+
+        if _replica_scan.enabled():
+            _rows = _replica_scan.list_sessions()
+            if _rows:
+                _items = [
+                    {
+                        "peer_id": row["name"],
+                        "display_name": row["name"],
+                        "last_content": str(row.get("summary") or ""),
+                        "session_time": "",
+                        "unread_count": int(row.get("unread") or 0),
+                        "is_new": False,
+                        "source": "replica_sessions",
+                        "_replica_row": True,
+                        "_replica_username": str(row.get("username") or ""),
+                        "_replica_summary": str(row.get("summary") or ""),
+                    }
+                    for row in _rows
+                    if row.get("name") and _replica_row_is_private(row)
+                ]
+                _write_auto_reply_diagnostic(
+                    "replica_scan_used", account_id=account_id, session_count=len(_items)
+                )
+                return {
+                    "items": _items,
+                    "time_scan": False,
+                    "raw_session_count": len(_items),
+                    "scroll_rounds": 0,
+                    "auto_reply_captures": {},
+                    "fallback": "replica_sessions",
+                }
+    except Exception as _scan_exc:
+        _write_auto_reply_diagnostic("replica_scan_failed", account_id=account_id, error=str(_scan_exc)[:300])
+
     _ui_progress_tick("scan:client")
     wx = _get_wxauto4_client(account_id)
     _ui_progress_tick("scan:client_ready")
@@ -15397,6 +15503,39 @@ def _sync_local_messages_once(
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
     display_target = _session_display_name(target)
+
+    # 2026-11-19：打开+读消息改由 replica 完成（子进程，不再和 wxauto4 抢窗口）。
+    # 名字只用于展示；重名在预过滤阶段已经跳过。读到了就不再走下面的 wxauto 点击/读取。
+    _replica_messages: List[Dict[str, Any]] = []
+    _replica_info: Dict[str, Any] = {}
+    if target or current_selected:
+        try:
+            from . import wechat_transport_replica as _replica_primary
+
+            if _replica_primary.enabled():
+                _rp = _replica_primary.read_messages(
+                    (target or display_target or "").strip(), max_messages=50
+                )
+                _replica_messages = [dict(item) for item in (_rp.get("messages") or [])]
+                _replica_info = dict(_rp.get("chat_info") or {})
+                _write_auto_reply_diagnostic(
+                    "replica_read_primary",
+                    account_id=diagnostic_account_id,
+                    run_id=diagnostic_run_id,
+                    target_peer_id=target,
+                    target_display_name=display_target,
+                    message_count=len(_replica_messages),
+                )
+        except Exception as _rp_exc:
+            _write_auto_reply_diagnostic(
+                "replica_read_primary_failed",
+                account_id=diagnostic_account_id,
+                run_id=diagnostic_run_id,
+                target_peer_id=target,
+                target_display_name=display_target,
+                error=str(_rp_exc)[:300],
+            )
+    _use_replica_read = bool(_replica_messages)
     diagnostic_context = dict(diagnostic_context or {})
     diagnostic_account_id = str(diagnostic_context.get("account_id") or account_id)
     diagnostic_run_id = str(diagnostic_context.get("run_id") or "")
@@ -15450,7 +15589,7 @@ def _sync_local_messages_once(
         except Exception:
             already_current = False
 
-    if target and not current_selected and not already_current:
+    if target and not current_selected and not already_current and not _use_replica_read:
         _write_auto_reply_diagnostic(
             "chat_click_started",
             account_id=diagnostic_account_id,
@@ -15462,7 +15601,7 @@ def _sync_local_messages_once(
             current_selected=False,
             read_chat_info=bool(read_chat_info),
         )
-    if target and not current_selected and not already_current:
+    if target and not current_selected and not already_current and not _use_replica_read:
         try:
             if use_verified_contact_search:
                 search_steps: List[Dict[str, Any]] = []
@@ -15606,7 +15745,12 @@ def _sync_local_messages_once(
                 time.sleep(0.3)
         except Exception:
             pass
-    messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    if _use_replica_read:
+        messages = list(_replica_messages)
+        if _replica_info:
+            info = _replica_info
+    else:
+        messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
     if select_via_uia and not list(messages or []):
         # 2026-11-18 本机实测：外部 UIA 点击切会话后，这个常驻 wxauto 客户端的
         # ChatBox 会脱离当前会话 —— ChatInfo 能读到新会话名，但 GetAllMessage()
