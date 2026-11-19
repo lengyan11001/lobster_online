@@ -5978,13 +5978,16 @@ async def run_auto_reply_once(
                 if (
                     _local_chat_type_is_group(chat_type)
                     or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
-                    or _looks_like_group_session(
-                        {
-                            "peer_id": actual_peer,
-                            "display_name": display_name,
-                            "last_content": str(session.get("last_content") or ""),
-                            "chat_type": chat_type,
-                        }
+                    or (
+                        not _local_chat_type_is_private(chat_type)
+                        and _looks_like_group_session(
+                            {
+                                "peer_id": actual_peer,
+                                "display_name": display_name,
+                                "last_content": str(session.get("last_content") or ""),
+                                "chat_type": chat_type,
+                            }
+                        )
                     )
                 ):
                     result["skipped_groups"] += 1
@@ -15506,7 +15509,9 @@ def _sync_local_messages_via_replica(
     raw_messages = [dict(item) for item in (rep.get("messages") or [])]
     info = dict(rep.get("chat_info") or {})
     if not raw_messages:
+        _write_auto_reply_diagnostic("replica_read_empty", peer_id=peer)
         return None
+    _write_auto_reply_diagnostic("replica_read_primary", peer_id=peer, message_count=len(raw_messages))
     actual_peer = str(info.get("chat_name") or peer).strip() or peer
     _persist_peer_chat_info(account_id, actual_peer, info or {"chat_name": actual_peer})
     previous_latest = _latest_message_record(account_id, actual_peer)
