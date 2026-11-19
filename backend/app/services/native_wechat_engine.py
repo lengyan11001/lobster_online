@@ -23432,6 +23432,53 @@ def _send_text_local_slow(
         if _replica.enabled():
             _rep_send = _replica.send_text(peer_id, text)
             if _rep_send.get("ok"):
+                # 2026-11-19：replica 发送成功后必须落一条 outbound 记录 + 更新 peer，
+                # 否则 _latest_strict_auto_reply_candidate 仍认为"这条还没回"，
+                # 下一轮会把同一条入站再回一遍（线上 13:23/13:26/13:28 连回三次就是它）。
+                try:
+                    _now = _now_iso()
+                    _client_id = f"lobster-local-wechat-auto-{uuid.uuid4().hex}"
+                    with _connect() as _conn:
+                        _conn.execute(
+                            """
+                            insert into wechat_messages(id, account_id, peer_id, direction, msg_type, content, client_id, status, raw_json, created_at)
+                            values(?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            (
+                                uuid.uuid4().hex,
+                                account_id,
+                                peer_id,
+                                "out",
+                                "text",
+                                text,
+                                _client_id,
+                                "sent",
+                                _json_dumps({"driver": "wechatauto_replica", "status": _rep_send.get("status")}),
+                                _now,
+                            ),
+                        )
+                        _conn.execute(
+                            """
+                            insert into wechat_peers(id, account_id, peer_id, display_name, chat_type, last_outbound_at, raw_json, created_at, updated_at)
+                            values(?,?,?,?,?,?,?,?,?)
+                            on conflict(account_id, peer_id) do update set
+                              last_outbound_at=excluded.last_outbound_at,
+                              updated_at=excluded.updated_at
+                            """,
+                            (
+                                _stable_key(account_id, peer_id),
+                                account_id,
+                                peer_id,
+                                peer_id,
+                                "unknown",
+                                _now,
+                                _json_dumps({"driver": "wechatauto_replica"}),
+                                _now,
+                                _now,
+                            ),
+                        )
+                except Exception as _persist_exc:
+                    logger.warning("[native-wechat] replica 发送后落库失败: %s", str(_persist_exc)[:200])
                 try:
                     log_send_event("reply_send_replica_ok", click_target=str(peer_id or ""), status=_rep_send.get("status"))
                 except Exception:

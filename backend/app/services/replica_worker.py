@@ -64,7 +64,14 @@ def _sessions():
 
 def _read(peer: str, max_messages: int = 50):
     wx = _client()
-    wx.ChatWith(peer, exact=True)
+    current = ""
+    try:
+        current = str((wx.ChatInfo() or {}).get("chat_name") or "").strip()
+    except Exception:
+        current = ""
+    # 当前已经在这个会话上时不要再搜一次（ChatWith 一次约 11s）。
+    if current != str(peer or "").strip():
+        wx.ChatWith(peer, exact=True)
     msgs = list(wx.GetAllMessage() or [])
     info = {}
     try:
