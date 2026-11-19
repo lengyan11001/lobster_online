@@ -1,7 +1,7 @@
 {
-  "version": "2.0.324",
-  "build": 632,
-  "applied_at": "2026-11-19T10:05:04+08:00",
-  "note": "UIA 兜底会话改走 ChatWith 老路由",
-  "bundle_sha256": "9baa92d4b83cb375eb9f57b2df8138426f883ae4fa2a6be46c31db8a954ae3d4"
+  "version": "2.0.325",
+  "build": 633,
+  "applied_at": "2026-11-19T11:01:50+08:00",
+  "note": "接入 replica 传输层：修复 4.1.7+ 发送",
+  "bundle_sha256": "a82f73468673493249d64fba1bc1917488fdaa4c3fb7db55b06528fd1b703990"
 }
