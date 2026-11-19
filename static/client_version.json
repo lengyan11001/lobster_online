@@ -1,7 +1,7 @@
 {
-  "version": "2.0.333",
-  "build": 641,
-  "applied_at": "2026-11-19T13:02:48+08:00",
-  "note": "只认 @chatroom / ChatInfo 判群",
-  "bundle_sha256": "ece94461f8a10b609d84ef7319d81c8bc0c9df0db81fb09af41f6ead255c6c4b"
+  "version": "2.0.334",
+  "build": 642,
+  "applied_at": "2026-11-19T13:05:06+08:00",
+  "note": "sidecar 调用加硬超时",
+  "bundle_sha256": "b96b4931b1993556d5dbde46b5c6223005965ebca6673085632834f8eb2e72ed"
 }
