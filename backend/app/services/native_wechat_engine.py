@@ -5243,7 +5243,7 @@ async def run_auto_reply_once(
         from . import wechat_transport_replica as _rt_probe
 
         if _rt_probe.enabled():
-            _probe = _rt_probe.sessions_db(200)
+            _probe = _rt_probe.sessions_db(2000)
             _self_user = str(_probe.get("self") or "")
             with _connect() as _pc:
                 _pc.execute(
@@ -11361,7 +11361,7 @@ def rebuild_local_messages_from_db(account_id: str, *, limit_per_chat: int = 20)
     """清掉本地消息缓存，按本地库重新落库（修正历史时间/顺序）。"""
     from . import wechat_transport_replica as _rt
 
-    data = _rt.sessions_db(200)
+    data = _rt.sessions_db(2000)
     self_user = str(data.get("self") or "")
     removed = 0
     written = 0
@@ -11460,7 +11460,7 @@ def summarize_wechat_day_via_db(account_id: str, *, day: str = "", limit_per_cha
     except Exception:
         start = int(time.time()) - 86400
     end = start + 86400
-    data = _rt.sessions_db(200)
+    data = _rt.sessions_db(2000)
     self_user = str(data.get("self") or "")
     lines: List[str] = []
     count = 0
@@ -11499,7 +11499,7 @@ def summarize_wechat_day_via_db(account_id: str, *, day: str = "", limit_per_cha
     digest = "\n".join(lines)
     return {"ok": True, "day": day, "count": count, "digest": digest[:12000]}
 
-def sync_local_contacts_via_db(account_id: str, *, limit: int = 5000) -> Dict[str, Any]:
+def sync_local_contacts_via_db(account_id: str, *, limit: int = 20000) -> Dict[str, Any]:
     """从本地库读通讯录写进我们自己的表（不再点界面翻列表）。"""
     from . import wechat_transport_replica as _rt
 
@@ -11544,11 +11544,11 @@ def sync_local_contacts_via_db(account_id: str, *, limit: int = 5000) -> Dict[st
     return {"ok": True, "count": written, "source": "wechat_db"}
 
 
-def sync_local_sessions_via_db(account_id: str, *, limit: int = 200) -> Dict[str, Any]:
+def sync_local_sessions_via_db(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
     """从本地库读会话列表写进 wechat_peers（不再点界面）。"""
     from . import wechat_transport_replica as _rt
 
-    data = _rt.sessions_db(limit)
+    data = _rt.sessions_db(2000)
     rows = list(data.get("sessions") or [])
     self_user = str(data.get("self") or "")
     now = _now_iso()
@@ -11628,7 +11628,7 @@ def _sync_recent_sessions_from_wxauto4(
         if _replica_scan.enabled():
             # 2026-11-19：一次性从本地库拿全部会话（username/未读/最后一条/发送者），
             # 不再走界面 GetSession；last_sender 直接给出"最后一条是谁发的"。
-            _db_sessions = _replica_scan.sessions_db(200)
+            _db_sessions = _replica_scan.sessions_db(2000)
             _rows = [
                 {
                     "name": item.get("name") or item.get("username"),
