@@ -1,7 +1,7 @@
 {
-  "version": "2.0.331",
-  "build": 639,
-  "applied_at": "2026-11-19T12:37:28+08:00",
-  "note": "无未读时也处理待回复入站",
-  "bundle_sha256": "4a0bbafd42c7809f6a5a2b5e81dcbe2eaf41b67d203cf94da7cd4ab1d72a5480"
+  "version": "2.0.332",
+  "build": 640,
+  "applied_at": "2026-11-19T12:57:04+08:00",
+  "note": "friend 不再被误判成群",
+  "bundle_sha256": "32b423cee3e9823ffb2e0e3a24f55dff9256848c1ddf835059fee12c6b5362a1"
 }
