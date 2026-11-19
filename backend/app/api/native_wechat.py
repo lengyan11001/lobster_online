@@ -1258,7 +1258,8 @@ async def native_wechat_db_chat_messages(
         except Exception as exc3:
             err += " | empty_ui_failed: " + str(exc3)[:120]
     items = []
-    for m in reversed(list(raw_messages)):
+    # 微信库本来就按最新在前返回；界面沿用旧接口的排序（新→旧），不要再反转。
+    for m in list(raw_messages):
         items.append(
             {
                 "id": str(m.get("id") or ""),
