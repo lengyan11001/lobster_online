@@ -1,7 +1,7 @@
 {
-  "version": "2.0.336",
-  "build": 644,
-  "applied_at": "2026-11-19T13:10:59+08:00",
-  "note": "UTF-8 修复：中文名不再乱码",
-  "bundle_sha256": "09b8d2d67650309a78025f0ba066e42475d22ce43da38df38258f88791daf687"
+  "version": "2.0.337",
+  "build": 645,
+  "applied_at": "2026-11-19T13:13:51+08:00",
+  "note": "回复路径不再用 wxauto4",
+  "bundle_sha256": "fad9f9352ca5efa6ef3989a660c9cc716d598ed21605011cadff75180a9bceb2"
 }
