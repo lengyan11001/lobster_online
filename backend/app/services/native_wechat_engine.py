@@ -15723,6 +15723,35 @@ def _sync_local_messages_once(
         except Exception:
             pass
     if not list(messages or []):
+        # 2026-11-19：wxauto4 的 ChatBox 在 UIA 点开会话后脱离（置顶会话全读不到），
+        # 用 replica 的 ChatWith + GetAllMessage 兜底读一次；返回纯 dict，直接进原管线。
+        try:
+            from . import wechat_transport_replica as _replica
+
+            if _replica.enabled():
+                _rep_read = _replica.read_messages(target or display_target, max_messages=50)
+                if _rep_read.get("messages"):
+                    messages = [dict(item) for item in _rep_read["messages"]]
+                    if isinstance(_rep_read.get("chat_info"), dict) and _rep_read["chat_info"]:
+                        info = _rep_read["chat_info"]
+                    _write_auto_reply_diagnostic(
+                        "replica_read_ok",
+                        account_id=diagnostic_account_id,
+                        run_id=diagnostic_run_id,
+                        target_peer_id=target,
+                        target_display_name=display_target,
+                        message_count=len(messages),
+                    )
+        except Exception as rep_exc:
+            _write_auto_reply_diagnostic(
+                "replica_read_failed",
+                account_id=diagnostic_account_id,
+                run_id=diagnostic_run_id,
+                target_peer_id=target,
+                target_display_name=display_target,
+                error=str(rep_exc)[:300],
+            )
+    if not list(messages or []):
         snapshot_info = _capture_wechat_read_failure_png(account_id)
         _write_auto_reply_diagnostic(
             "chat_read_empty",
@@ -23201,6 +23230,52 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
+    # 2026-11-19：微信 4.1.7+ 上 wxauto4 的发送动作无效（点发送后微信里没有这条消息）。
+    # 优先用 wechatauto-replica 的 SendMsg（真实输入 + 回车 + 数据库回读，实测 2.1s 成功）；
+    # 它明确失败时不再回退老链路，避免重复发送。LOBSTER_WECHAT_TRANSPORT=wxauto4 可切回。
+    try:
+        from . import wechat_transport_replica as _replica
+
+        if _replica.enabled():
+            try:
+                _rep_send = _replica.send_text(peer_id, text)
+            except Exception as rep_exc:
+                try:
+                    log_send_event(
+                        "reply_send_replica_failed",
+                        click_target=str(peer_id or ""),
+                        error=str(rep_exc)[:300],
+                    )
+                except Exception:
+                    pass
+                raise RuntimeError(f"replica 发送异常：{str(rep_exc)[:200]}") from rep_exc
+            if not _rep_send.get("ok"):
+                try:
+                    log_send_event(
+                        "reply_send_replica_unconfirmed",
+                        click_target=str(peer_id or ""),
+                        result=_rep_send,
+                    )
+                except Exception:
+                    pass
+                raise RuntimeError(f"replica 发送未确认：{_rep_send.get('raw')}")
+            try:
+                log_send_event(
+                    "reply_send_replica_ok",
+                    click_target=str(peer_id or ""),
+                    status=_rep_send.get("status"),
+                )
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "driver": "wechatauto_replica",
+                "peer_id": peer_id,
+                "replica": _rep_send,
+            }
+    except ImportError:
+        pass
+
     # 2026-11-18：恢复 2.0.278 的旧发送路由：不经过 robot，直接走引擎
     # 已验证的「打开会话 -> 粘贴 -> 点击发送按钮 -> 回读」链路。
     # 老代码 retry_on_failure=True 会在验证失败时重复打字，这里保持 False，
