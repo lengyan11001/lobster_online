@@ -1382,7 +1382,7 @@ window._openJuheWechatView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('juhe-wechat', {
       html: '/static/views/juhe-wechat.html?v=20260808-native-wechat-pagination-v1',
-      scripts: '/static/js/juhe-wechat.js?v=20260808-native-wechat-pagination-v1',
+      scripts: '/static/js/juhe-wechat.js?v=20261119-db-read-v7',
       cache: 'reload'
     });
   }
