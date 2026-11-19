@@ -593,13 +593,22 @@ async def native_wechat_contacts(
         return {"ok": False, "error": str(exc)[:200], "items": [], "count": 0, "total": 0}
     items = []
     kw = str(keyword or "").strip().lower()
+    # 2026-11-19：界面一次要看到全部（几千人），不受 100/200 的分页限制；
+    # 同时过滤掉没有任何名称的空行和系统账号。
+    limit = 8000
+    system_names = {"fmessage", "weixin", "filehelper", "brandsessionholder", "medianote",
+                    "notifymessage", "weibo", "qqmail", "floatbottle", "newsapp", "gh_"}
     for row in data.get("contacts") or []:
         username = str(row.get("username") or "").strip()
         if not username:
             continue
+        if username in system_names or username.startswith("gh_"):
+            continue
         nick = str(row.get("nick_name") or "").strip()
         remark = str(row.get("remark") or "").strip()
         alias = str(row.get("alias") or "").strip()
+        if not (nick or remark or alias):
+            continue
         if kw and kw not in nick.lower() and kw not in remark.lower() and kw not in alias.lower() and kw not in username.lower():
             continue
         if has_wx == "yes" and not alias:
