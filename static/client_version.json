@@ -1,7 +1,7 @@
 {
-  "version": "2.0.342",
-  "build": 650,
-  "applied_at": "2026-11-19T15:10:03+08:00",
-  "note": "会话列表也走本地库",
-  "bundle_sha256": "35544c92542e2f77332fdddcf8eb8efefea21cad0b3368e1ef6e24b36b4c8226"
+  "version": "2.0.343",
+  "build": 651,
+  "applied_at": "2026-11-19T15:18:56+08:00",
+  "note": "按游标只处理新消息",
+  "bundle_sha256": "4e422a6c2bd55e44791124df172d3972108e66fd80cc1a340fe2266326cdd96c"
 }
