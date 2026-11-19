@@ -5122,7 +5122,10 @@ def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> D
         if _looks_like_non_private_session_name(name):
             return {"action": "skip_group", "reason": "known_non_private_name"}
         if int(session.get("unread_count") or 0) <= 0:
-            return {"action": "skip", "reason": "no_unread"}
+            # 未读可能被我们自己上一轮打开会话时清掉了；库里还有"最后一条是对方、且没回过"
+            # 的会话照样要处理，不能只看微信的未读红点。
+            if not _latest_strict_auto_reply_candidate(account_id, peer_id):
+                return {"action": "skip", "reason": "no_unread"}
         if len(_peer_wxids_by_display_name(account_id, name)) > 1:
             return {"action": "skip", "reason": "ambiguous_display_name"}
         return {"action": "open", "reason": "replica_private_verify", "chat_type": "unknown"}
