@@ -5049,6 +5049,24 @@ def _replica_row_is_private(row: Dict[str, Any]) -> bool:
     return True
 
 
+def _peer_alias(account_id: str, peer_id: str) -> str:
+    """取这个联系人的"微信号"(contact.alias)——唯一，搜索时不会撞重名。"""
+    name = str(peer_id or "").strip()
+    if not name:
+        return ""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "select wx_no from wechat_contacts where account_id=? and (display_name=? or remark=? or contact_key=?) and wx_no<>'' limit 1",
+                (str(account_id or ""), name, name, name),
+            ).fetchone()
+        if row and str(row[0] or "").strip():
+            return str(row[0]).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _looks_like_non_private_session_name(name: str) -> bool:
     """会话名层面的非私聊判定：公众号/服务号/订阅号/文件传输助手/新闻/群都不该被打开。"""
     text = str(name or "").strip()
@@ -23669,7 +23687,9 @@ def _send_text_local_slow(
         from . import wechat_transport_replica as _replica
 
         if _replica.enabled():
-            _rep_send = _replica.send_text(peer_id, text)
+            # 优先用微信号(alias)发送：唯一，不会撞重名；没有 alias 再用显示名。
+            _send_key = _peer_alias(account_id, peer_id) or peer_id
+            _rep_send = _replica.send_text(_send_key, text)
             if _rep_send.get("ok"):
                 # 2026-11-19：replica 发送成功后必须落一条 outbound 记录 + 更新 peer，
                 # 否则 _latest_strict_auto_reply_candidate 仍认为"这条还没回"，
