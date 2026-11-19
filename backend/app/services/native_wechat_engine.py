@@ -11395,12 +11395,35 @@ def rebuild_local_messages_from_db(account_id: str, *, limit_per_chat: int = 20)
                 continue
     return {"ok": True, "removed": removed, "written": written}
 
-def resolve_peer_username(account_id: str, value: str) -> str:
-    """把界面传进来的名字映射成 username（聊天记录表按 username 建）。
+_PEER_NAME_CACHE: Dict[str, Any] = {"at": 0.0, "map": {}}
 
-    库里可能有历史脏行（peer_id 就是显示名），这里优先选真正的 username
-    （wxid_/自定义号/xxx@chatroom/gh_），选不到才原样返回。
-    """
+
+def _peer_name_map_from_db() -> Dict[str, str]:
+    """直接从微信库的 session.db 建"显示名→username"映射（不依赖我们的同步表）。"""
+    now = time.time()
+    cached = _PEER_NAME_CACHE.get("map") or {}
+    if cached and now - float(_PEER_NAME_CACHE.get("at") or 0) < 120:
+        return cached
+    mapping: Dict[str, str] = {}
+    try:
+        from . import wechat_transport_replica as _rt
+
+        data = _rt.sessions_db(2000)
+        for row in data.get("sessions") or []:
+            name = str(row.get("name") or "").strip()
+            username = str(row.get("username") or "").strip()
+            if name and username:
+                mapping[name] = username
+    except Exception:
+        mapping = {}
+    if mapping:
+        _PEER_NAME_CACHE["map"] = mapping
+        _PEER_NAME_CACHE["at"] = now
+    return mapping
+
+
+def resolve_peer_username(account_id: str, value: str) -> str:
+    """把界面传进来的名字映射成 username（聊天记录表按 username 建）。"""
     name = str(value or "").strip()
     if not name:
         return ""
@@ -11423,7 +11446,9 @@ def resolve_peer_username(account_id: str, value: str) -> str:
                 return candidate
     except Exception:
         pass
-    return name
+    # 本地同步表没有就直接问微信库
+    mapped = _peer_name_map_from_db().get(name)
+    return mapped or name
 
 
 def prime_messages_from_db(account_id: str, peer_username: str, *, limit: int = 50) -> Dict[str, Any]:
