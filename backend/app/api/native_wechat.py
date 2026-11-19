@@ -1053,3 +1053,54 @@ async def native_wechat_task_detail(
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     return {"ok": True, "task": task}
+
+@router.get("/api/native-wechat/db/friend-requests")
+async def native_wechat_db_friend_requests(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """好友申请（直接读微信本地库 general.db.FMessageTable）。"""
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        data = await asyncio.to_thread(_rt.friend_requests, limit)
+        return {"ok": True, **{k: v for k, v in data.items() if k != "ok"}}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+
+
+@router.get("/api/native-wechat/db/groups")
+async def native_wechat_db_groups(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        data = await asyncio.to_thread(_rt.groups)
+        return {"ok": True, **{k: v for k, v in data.items() if k != "ok"}}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+
+
+@router.get("/api/native-wechat/db/drafts")
+async def native_wechat_db_drafts(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    from ..services import wechat_transport_replica as _rt
+
+    if not _rt.enabled():
+        return {"ok": False, "error": "replica transport disabled"}
+    try:
+        data = await asyncio.to_thread(_rt.drafts, limit)
+        return {"ok": True, **{k: v for k, v in data.items() if k != "ok"}}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+

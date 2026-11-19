@@ -144,6 +144,27 @@ def list_sessions() -> List[Dict[str, Any]]:
     return list(res.get("sessions") or [])
 
 
+def groups() -> Dict[str, Any]:
+    res = _call("groups", timeout=60.0)
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "groups failed")[:300])
+    return res
+
+
+def group_members(chatroom: str) -> Dict[str, Any]:
+    res = _call("group_members", timeout=60.0, chatroom=str(chatroom))
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "group_members failed")[:300])
+    return res
+
+
+def drafts(limit: int = 50) -> Dict[str, Any]:
+    res = _call("drafts", timeout=20.0, max=int(limit))
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "drafts failed")[:300])
+    return res
+
+
 def contacts(limit: int = 5000) -> Dict[str, Any]:
     res = _call("contacts", timeout=90.0, max=int(limit))
     if not res.get("ok"):

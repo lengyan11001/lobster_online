@@ -96,6 +96,46 @@ def _friend_requests_db(limit: int = 50):
         break
     return {'ok': True, 'requests': out}
 
+
+def _groups_db():
+    db = _db()
+    try:
+        rows = db.get_groups() or []
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    return {"ok": True, "groups": rows}
+
+
+def _group_members_db(chatroom: str):
+    db = _db()
+    try:
+        rows = db.get_group_members(str(chatroom)) or []
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    return {"ok": True, "members": rows}
+
+
+def _drafts_db(limit: int = 50):
+    db = _db()
+    out = []
+    for rel, path, _ in db._db_files:
+        if not path.endswith('session.db'):
+            continue
+        conn = db._open(rel)
+        try:
+            cols = [r[1] for r in conn.execute('PRAGMA table_info(SessionDraft)')]
+            rows = conn.execute('SELECT * FROM SessionDraft LIMIT ?', (min(int(limit), 20),)).fetchall()
+        except Exception as exc:
+            conn.close()
+            return {"ok": False, "error": str(exc)[:200]}
+        finally:
+            try: conn.close()
+            except Exception: pass
+        for r in rows:
+            out.append({c: r[i] for i, c in enumerate(cols)})
+        break
+    return {"ok": True, "drafts": out}
+
 def _me():
     wx = _client()
     name = ""
@@ -161,10 +201,19 @@ _TYPE_MAP = {"文本": "text", "图片": "image", "语音": "voice", "视频": "
 
 def _db():
     global _DB
-    if _DB is None:
-        from wechatauto.db import WeChatDB
-        _DB = WeChatDB()
-    return _DB
+    if _DB is not None:
+        return _DB
+    last = None
+    for attempt in range(3):
+        try:
+            from wechatauto.db import WeChatDB
+            _DB = WeChatDB()
+            return _DB
+        except Exception as exc:
+            last = exc
+            # 微信正在 checkpoint 时解密校验会失败：等一秒重试
+            time.sleep(1.0 + attempt)
+    raise last
 
 
 def _history(peer_username: str, limit: int = 20):
@@ -254,6 +303,12 @@ def main() -> int:
                 res = _contacts_db(int(req.get("max") or 5000))
             elif op == "friend_requests":
                 res = _friend_requests_db(int(req.get("max") or 50))
+            elif op == "groups":
+                res = _groups_db()
+            elif op == "group_members":
+                res = _group_members_db(str(req.get("chatroom") or ""))
+            elif op == "drafts":
+                res = _drafts_db(int(req.get("max") or 50))
             elif op == "me":
                 res = _me()
             elif op == "sessions":
