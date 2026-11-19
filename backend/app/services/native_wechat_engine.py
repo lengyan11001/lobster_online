@@ -11396,7 +11396,11 @@ def rebuild_local_messages_from_db(account_id: str, *, limit_per_chat: int = 20)
     return {"ok": True, "removed": removed, "written": written}
 
 def resolve_peer_username(account_id: str, value: str) -> str:
-    """把界面传进来的显示名映射成 username（聊天记录表按 username 建）。"""
+    """把界面传进来的名字映射成 username（聊天记录表按 username 建）。
+
+    库里可能有历史脏行（peer_id 就是显示名），这里优先选真正的 username
+    （wxid_/自定义号/xxx@chatroom/gh_），选不到才原样返回。
+    """
     name = str(value or "").strip()
     if not name:
         return ""
@@ -11404,17 +11408,19 @@ def resolve_peer_username(account_id: str, value: str) -> str:
     try:
         with _connect() as conn:
             if account:
-                row = conn.execute(
-                    "select peer_id from wechat_peers where account_id=? and (peer_id=? or display_name=?) limit 1",
+                rows = conn.execute(
+                    "select peer_id from wechat_peers where account_id=? and (peer_id=? or display_name=?)",
                     (account, name, name),
-                ).fetchone()
+                ).fetchall()
             else:
-                row = conn.execute(
-                    "select peer_id from wechat_peers where peer_id=? or display_name=? limit 1",
+                rows = conn.execute(
+                    "select peer_id from wechat_peers where peer_id=? or display_name=?",
                     (name, name),
-                ).fetchone()
-        if row and str(row[0] or "").strip():
-            return str(row[0]).strip()
+                ).fetchall()
+        for row in rows:
+            candidate = str(row[0] or "").strip()
+            if candidate and candidate != name:
+                return candidate
     except Exception:
         pass
     return name
@@ -11548,6 +11554,16 @@ def sync_local_sessions_via_db(account_id: str, *, limit: int = 200) -> Dict[str
     now = _now_iso()
     written = 0
     with _connect() as conn:
+        # 清掉历史脏行：peer_id 等于显示名、又不是真正的微信号/群号/公众号
+        try:
+            conn.execute(
+                "delete from wechat_peers where account_id=? and peer_id = display_name "
+                "and peer_id not like 'wxid_%' and peer_id not like '%@chatroom' and peer_id not like 'gh_%' "
+                "and peer_id not like '%@%'",
+                (account_id,),
+            )
+        except Exception:
+            pass
         for row in rows:
             username = str(row.get("username") or "").strip()
             if not username or username == self_user:
