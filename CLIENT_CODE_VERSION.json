@@ -1,7 +1,7 @@
 {
-  "version": "2.0.330",
-  "build": 638,
-  "applied_at": "2026-11-19T12:30:50+08:00",
-  "note": "读消息走 replica，不再建 wxauto 客户端",
-  "bundle_sha256": "6f3a14e05834f4d3717ade7ce7095fd72223ea2b446d0f48179f436c82fb9423"
+  "version": "2.0.331",
+  "build": 639,
+  "applied_at": "2026-11-19T12:37:28+08:00",
+  "note": "无未读时也处理待回复入站",
+  "bundle_sha256": "4a0bbafd42c7809f6a5a2b5e81dcbe2eaf41b67d203cf94da7cd4ab1d72a5480"
 }
