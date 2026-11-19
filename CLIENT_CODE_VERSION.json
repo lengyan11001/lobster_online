@@ -1,7 +1,7 @@
 {
-  "version": "2.0.347",
-  "build": 655,
-  "applied_at": "2026-11-19T15:38:06+08:00",
-  "note": "同步后展示好友申请",
-  "bundle_sha256": "da810d6d3bcdf99d52fe49788f535657f09413a688cf680135f6f8b3266ba34a"
+  "version": "2.0.348",
+  "build": 656,
+  "applied_at": "2026-11-19T15:41:32+08:00",
+  "note": "好友申请按库判定 + alias 发送",
+  "bundle_sha256": "3f4218df78d116103daa229f2d6ea755d47d5fdaa847f74aae0ed9f409eea983"
 }
