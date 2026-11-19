@@ -5438,6 +5438,49 @@ async def run_auto_reply_once(
             _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
             limit=5,
         )
+        # 2026-11-19：好友申请也先查本地库（general.db.FMessageTable）。
+        # 没有新的待处理申请就不拉界面、不点"新朋友"。
+        _fr_max_ts = 0
+        if check_friend_requests:
+            try:
+                from . import wechat_transport_replica as _rt_fr
+
+                if _rt_fr.enabled():
+                    _fr_data = await asyncio.to_thread(_rt_fr.friend_requests, 50)
+                    _fr_rows = [
+                        r for r in (_fr_data.get("requests") or [])
+                        if str(r.get("is_sender") or "0") != "1"
+                    ]
+                    for _r in _fr_rows:
+                        try:
+                            _fr_max_ts = max(_fr_max_ts, int(_r.get("timestamp") or 0))
+                        except Exception:
+                            pass
+                    with _connect() as _fc:
+                        _fc.execute(
+                            "create table if not exists wechat_friend_request_cursor("
+                            "account_id text primary key, last_ts integer not null)"
+                        )
+                        _frow = _fc.execute(
+                            "select last_ts from wechat_friend_request_cursor where account_id=?",
+                            (account_id,),
+                        ).fetchone()
+                    _fcur = int(_frow[0]) if _frow else int(time.time()) - 3600
+                    _new_reqs = [
+                        r for r in _fr_rows
+                        if int(r.get("timestamp") or 0) > _fcur
+                    ]
+                    log_event(
+                        "friend_request_check",
+                        cursor=_fcur,
+                        total=len(_fr_rows),
+                        new=len(_new_reqs),
+                    )
+                    if not _new_reqs:
+                        check_friend_requests = False
+            except Exception as _fr_exc:
+                log_event("friend_request_probe_failed", error=str(_fr_exc)[:200])
+
         if check_friend_requests:
             try:
                 friend_requests = await _run_local_wechat_async(
@@ -5466,6 +5509,16 @@ async def run_auto_reply_once(
             except Exception as friend_exc:
                 result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
                 result["friend_requests_failed"] = 1
+        if _fr_max_ts:
+            try:
+                with _connect() as _fc:
+                    _fc.execute(
+                        "insert into wechat_friend_request_cursor(account_id, last_ts) values(?,?) "
+                        "on conflict(account_id) do update set last_ts=excluded.last_ts",
+                        (account_id, int(_fr_max_ts)),
+                    )
+            except Exception:
+                pass
         if _auto_reply_stop_requested(account_id):
             result["stop_reason"] = "cancelled"
             log_event(
