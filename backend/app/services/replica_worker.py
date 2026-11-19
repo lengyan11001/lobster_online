@@ -62,6 +62,64 @@ def _sessions():
     return {"ok": True, "sessions": out}
 
 
+def _scroll_chat_to_bottom(times: int = 6) -> None:
+    """把聊天记录滚到最底部：replica 的 GetAllMessage 只读当前渲染出来的那一屏，"""
+    """不滚到底就会一直读到靠上的旧消息（新消息永远看不到）。"""
+    try:
+        import time as _time
+        import win32api
+        import win32con
+        import win32gui
+        wx = _client()
+        hwnd = int(getattr(wx, "HWND", 0) or 0)
+        if not hwnd:
+            ctrl = getattr(wx, "control", None)
+            hwnd = int(getattr(ctrl, "NativeWindowHandle", 0) or 0)
+        if not hwnd:
+            return
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        x = left + int((right - left) * 0.62)
+        y = top + int((bottom - top) * 0.55)
+        win32api.SetCursorPos((x, y))
+        _time.sleep(0.15)
+        for _ in range(max(1, int(times))):
+            win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0, -1200, 0)
+            _time.sleep(0.18)
+    except Exception:
+        return
+
+
+_DB = None
+_TYPE_MAP = {"文本": "text", "图片": "image", "语音": "voice", "视频": "video", "文件": "file", "链接": "link"}
+
+
+def _db():
+    global _DB
+    if _DB is None:
+        from wechatauto.db import WeChatDB
+        _DB = WeChatDB()
+    return _DB
+
+
+def _history(peer_username: str, limit: int = 20):
+    db = _db()
+    self_name = str((db.get_self_info() or {}).get("username") or "")
+    rows = db.get_messages(str(peer_username), limit=max(1, int(limit)))
+    out = []
+    for m in rows:
+        sender = str(m.get("sender_username") or "")
+        out.append({
+            "type": _TYPE_MAP.get(str(m.get("type") or ""), "text"),
+            "content": str(m.get("content") or ""),
+            "attr": "self" if sender and sender == self_name else "friend",
+            "sender": sender,
+            "id": "%s:%s" % (m.get("shard") or "", m.get("local_id")),
+            "hash": "%s:%s" % (m.get("shard") or "", m.get("local_id")),
+            "time": "",
+            "create_time": m.get("create_time"),
+        })
+    return {"ok": True, "self": self_name, "messages": out}
+
 def _read(peer: str, max_messages: int = 50):
     wx = _client()
     current = ""
@@ -128,6 +186,8 @@ def main() -> int:
                 res = _me()
             elif op == "sessions":
                 res = _sessions()
+            elif op == "history":
+                res = _history(str(req.get("peer") or ""), int(req.get("max") or 20))
             elif op == "read":
                 res = _read(str(req.get("peer") or ""), int(req.get("max") or 50))
             elif op == "send":

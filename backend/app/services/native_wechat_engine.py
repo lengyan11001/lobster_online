@@ -5753,6 +5753,7 @@ async def run_auto_reply_once(
                                 "expected_display_name": display_name,
                                 "nickname_identity": True,
                                 "collection_target_source": "uia_session_row_chatwith",
+                                "replica_username": str(session.get("_replica_username") or ""),
                             },
                         )
                     elif not scanned_wechat_id:
@@ -15529,7 +15530,17 @@ def _sync_local_messages_via_replica(
     peer = str(peer_id or "").strip()
     if not peer:
         return None
-    rep = _rt.read_messages(peer, max_messages=50)
+    _username = str(diagnostic_context.get("replica_username") or "").strip()
+    rep = None
+    if _username:
+        try:
+            rep = _rt.history(_username, limit=20)
+            _write_auto_reply_diagnostic("replica_history_ok", peer_id=peer, message_count=len(rep.get("messages") or []))
+        except Exception as _hist_exc:
+            _write_auto_reply_diagnostic("replica_history_failed", peer_id=peer, error=str(_hist_exc)[:200])
+            rep = None
+    if rep is None:
+        rep = _rt.read_messages(peer, max_messages=50)
     raw_messages = [dict(item) for item in (rep.get("messages") or [])]
     info = dict(rep.get("chat_info") or {})
     if not raw_messages:
