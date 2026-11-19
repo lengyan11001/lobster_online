@@ -1,136 +1,139 @@
-"""wechatauto-replica 传输层（Apache-2.0，vendor 在 backend/app/vendor/wechatauto）。
+"""replica 传输层（wechatauto-replica，Apache-2.0，vendor 在 backend/app/vendor/wechatauto）。
 
-为什么需要它（2026-11-19 本机实测，微信 4.1.7.59）：
-- wxauto4 的发送在 4.1.7+ 上无效：点发送后微信里没有这条消息（引擎报"未确认发出"）；
-  replica 的 SendMsg 走真实输入 + 回车 + 数据库回读，同会话 2.1s、跨会话 13s，成功。
-- wxauto4 的 ChatBox 在 UIA 点开会话后会脱离：ChatInfo 正常、GetAllMessage() 恒 0；
-  replica 的 ChatWith + GetAllMessage 能读（50 条 0.4s）。
-- replica 的 GetSession 0.1s 返回全部会话并带 unread 未读数，可替代"挨个点开"的扫描。
+2026-11-19 关键结论：replica 和 wxauto4 **不能在同一进程里同时驱动同一个微信窗口**，
+实测会互相锁死（wxauto4 抛 I/O operation on closed file / last_step=scan:client_cached 卡 45s）。
+所以 replica 跑在**独立子进程**（replica_worker.py），主进程只发 JSON 行请求：
+两边各自持有 COM/UIA，互不干扰；sidecar 崩了只重启它。
 
-开关：LOBSTER_WECHAT_TRANSPORT=replica|wxauto4（默认 replica；import 失败自动回退）。
+只接管三类操作：会话列表（带未读）、读消息、发消息。
+通讯录/群成员/发文件/朋友圈/诊断仍然走 wxauto4，不受影响。
+
+开关：LOBSTER_WECHAT_TRANSPORT=replica|wxauto4（默认 replica；启动失败自动回落 wxauto4）。
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import subprocess
 import sys
 import threading
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
-_CLIENT: Any = None
-_LOAD_ERROR = ""
+_PROC: Optional[subprocess.Popen] = None
+_SEQ = 0
+_LAST_START_AT = 0.0
+_START_FAILURES = 0
 
-_TRUTHY_DISABLE = {"0", "off", "false", "no", "wxauto4", "legacy", "disabled"}
-
-
-def _vendor_path() -> str:
-    # backend/app/services/wechat_transport_replica.py -> backend/app/vendor
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vendor")
+_DISABLE = {"0", "off", "false", "no", "wxauto4", "legacy", "disabled"}
 
 
 def enabled() -> bool:
     flag = (os.environ.get("LOBSTER_WECHAT_TRANSPORT") or "replica").strip().lower()
-    return flag not in _TRUTHY_DISABLE
+    return flag not in _DISABLE
 
 
-def load_error() -> str:
-    return _LOAD_ERROR
+def _worker_script() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "replica_worker.py")
 
 
-def _import_wechat():
-    global _LOAD_ERROR
-    vendor = _vendor_path()
-    if vendor not in sys.path:
-        sys.path.insert(0, vendor)
-    try:
-        from wechatauto import WeChat  # type: ignore
-    except Exception as exc:  # pragma: no cover - 环境相关
-        _LOAD_ERROR = str(exc)[:300]
-        raise
-    return WeChat
+def _ensure_proc() -> subprocess.Popen:
+    global _PROC, _LAST_START_AT, _START_FAILURES
+    if _PROC is not None and _PROC.poll() is None:
+        return _PROC
+    now = time.time()
+    if _START_FAILURES >= 3 and now - _LAST_START_AT < 120:
+        raise RuntimeError("replica sidecar 连续启动失败，暂停 120s")
+    _LAST_START_AT = now
+    creation = 0
+    if os.name == "nt":
+        creation = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.Popen(
+        [sys.executable, _worker_script()],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        cwd=os.path.dirname(_worker_script()),
+        creationflags=creation,
+        text=True,
+        encoding="utf-8",
+        bufsize=1,
+    )
+    _PROC = proc
+    return proc
 
 
-def client():
-    global _CLIENT, _LOAD_ERROR
+def _call(op: str, timeout: float = 120.0, **payload: Any) -> Dict[str, Any]:
+    global _SEQ, _PROC, _START_FAILURES
     with _LOCK:
-        if _CLIENT is not None:
-            return _CLIENT
-        WeChat = _import_wechat()
-        _CLIENT = WeChat(resize=False)
-        return _CLIENT
+        proc = _ensure_proc()
+        _SEQ += 1
+        rid = _SEQ
+        req = {"id": rid, "op": op, **payload}
+        try:
+            assert proc.stdin and proc.stdout
+            proc.stdin.write(json.dumps(req, ensure_ascii=False) + "\n")
+            proc.stdin.flush()
+        except Exception:
+            _PROC = None
+            raise
+        deadline = time.time() + max(1.0, float(timeout))
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                _PROC = None
+                raise RuntimeError("replica sidecar 退出")
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                res = json.loads(line)
+            except Exception:
+                continue
+            if int(res.get("id") or 0) != rid:
+                continue
+            _START_FAILURES = 0
+            return res
+        _PROC = None
+        raise TimeoutError("replica sidecar 超时")
 
 
 def reset() -> None:
-    global _CLIENT
+    global _PROC
     with _LOCK:
-        _CLIENT = None
-
-
-def _resp_field(resp: Any, key: str) -> str:
-    if isinstance(resp, dict):
-        return str(resp.get(key) or "")
-    try:
-        return str(getattr(resp, key, "") or "")
-    except Exception:
-        return ""
-
-
-def send_text(peer: str, text: str) -> Dict[str, Any]:
-    """发一条文本。返回 {ok, status, raw}；不吞异常（调用方决定是否重试）。"""
-    with _LOCK:
-        wx = client()
-        resp = wx.SendMsg(str(text), who=str(peer), exact=True)
-    status = _resp_field(resp, "status")
-    ok = status == "成功" or status.lower() in {"ok", "success"} or bool(_resp_field(resp, "ok") == "True")
-    return {
-        "ok": bool(ok),
-        "status": status,
-        "driver": "wechatauto_replica",
-        "peer_id": str(peer),
-        "raw": str(resp)[:300],
-    }
+        if _PROC is not None and _PROC.poll() is None:
+            try:
+                _PROC.kill()
+            except Exception:
+                pass
+        _PROC = None
 
 
 def list_sessions() -> List[Dict[str, Any]]:
-    """全部会话 + 未读数（实测 50 条 0.1s）。"""
-    with _LOCK:
-        wx = client()
-        items = wx.GetSession() or []
-    out: List[Dict[str, Any]] = []
-    for item in items:
-        try:
-            name = str(getattr(item, "name", "") or "").strip()
-            unread = int(getattr(item, "unread", 0) or 0)
-        except Exception:
-            continue
-        if name:
-            out.append({"name": name, "unread": unread})
-    return out
+    res = _call("sessions", timeout=60.0)
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "sessions failed")[:300])
+    return list(res.get("sessions") or [])
 
 
 def read_messages(peer: str, *, max_messages: int = 50) -> Dict[str, Any]:
-    """打开会话并读最近消息（返回纯 dict，可直接喂给引擎的 _persist_message_obj）。"""
-    with _LOCK:
-        wx = client()
-        wx.ChatWith(str(peer), exact=True)
-        msgs = list(wx.GetAllMessage() or [])
-        info: Dict[str, Any] = {}
-        try:
-            info = dict(wx.ChatInfo() or {})
-        except Exception:
-            pass
-    raw: List[Dict[str, Any]] = []
-    for msg in msgs[-max(1, int(max_messages)):]:
-        item: Dict[str, Any] = {}
-        for attr in ("type", "content", "sender", "id", "hash", "hash_text", "attr", "time"):
-            try:
-                item[attr] = getattr(msg, attr)
-            except Exception:
-                continue
-        if item:
-            raw.append(item)
-    return {"ok": True, "chat_info": info, "messages": raw}
+    res = _call("read", timeout=180.0, peer=str(peer), max=int(max_messages))
+    if not res.get("ok"):
+        raise RuntimeError(str(res.get("error") or "read failed")[:300])
+    return res
+
+
+def send_text(peer: str, text: str) -> Dict[str, Any]:
+    res = _call("send", timeout=180.0, peer=str(peer), text=str(text))
+    return {
+        "ok": bool(res.get("ok")),
+        "status": str(res.get("status") or ""),
+        "driver": "wechatauto_replica",
+        "peer_id": str(peer),
+        "raw": str(res.get("raw") or res.get("error") or "")[:300],
+    }

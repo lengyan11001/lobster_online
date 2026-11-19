@@ -35,9 +35,6 @@ from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 日志写失败（句柄被关/磁盘抖动）不允许冒泡成业务异常。
-logging.raiseExceptions = False
-
 ROOT_DIR = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT_DIR / "openclaw" / "openclaw-weixin"
 ACCOUNTS_DIR = STATE_DIR / "accounts"
@@ -180,10 +177,6 @@ _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
 _LOCAL_WECHAT_WINDOW_SIGNATURE: tuple[int, int] = (0, 0)
 _LOCAL_WECHAT_DRIVER_RECOVERY: Dict[str, Dict[str, Any]] = {}
 _LOCAL_WXAUTO4_CLIENTS: Dict[tuple[str, int], Any] = {}
-
-# 2026-11-19：每轮开始时用 replica 的 GetSession 刷新「谁有未读」，
-# 没有未读、库里也没有待回复消息的会话直接不打开（用户：没消息的人搜出来干啥）。
-_AUTO_REPLY_UNREAD_HINTS: Dict[str, Dict[str, int]] = {}
 # Accounts doing an automatic-takeover scan use wxauto4's precise timestamps.
 # The public sync_local_sessions API keeps its existing UIA behavior.
 _AUTO_REPLY_TIME_SCAN_ACCOUNTS: set[str] = set()
@@ -5171,18 +5164,6 @@ async def run_auto_reply_once(
     # 每轮先把被挪到屏幕外的微信主窗口拉回来：窗口在 -32000 时 UIA 能读到控件树，
     # 但点击落空、wxauto 读消息恒为空（线上 19:52 之后所有会话 scan_capture_missing）。
     try:
-        from . import wechat_transport_replica as _replica_hint
-
-        if _replica_hint.enabled():
-            _hint_sessions = _replica_hint.list_sessions()
-            _AUTO_REPLY_UNREAD_HINTS[account_id] = {
-                item["name"]: int(item.get("unread") or 0) for item in _hint_sessions if item.get("name")
-            }
-            log_event("unread_hint_loaded", count=len(_AUTO_REPLY_UNREAD_HINTS[account_id]))
-    except Exception as _hint_exc:
-        log_event("unread_hint_failed", error=str(_hint_exc)[:200])
-
-    try:
         _main_hwnd = _local_wechat_hwnd(account_id)
         if _main_hwnd:
             _onscreen = _ensure_local_wechat_on_screen(_main_hwnd)
@@ -5497,27 +5478,6 @@ async def run_auto_reply_once(
             # 2026-11-19 提速：会话列表的预览就是对方/自己最后一句。没有未读、且预览
             # 和我们库里最后一条（已发出）一致 -> 这条没有任何新消息，不用打开会话。
             # 以前不管有没有新消息都点一遍，14 个会话光扫描就要 67 秒。
-            _hints = _AUTO_REPLY_UNREAD_HINTS.get(account_id) or {}
-            if _hints:
-                _unread_hint = int(_hints.get(display_name, 0) or 0)
-                if _unread_hint <= 0 and not _latest_strict_auto_reply_candidate(account_id, peer_id):
-                    result["skipped"] += 1
-                    result["items"].append(
-                        {
-                            "peer_id": peer_id,
-                            "display_name": display_name,
-                            "status": "no_unread",
-                            "skip_reason": "no_new_message",
-                        }
-                    )
-                    log_event(
-                        "session_skipped",
-                        peer_id=peer_id,
-                        display_name=display_name,
-                        status="no_unread",
-                        reason="no_new_message",
-                    )
-                    continue
             if not int(session.get("unread_count") or 0) and str(session.get("last_content") or "").strip():
                 _cached_latest = _latest_message_record(account_id, peer_id, include_system=False)
                 if (
@@ -10889,14 +10849,6 @@ def _capture_auto_reply_scan_page(
                 session_time_reliable=bool(reliability.get("reliable")),
             )
             continue
-        # 2026-11-19：replica 的 GetSession 给了未读数；没有未读、库里也没有待回复入站
-        # 的会话，扫描阶段连点都不用点（用户：没消息的人搜出来干啥）。
-        _scan_hints = _AUTO_REPLY_UNREAD_HINTS.get(account_id) or {}
-        if _scan_hints:
-            _scan_unread = int(_scan_hints.get(display_name, 0) or 0)
-            if _scan_unread <= 0 and not _latest_strict_auto_reply_candidate(account_id, peer_id):
-                capture_skip("no_unread")
-                continue
         # 2026-11-19 提速：没有未读、且列表预览和我们库里最后一条（已发出）一致
         # -> 这条没有任何新消息，不用点开它（以前 14 个会话挨个点一遍要 67 秒）。
         if (
@@ -15445,12 +15397,6 @@ def _sync_local_messages_once(
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
     display_target = _session_display_name(target)
-    # 2026-11-19 提速：目标的显示名（不是 wxid）时，直接用 ChatWith(显示名) 打开
-    # （实测 0.5s），不再走"搜联系人→开资料卡→读号→关卡"的 14s 重链路；
-    # 打开后仍会用会话名核对，名字不一致就不发。
-    _name_open_target = str(diagnostic_context.get("expected_display_name") or display_target or "").strip()
-    prefer_name_open = bool(_name_open_target) and not _looks_like_wechat_id(_name_open_target)
-
     diagnostic_context = dict(diagnostic_context or {})
     diagnostic_account_id = str(diagnostic_context.get("account_id") or account_id)
     diagnostic_run_id = str(diagnostic_context.get("run_id") or "")
@@ -15461,16 +15407,11 @@ def _sync_local_messages_once(
     # 读不到号但按昵称身份执行时，也走"搜索联系人再核对"这条路：先按显示名搜，
     # 搜到后同样会用名字核对当前会话，选错人会直接判定为会话不一致。
     nickname_identity = bool(diagnostic_context.get("nickname_identity"))
-    # 2026-11-19：只有拿到真实微信号（wxid）时才值得走"搜联系人→开资料卡→读号→关卡"
-    # 这条重链路（实测 14s/条）。按昵称回复的会话在采集阶段已经用 ChatWith 打开并核对过
-    # 名字，这里直接用 ChatWith 重开 + 名字校验即可（0.5s），不再每轮去翻资料卡。
     use_verified_contact_search = bool(
         target
         and not current_selected
         and str(diagnostic_context.get("stage") or "").strip().lower() == "execute"
-        and _looks_like_wechat_id(target)
-        and not nickname_identity
-        and not prefer_name_open
+        and (nickname_identity or _looks_like_wechat_id(target))
     )
     click_mode = (
         "verified_contact_search"
@@ -15556,7 +15497,7 @@ def _sync_local_messages_once(
             elif select_via_uia:
                 _open_local_session_by_uia(account_id, target, max_rounds=uia_session_max_rounds)
             else:
-                wx.ChatWith((_name_open_target if prefer_name_open else target), exact=True, force=False)
+                wx.ChatWith(target, exact=True, force=False)
                 time.sleep(random.uniform(0.45, 0.9))
         except Exception as exc:
             _write_auto_reply_diagnostic(
@@ -15665,21 +15606,7 @@ def _sync_local_messages_once(
                 time.sleep(0.3)
         except Exception:
             pass
-    try:
-        messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
-    except Exception as read_exc:
-        # 2026-11-19 线上：wxauto4 日志句柄被关掉后读消息抛
-        # "I/O operation on closed file"，整轮被判失败。这里不再让它拖垮会话，
-        # 记一条诊断后走下面的 replica 兜底读。
-        _write_auto_reply_diagnostic(
-            "wxauto_read_failed",
-            account_id=diagnostic_account_id,
-            run_id=diagnostic_run_id,
-            target_peer_id=target,
-            target_display_name=display_target,
-            error=str(read_exc)[:300],
-        )
-        messages = []
+    messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
     if select_via_uia and not list(messages or []):
         # 2026-11-18 本机实测：外部 UIA 点击切会话后，这个常驻 wxauto 客户端的
         # ChatBox 会脱离当前会话 —— ChatInfo 能读到新会话名，但 GetAllMessage()
@@ -15795,35 +15722,6 @@ def _sync_local_messages_once(
                 messages = list(wx.GetAllMessage() or [])
         except Exception:
             pass
-    if not list(messages or []):
-        # 2026-11-19：wxauto4 的 ChatBox 在 UIA 点开会话后脱离（置顶会话全读不到），
-        # 用 replica 的 ChatWith + GetAllMessage 兜底读一次；返回纯 dict，直接进原管线。
-        try:
-            from . import wechat_transport_replica as _replica
-
-            if _replica.enabled():
-                _rep_read = _replica.read_messages(target or display_target, max_messages=50)
-                if _rep_read.get("messages"):
-                    messages = [dict(item) for item in _rep_read["messages"]]
-                    if isinstance(_rep_read.get("chat_info"), dict) and _rep_read["chat_info"]:
-                        info = _rep_read["chat_info"]
-                    _write_auto_reply_diagnostic(
-                        "replica_read_ok",
-                        account_id=diagnostic_account_id,
-                        run_id=diagnostic_run_id,
-                        target_peer_id=target,
-                        target_display_name=display_target,
-                        message_count=len(messages),
-                    )
-        except Exception as rep_exc:
-            _write_auto_reply_diagnostic(
-                "replica_read_failed",
-                account_id=diagnostic_account_id,
-                run_id=diagnostic_run_id,
-                target_peer_id=target,
-                target_display_name=display_target,
-                error=str(rep_exc)[:300],
-            )
     if not list(messages or []):
         snapshot_info = _capture_wechat_read_failure_png(account_id)
         _write_auto_reply_diagnostic(
@@ -23303,49 +23201,21 @@ def _send_text_local_slow(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
-    # 2026-11-19：微信 4.1.7+ 上 wxauto4 的发送动作无效（点发送后微信里没有这条消息）。
-    # 优先用 wechatauto-replica 的 SendMsg（真实输入 + 回车 + 数据库回读，实测 2.1s 成功）；
-    # 它明确失败时不再回退老链路，避免重复发送。LOBSTER_WECHAT_TRANSPORT=wxauto4 可切回。
+    # 2026-11-19：新传输层只接管"发消息"这一步。微信 4.1.7+ 上 wxauto4 点发送后
+    # 微信里没有这条消息（引擎只会报"未确认发出"）；replica 的 SendMsg 实测 2.1s 成功。
+    # 其它流程（扫描/打开/读消息/校验）保持原样，不在这里改。
     try:
         from . import wechat_transport_replica as _replica
 
         if _replica.enabled():
-            try:
-                _rep_send = _replica.send_text(peer_id, text)
-            except Exception as rep_exc:
+            _rep_send = _replica.send_text(peer_id, text)
+            if _rep_send.get("ok"):
                 try:
-                    log_send_event(
-                        "reply_send_replica_failed",
-                        click_target=str(peer_id or ""),
-                        error=str(rep_exc)[:300],
-                    )
+                    log_send_event("reply_send_replica_ok", click_target=str(peer_id or ""), status=_rep_send.get("status"))
                 except Exception:
                     pass
-                raise RuntimeError(f"replica 发送异常：{str(rep_exc)[:200]}") from rep_exc
-            if not _rep_send.get("ok"):
-                try:
-                    log_send_event(
-                        "reply_send_replica_unconfirmed",
-                        click_target=str(peer_id or ""),
-                        result=_rep_send,
-                    )
-                except Exception:
-                    pass
-                raise RuntimeError(f"replica 发送未确认：{_rep_send.get('raw')}")
-            try:
-                log_send_event(
-                    "reply_send_replica_ok",
-                    click_target=str(peer_id or ""),
-                    status=_rep_send.get("status"),
-                )
-            except Exception:
-                pass
-            return {
-                "ok": True,
-                "driver": "wechatauto_replica",
-                "peer_id": peer_id,
-                "replica": _rep_send,
-            }
+                return {"ok": True, "driver": "wechatauto_replica", "peer_id": peer_id, "replica": _rep_send}
+            raise RuntimeError(f"replica 发送未确认：{_rep_send.get('raw')}")
     except ImportError:
         pass
 
