@@ -15442,6 +15442,12 @@ def _sync_local_messages_once(
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
     display_target = _session_display_name(target)
+    # 2026-11-19 提速：目标的显示名（不是 wxid）时，直接用 ChatWith(显示名) 打开
+    # （实测 0.5s），不再走"搜联系人→开资料卡→读号→关卡"的 14s 重链路；
+    # 打开后仍会用会话名核对，名字不一致就不发。
+    _name_open_target = str(diagnostic_context.get("expected_display_name") or display_target or "").strip()
+    prefer_name_open = bool(_name_open_target) and not _looks_like_wechat_id(_name_open_target)
+
     diagnostic_context = dict(diagnostic_context or {})
     diagnostic_account_id = str(diagnostic_context.get("account_id") or account_id)
     diagnostic_run_id = str(diagnostic_context.get("run_id") or "")
@@ -15452,11 +15458,16 @@ def _sync_local_messages_once(
     # 读不到号但按昵称身份执行时，也走"搜索联系人再核对"这条路：先按显示名搜，
     # 搜到后同样会用名字核对当前会话，选错人会直接判定为会话不一致。
     nickname_identity = bool(diagnostic_context.get("nickname_identity"))
+    # 2026-11-19：只有拿到真实微信号（wxid）时才值得走"搜联系人→开资料卡→读号→关卡"
+    # 这条重链路（实测 14s/条）。按昵称回复的会话在采集阶段已经用 ChatWith 打开并核对过
+    # 名字，这里直接用 ChatWith 重开 + 名字校验即可（0.5s），不再每轮去翻资料卡。
     use_verified_contact_search = bool(
         target
         and not current_selected
         and str(diagnostic_context.get("stage") or "").strip().lower() == "execute"
-        and (nickname_identity or _looks_like_wechat_id(target))
+        and _looks_like_wechat_id(target)
+        and not nickname_identity
+        and not prefer_name_open
     )
     click_mode = (
         "verified_contact_search"
@@ -15542,7 +15553,7 @@ def _sync_local_messages_once(
             elif select_via_uia:
                 _open_local_session_by_uia(account_id, target, max_rounds=uia_session_max_rounds)
             else:
-                wx.ChatWith(target, exact=True, force=False)
+                wx.ChatWith((_name_open_target if prefer_name_open else target), exact=True, force=False)
                 time.sleep(random.uniform(0.45, 0.9))
         except Exception as exc:
             _write_auto_reply_diagnostic(
