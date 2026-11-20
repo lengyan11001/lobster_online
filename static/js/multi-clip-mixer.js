@@ -950,6 +950,10 @@
     if (unified) unified.hidden = per;
     box.hidden = !per;
     if (!per) return;
+    if (!state.clips.length) {
+      box.innerHTML = '<div style="font-size:12px;opacity:.65;">先添加素材，再逐段填写标题/文案。</div>';
+      return;
+    }
     box.innerHTML = state.clips.map(function(clip, index) {
       return '<div class="mcm-seg-text-row" data-clip-index="' + index + '" style="border-top:1px dashed rgba(255,255,255,.14);margin-top:.7rem;padding-top:.7rem;">'
         + '<div class="mcm-seg-text-head" style="display:flex;gap:.5rem;align-items:baseline;margin-bottom:.35rem;"><strong>第 ' + (index + 1) + ' 段</strong><span style="opacity:.65;font-size:.85em;">' + escapeHtml(clip.name || '') + '</span></div>'
@@ -1972,15 +1976,22 @@
       var shanjianTitleStep = $('mcmTitleStepLabel');
       if (shanjianTitlePanel) shanjianTitlePanel.hidden = false;
       if (shanjianTitleStep) shanjianTitleStep.hidden = false;
+      var shanjianDesc = $('mcmShanjianDescription');
+      if (shanjianDesc && shanjianDesc.closest('.mcm-overlay-field')) shanjianDesc.closest('.mcm-overlay-field').hidden = false;
+      renderSegmentTextInputs();
       renderShanjianTemplateCapabilities();
       return;
     }
     if (shanjianPanel) shanjianPanel.hidden = true;
-    // 定制模板：不再用「标题/文案」，只按模板的每个文字位置单独编辑
+    // 定制模板：主标题仍由「标题与文案」面板提供（模板 title 槽取这里的值），
+    // 每段模式也需要逐段标题输入，所以这个面板始终保留；只隐藏不适用的介绍文案。
     var titlePanel = $('mcmTemplateTitlePanel');
     var titleStep = $('mcmTitleStepLabel');
-    if (titlePanel) titlePanel.hidden = true;
-    if (titleStep) titleStep.hidden = true;
+    if (titlePanel) titlePanel.hidden = false;
+    if (titleStep) titleStep.hidden = false;
+    var localDesc = $('mcmShanjianDescription');
+    if (localDesc && localDesc.closest('.mcm-overlay-field')) localDesc.closest('.mcm-overlay-field').hidden = true;
+    renderSegmentTextInputs();
     var titleField = templateTitleField(state.selectedTemplate);
     var titleKey = titleField ? String(titleField.key || '').trim() : '';
     var fields = templateOverlayFields(state.selectedTemplate).filter(function(field) {
@@ -3407,6 +3418,7 @@
       var el = $(id);
       if (el) el.addEventListener('change', function() {
         renderClips();
+        renderTemplateOverlayFields();
       });
     });
     if ($('mcmClipList')) $('mcmClipList').addEventListener('click', function(event) {
