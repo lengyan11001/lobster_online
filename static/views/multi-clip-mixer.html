@@ -93,6 +93,12 @@
             <span class="mcm-template-tag-list" id="mcmFillModeList"></span>
             <span class="mcm-template-category-hint" id="mcmFillModeHint"></span>
           </div>
+          <div class="mcm-subtitle">文案方式</div>
+          <div class="mcm-provider-row" id="mcmTextModeRow">
+            <label><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked><span>统一标题/文案</span></label>
+            <label><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"><span>每段标题/文案</span></label>
+          </div>
+          <div id="mcmSegmentTextList" hidden></div>
           <div class="mcm-subtitle">模板</div>
           <label class="mcm-setting-row" for="mcmTemplateSwitch">
             <span><strong>套用定制模板</strong><small>先完成片段拼接，再使用模板定制能力生成成片。</small></span>
@@ -136,17 +142,12 @@
             <div id="mcmTemplateTitlePanel" class="mcm-overlay-panel mcm-template-title-panel">
               <div class="mcm-overlay-head">
                 <strong>标题与文案</strong>
-                <span>统一：整条一套；每段：按素材数量逐段写。</span>
-              </div>
-              <div class="mcm-provider-row" id="mcmTextModeRow">
-                <label><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked><span>统一标题/文案</span></label>
-                <label><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"><span>每段标题/文案</span></label>
+                <span>统一标题/文案在这里填；选「每段」时请在「文案方式」里逐段填写。</span>
               </div>
               <div id="mcmUnifiedCopyFields">
                 <label class="mcm-overlay-field"><span><strong>标题</strong><em>支持换行，用于模板主标题</em></span><textarea id="mcmTemplateTitle" rows="5" maxlength="80" placeholder="输入成片标题，可分多行"></textarea></label>
                 <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>可空，交给模板身份栏</em></span><textarea id="mcmShanjianDescription" rows="4" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
               </div>
-              <div id="mcmSegmentTextList" hidden></div>
             </div>
             <div id="mcmTemplateOverlayPanel" class="mcm-overlay-panel" hidden>
               <div class="mcm-overlay-head">
