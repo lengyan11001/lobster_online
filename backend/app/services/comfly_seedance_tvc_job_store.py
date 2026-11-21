@@ -136,12 +136,31 @@ def create_job_record(
             "error": None,
             "result": None,
             "saved_assets": [],
+            # 分段 task_id 映射：客户端轮询中断/重启后仍可按 task_id 补查。
+            "video_tasks": [],
+            "deleted": False,
+            "deleted_at_ts": None,
         }
         _save_store_to_disk_unlocked()
     return jid
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    jid = (job_id or "").strip().lower()
+    if not jid or len(jid) != 32 or any(c not in "0123456789abcdef" for c in jid):
+        return None
+    now = time.time()
+    with JOBS_LOCK:
+        _ensure_loaded_unlocked()
+        _prune_stale_unlocked(now)
+        job = _JOBS.get(jid)
+        if job is None or job.get("deleted"):
+            return None
+        return dict(job)
+
+
+def get_job_any(job_id: str) -> Optional[Dict[str, Any]]:
+    """Return a job even if the user deleted it (internal recovery only)."""
     jid = (job_id or "").strip().lower()
     if not jid or len(jid) != 32 or any(c not in "0123456789abcdef" for c in jid):
         return None
@@ -181,6 +200,7 @@ def list_jobs_for_user(
             dict(job)
             for job in _JOBS.values()
             if int(job.get("user_id") or -1) == int(user_id)
+            and not job.get("deleted")
             and (
                 not wanted_feature
                 or str(((job.get("meta") or {}).get("feature") or "")).strip() == wanted_feature
@@ -204,11 +224,14 @@ def delete_job(job_id: str, *, user_id: int) -> bool:
     with JOBS_LOCK:
         _ensure_loaded_unlocked()
         job = _JOBS.get(jid)
-        if not job:
+        if not job or job.get("deleted"):
             return False
         if int(job.get("user_id") or -1) != int(user_id):
             return False
-        _JOBS.pop(jid, None)
+        # 软删除：记录和 video_tasks 保留，列表不再展示，但内部仍可按 task_id 补查。
+        job["deleted"] = True
+        job["deleted_at_ts"] = time.time()
+        job["updated_at_ts"] = time.time()
         _save_store_to_disk_unlocked()
     return True
 
@@ -555,13 +578,19 @@ def _merge_segment_row(row: Dict[str, Any], payload: Dict[str, Any], *, stage: s
             row["prompt"] = prompt
     provider = _first_text(payload.get("provider"), payload.get("channel"), payload.get("vendor"))
     model = _first_text(payload.get("model"), payload.get("video_model"), payload.get("image_model"))
-    task_id = _first_text(payload.get("task_id"), payload.get("id"), payload.get("request_id"), payload.get("upstream_task_id"))
+    task_id = _first_text(payload.get("task_id"), payload.get("video_task_id"), payload.get("id"), payload.get("request_id"), payload.get("upstream_task_id"))
     if provider and not row.get("provider"):
         row["provider"] = provider
     if model and not row.get("model"):
         row["model"] = model
     if task_id and not row.get("task_id"):
         row["task_id"] = task_id
+    video_channel = _first_text(payload.get("video_channel"), payload.get("channel"))
+    video_base_url = _first_text(payload.get("video_base_url"), payload.get("base_url"))
+    if video_channel and not row.get("video_channel"):
+        row["video_channel"] = video_channel
+    if video_base_url and not row.get("video_base_url"):
+        row["video_base_url"] = video_base_url
     progress = payload.get("progress")
     if progress is None:
         progress = payload.get("progress_percent")
@@ -658,6 +687,8 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_url": "",
             "provider": "",
             "model": "",
+            "video_channel": "",
+            "video_base_url": "",
             "task_id": "",
             "workflow_mode": config.get("workflow_mode") or "",
             "image_source": "",
@@ -706,6 +737,8 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_url": "",
             "provider": "",
             "model": "",
+            "video_channel": "",
+            "video_base_url": "",
             "task_id": "",
             "error": "",
             "progress": None,
@@ -735,6 +768,8 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_url": "",
             "provider": "",
             "model": "",
+            "video_channel": "",
+            "video_base_url": "",
             "task_id": "",
             "error": "",
             "progress": None,
@@ -762,6 +797,8 @@ def read_manifest_artifacts(job_output_dir: str) -> Optional[Dict[str, Any]]:
             "video_url": "",
             "provider": "",
             "model": "",
+            "video_channel": "",
+            "video_base_url": "",
             "task_id": "",
             "error": "",
             "progress": None,

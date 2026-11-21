@@ -3446,11 +3446,11 @@ def _scheduled_tvc_completion(result: Dict[str, Any]) -> tuple[str, Dict[str, An
             asset_ids.append(asset_id)
 
     if urls:
-        result_text = "爆款TVC已生成，点击查看成片。"
+        result_text = "创意分镜头视频已生成，点击查看成片。"
     elif asset_ids:
-        result_text = "爆款TVC已生成，成片正在同步，请稍后刷新查看。"
+        result_text = "创意分镜头视频已生成，成片正在同步，请稍后刷新查看。"
     else:
-        result_text = "爆款TVC已生成。"
+        result_text = "创意分镜头视频已生成。"
     payload = {
         "capability_id": "comfly.daihuo.pipeline",
         "mcp_result": result,

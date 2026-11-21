@@ -1963,14 +1963,14 @@ function _renderComflyCard() {
     ? ''
     : '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.2);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">'
       + '只需在视频引擎控制台复制 <strong>API Key</strong> 即可，接口地址走系统内置配置，无需用户单独填写。'
-      + '用户对话可说「用<strong>爆款TVC</strong>和这个素材做视频」；技能会自动跑分镜、多段成片与入库，无需在卡片里配分镜参数。'
+      + '用户对话可说「用<strong>创意分镜头视频</strong>和这个素材做视频」；技能会自动跑分镜、多段成片与入库，无需在卡片里配分镜参数。'
       + ' \u70b9\u51fb\u4e0b\u65b9\u300c\u914d\u7f6e\u300d\u4ec5\u4fdd\u5b58\u5230\u672c\u673a\uff0c\u4e0d\u4f1a\u5199\u5165\u804a\u5929\u8bb0\u5f55\uff0c\u4e5f\u4e0d\u4f1a\u5728\u4fdd\u5b58\u65f6\u8bf7\u6c42\u4e0a\u6e38\u6821\u9a8c\u51ed\u636e\u3002</div>';
   return '<div class="skill-store-card comfly-veo-card" data-skill-package-id="comfly_veo_skill" style="border-color:rgba(245,158,11,0.38);background:linear-gradient(135deg,rgba(245,158,11,0.07),transparent);">' +
     '<div class="card-label">生成 · 内置 ' + statusBadge + '</div>' +
-    '<div class="card-value">爆款TVC</div>' +
+    '<div class="card-value">创意分镜头视频·经典</div>' +
     '<div class="card-desc">整包成片走 <code>comfly.daihuo.pipeline</code>（start_pipeline + 素材）；单段调试可走 <code>comfly.daihuo</code>。</div>' +
     sub +
-    '<div class="card-tags"><span class="tag">爆款TVC</span><span class="tag">TVC</span><span class="tag">视频生成</span><span class="tag">AI成片</span></div>' +
+    '<div class="card-tags"><span class="tag">创意分镜头视频</span><span class="tag">TVC</span><span class="tag">视频生成</span><span class="tag">AI成片</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm" id="comflyConfigBtn">配置</button></div></div>';
 }
 
@@ -2999,7 +2999,7 @@ function _loadYoutubePublishStatus(cb) {
 
 var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'sutui_mcp': { title: 'AI 模型能力', desc: '图片、视频、音频创作' },
-  'comfly_veo_skill': { title: '爆款TVC', desc: '一键生成爆款视频' },
+  'comfly_veo_skill': { title: '创意分镜头视频·经典', desc: '一键生成创意分镜视频' },
   'comfly_seedance_tvc_skill': { title: '创意分镜头视频', desc: '生成分镜视频' },
   'seedance_tvc_studio': { title: '创意分镜头视频', desc: '生成分镜视频' },
   'viral_video_remix_skill': { title: '爆款视频复刻', desc: '复刻视频风格' },
@@ -3521,7 +3521,7 @@ function loadSkillStore() {
             ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
             : '';
           if (pkg.id === 'sutui_mcp') return '';
-          /* 爆款TVC 仅由上方 _renderComflyCard() 展示，避免与 skill_registry 的 comfly_veo_skill 重复成两张卡 */
+          /* 创意分镜头视频 仅由上方 _renderComflyCard() 展示，避免与 skill_registry 的 comfly_veo_skill 重复成两张卡 */
           if (pkg.id === 'comfly_veo_skill') return '';
           if (pkg.id === 'comfly_seedance_tvc_skill') return '';
           if (pkg.id === 'seedance_tvc_studio') return '';
@@ -4698,7 +4698,7 @@ function _bindComflyConfigBtn() {
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; }); })
       .then(function(x) {
         if (x.ok) {
-          if (msgEl) { msgEl.textContent = '已保存。当前用户的电商套图、图片工作台和爆款TVC 会优先共用这份视频引擎配置；这里只做本机保存，不会在保存时校验上游凭据。'; msgEl.className = 'msg'; msgEl.style.display = ''; }
+          if (msgEl) { msgEl.textContent = '已保存。当前用户的电商套图、图片工作台和创意分镜头视频 会优先共用这份视频引擎配置；这里只做本机保存，不会在保存时校验上游凭据。'; msgEl.className = 'msg'; msgEl.style.display = ''; }
           setTimeout(function() { closeModal(); loadSkillStore(); }, 500);
         } else {
           var det = x.data && (x.data.detail || x.data.message);

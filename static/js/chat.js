@@ -2516,11 +2516,11 @@ var _capabilityLabels = {
   'sutui.guide': '查询指南',
   'sutui.transfer_url': '转存链接',
   // 新名（首选）
-  'comfly.daihuo': '爆款TVC 单段',
-  'comfly.daihuo.pipeline': '爆款TVC 带货视频',
+  'comfly.daihuo': '创意分镜头视频 单段',
+  'comfly.daihuo.pipeline': '创意分镜头视频 整包',
   // 老名兼容（历史 task 仍用老 capability_id 显示）
-  'comfly.veo': '爆款TVC 单段',
-  'comfly.veo.daihuo_pipeline': '爆款TVC 带货视频',
+  'comfly.veo': '创意分镜头视频 单段',
+  'comfly.veo.daihuo_pipeline': '创意分镜头视频 整包',
   'comfly.ecommerce.detail_pipeline': '电商详情页'
 };
 function _toolLabel(name, capId) {

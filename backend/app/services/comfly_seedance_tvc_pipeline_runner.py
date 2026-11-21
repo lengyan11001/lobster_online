@@ -360,6 +360,12 @@ def run_storyboard_pipeline_sync(inp: Dict[str, Any]) -> Dict[str, Any]:
     return mod.run_pipeline(inp)
 
 
+def run_resume_pipeline_sync(inp: Dict[str, Any]) -> Dict[str, Any]:
+    """Resume saved task_ids without re-submitting (used after polling stops)."""
+    mod = _load_pipeline_module()
+    return mod.run_resume_pipeline(inp)
+
+
 def collect_video_urls_from_pipeline_result(data: Dict[str, Any]) -> List[Tuple[str, str, str]]:
     fv = data.get("final_video")
     if isinstance(fv, dict):

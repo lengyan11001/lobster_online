@@ -63,6 +63,8 @@ class Input(TypedDict, total=False):
     shot_concurrency: int
     poll_interval_seconds: int
     max_polls: int
+    generation_time_limit_seconds: int
+    resume_tasks: List[Dict[str, Any]]
     output_dir: str
     upload_retries: int
     analysis_retries: int
@@ -109,6 +111,7 @@ class PipelineConfig:
     shot_concurrency: int = 2
     poll_interval_seconds: int = 10
     max_polls: int = 90
+    generation_time_limit_seconds: int = 900
     output_dir: str = ""
     upload_retries: int = 3
     analysis_retries: int = 2
@@ -2771,6 +2774,80 @@ def _should_use_direct_video(config: PipelineConfig, reference_image_urls: List[
     return True
 
 
+def _record_segment_future(
+    future: concurrent.futures.Future,
+    segment_plan: Dict[str, Any],
+    results_map: Dict[int, Dict[str, Any]],
+    failure_map: Dict[int, Dict[str, Any]],
+    logger_obj: RunLogger,
+) -> None:
+    """Record one finished segment future exactly once."""
+    idx = int(segment_plan.get("index") or 0)
+    if idx <= 0 or idx in results_map or idx in failure_map:
+        return
+    try:
+        result = future.result()
+        results_map[idx] = result
+        logger_obj.segment(idx, "final", "success", payload=result)
+    except StopNewSubmissionsError as exc:
+        payload = {"index": idx, "error": str(exc), "reason": "stop_new_submits"}
+        failure_map[idx] = payload
+        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+    except InsufficientCreditError as exc:
+        payload = {"index": idx, "error": str(exc), "reason": "insufficient_credit"}
+        failure_map[idx] = payload
+        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+    except Exception as exc:  # noqa: BLE001 - one segment must not kill the whole batch
+        payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
+        failure_map[idx] = payload
+        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+
+
+def _wait_segment_futures(
+    futures: Dict[concurrent.futures.Future, Dict[str, Any]],
+    results_map: Dict[int, Dict[str, Any]],
+    failure_map: Dict[int, Dict[str, Any]],
+    logger_obj: RunLogger,
+    deadline_seconds: int,
+    label: str,
+) -> None:
+    """Wait for segment futures with an overall deadline.
+
+    A slow/hung segment must not block the whole TVC forever. When the deadline
+    is reached, already-finished segments are kept and the rest are marked
+    failed, so _finish_segments() can merge the successful clips.
+    """
+    deadline = time.monotonic() + max(1, int(deadline_seconds or 1))
+    try:
+        for future in concurrent.futures.as_completed(
+            futures, timeout=max(0.1, deadline - time.monotonic())
+        ):
+            _record_segment_future(future, futures[future], results_map, failure_map, logger_obj)
+    except concurrent.futures.TimeoutError:
+        payload = {
+            "label": label,
+            "deadline_seconds": int(deadline_seconds or 0),
+            "error": f"{label} generation deadline reached; merging completed segments",
+        }
+        logger_obj.step(f"89_{label}_deadline", "failed", attempts=1, error=payload["error"], payload=payload)
+    # Take anything that finished between the timeout and this point, then
+    # mark the still-running futures so the merge can proceed immediately.
+    for future, segment_plan in list(futures.items()):
+        idx = int(segment_plan.get("index") or 0)
+        if future.done():
+            _record_segment_future(future, segment_plan, results_map, failure_map, logger_obj)
+            continue
+        if idx > 0 and idx not in results_map and idx not in failure_map:
+            payload = {
+                "index": idx,
+                "error": f"{label} generation deadline reached",
+                "reason": "deadline",
+            }
+            failure_map[idx] = payload
+            logger_obj.segment(idx, "final", "failed", error=payload["error"], payload=payload)
+        future.cancel()
+
+
 def _finish_segments(
     config: PipelineConfig,
     logger_obj: RunLogger,
@@ -2961,6 +3038,7 @@ def _build_config(data: Input) -> PipelineConfig:
         shot_concurrency=max(1, int(data.get("shot_concurrency", 2))),
         poll_interval_seconds=max(5, int(data.get("poll_interval_seconds", 10))),
         max_polls=max(10, int(data.get("max_polls", 90))),
+        generation_time_limit_seconds=max(60, int(data.get("generation_time_limit_seconds", 900))),
         output_dir=(data.get("output_dir") or "").strip(),
         upload_retries=max(1, int(data.get("upload_retries", 3))),
         analysis_retries=max(1, int(data.get("analysis_retries", 2))),
@@ -2975,6 +3053,92 @@ def _build_config(data: Input) -> PipelineConfig:
         watermark=_as_bool(data.get("watermark"), False),
         seed=int(data.get("seed", -1)),
     )
+
+
+def run_resume_pipeline(data: Input) -> Dict[str, Any]:
+    """Resume outstanding video task_ids without re-submitting them.
+
+    Used after the client stopped polling or restarted: poll each saved task_id,
+    keep whatever is already playable, and merge the completed segments.
+    """
+    config = _build_config(data)
+    output_dir = config.output_dir or str(Path(__file__).resolve().parent.parent / "runs")
+    logger_obj = RunLogger(output_dir, config, data)
+    try:
+        client = ComflySeedanceClient(config, logger_obj)
+        tasks = data.get("resume_tasks") or []
+        results_map: Dict[int, Dict[str, Any]] = {}
+        failure_map: Dict[int, Dict[str, Any]] = {}
+        boards: List[Dict[str, Any]] = []
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            idx = int(task.get("index") or 0)
+            task_id = str(task.get("task_id") or "").strip()
+            if idx <= 0 or not task_id:
+                continue
+            board = task.get("board") if isinstance(task.get("board"), dict) else {}
+            board = dict(board)
+            board.setdefault("index", idx)
+            boards.append(board)
+            existing_url = str(task.get("video_url") or "").strip()
+            if existing_url:
+                segment_result = {
+                    "index": idx,
+                    "video_task_id": task_id,
+                    "video_status": "succeeded",
+                    "mp4url": existing_url,
+                    "video_channel": str(task.get("video_channel") or config.video_channel or ""),
+                    "video_model": str(task.get("video_model") or task.get("model") or config.video_model or ""),
+                    "video_base_url": str(task.get("video_base_url") or config.video_base_url or config.base_url),
+                    "video_provider_role": str(task.get("video_provider_role") or "primary"),
+                    "video_provider_stage_role": str(task.get("video_provider_stage_role") or "primary"),
+                    "workflow_mode": str(task.get("workflow_mode") or config.workflow_mode),
+                    "duration_seconds": int(task.get("duration_seconds") or config.segment_duration_seconds),
+                }
+                try:
+                    _validate_segment_video_aspect(client, logger_obj, segment_result)
+                except Exception:
+                    # Keep the URL; the merge step will report it if it is no longer playable.
+                    logger.warning("resume aspect validation failed for segment %s", idx)
+                results_map[idx] = segment_result
+                continue
+            plan = {
+                "index": idx,
+                "board": board,
+                "duration_seconds": int(task.get("duration_seconds") or config.segment_duration_seconds),
+                "board_image_prompt": str(task.get("board_image_prompt") or ""),
+                "video_prompt": str(task.get("video_prompt") or ""),
+                "segment_reference_prompt": str(task.get("segment_reference_prompt") or ""),
+                "video_task_id": task_id,
+                "video_channel": str(task.get("video_channel") or config.video_channel or ""),
+                "video_model": str(task.get("video_model") or task.get("model") or config.video_model or ""),
+                "video_base_url": str(task.get("video_base_url") or config.video_base_url or config.base_url),
+                "video_provider_role": str(task.get("video_provider_role") or "primary"),
+                "video_provider_stage_role": str(task.get("video_provider_stage_role") or "primary"),
+                "workflow_mode": str(task.get("workflow_mode") or config.workflow_mode),
+                "board_image_result": {},
+                "segment_reference_result": {"url": str(task.get("first_frame_image_url") or "")},
+            }
+            try:
+                segment_result = _poll_segment_video(client, logger_obj, plan)
+                _validate_segment_video_aspect(client, logger_obj, segment_result)
+                results_map[idx] = segment_result
+            except Exception as exc:  # noqa: BLE001 - one task must not block the rest
+                payload = {"index": idx, "error": str(exc), "reason": "resume_failed"}
+                failure_map[idx] = payload
+                logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+        return _finish_segments(
+            config,
+            logger_obj,
+            [],
+            results_map,
+            failure_map,
+            boards=boards,
+        )
+    except Exception:
+        logger_obj.finish("failed", {"error": traceback.format_exc()})
+        raise
 
 
 def run_pipeline(data: Input) -> Dict[str, Any]:
@@ -3037,7 +3201,8 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             results_map: Dict[int, Dict[str, Any]] = {}
             failure_map: Dict[int, Dict[str, Any]] = {}
             submit_control = SubmitControl()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency)
+            try:
                 futures = {
                     ex.submit(
                         _run_segment_video_providers,
@@ -3049,33 +3214,17 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     ): segment_plan
                     for segment_plan in segment_plans
                 }
-                for future in concurrent.futures.as_completed(futures):
-                    segment_plan = futures[future]
-                    idx = int(segment_plan["index"])
-                    try:
-                        result = future.result()
-                        results_map[idx] = result
-                        logger_obj.segment(idx, "final", "success", payload=result)
-                    except StopNewSubmissionsError as exc:
-                        payload = {
-                            "index": idx,
-                            "error": str(exc),
-                            "reason": "stop_new_submits",
-                        }
-                        failure_map[idx] = payload
-                        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
-                    except InsufficientCreditError as exc:
-                        payload = {
-                            "index": idx,
-                            "error": str(exc),
-                            "reason": "insufficient_credit",
-                        }
-                        failure_map[idx] = payload
-                        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
-                    except Exception as exc:
-                        payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
-                        failure_map[idx] = payload
-                        logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+                _wait_segment_futures(
+                    futures,
+                    results_map,
+                    failure_map,
+                    logger_obj,
+                    config.generation_time_limit_seconds,
+                    "direct_video",
+                )
+            finally:
+                # Never wait for a hung segment here; the merge below must run.
+                ex.shutdown(wait=False, cancel_futures=True)
             return _finish_segments(
                 config,
                 logger_obj,
@@ -3128,7 +3277,8 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         results_map: Dict[int, Dict[str, Any]] = {}
         failure_map: Dict[int, Dict[str, Any]] = {}
         submit_control = SubmitControl()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency) as ex:
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=config.shot_concurrency)
+        try:
             futures = {
                 ex.submit(
                     _run_single_segment_pipeline,
@@ -3140,33 +3290,17 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 ): segment_plan
                 for segment_plan in segment_plans
             }
-            for future in concurrent.futures.as_completed(futures):
-                segment_plan = futures[future]
-                idx = int(segment_plan["index"])
-                try:
-                    result = future.result()
-                    results_map[idx] = result
-                    logger_obj.segment(idx, "final", "success", payload=result)
-                except StopNewSubmissionsError as exc:
-                    payload = {
-                        "index": idx,
-                        "error": str(exc),
-                        "reason": "stop_new_submits",
-                    }
-                    failure_map[idx] = payload
-                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
-                except InsufficientCreditError as exc:
-                    payload = {
-                        "index": idx,
-                        "error": str(exc),
-                        "reason": "insufficient_credit",
-                    }
-                    failure_map[idx] = payload
-                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
-                except Exception as exc:
-                    payload = {"index": idx, "error": str(exc), "traceback": traceback.format_exc()}
-                    failure_map[idx] = payload
-                    logger_obj.segment(idx, "final", "failed", error=str(exc), payload=payload)
+            _wait_segment_futures(
+                futures,
+                results_map,
+                failure_map,
+                logger_obj,
+                config.generation_time_limit_seconds,
+                "storyboard",
+            )
+        finally:
+            # Never wait for a hung segment here; the merge below must run.
+            ex.shutdown(wait=False, cancel_futures=True)
 
         return _finish_segments(
             config,

@@ -23,6 +23,7 @@ from ..services.comfly_seedance_tvc_job_store import (
     create_job_record,
     delete_job,
     get_job,
+    get_job_any,
     list_jobs_for_user,
     read_manifest_artifacts,
     read_manifest_progress,
@@ -33,6 +34,7 @@ from ..services.comfly_seedance_tvc_pipeline_runner import (
     build_pipeline_input,
     collect_video_urls_from_pipeline_result,
     resolve_reference_images_for_pipeline_async,
+    run_resume_pipeline_sync,
     run_storyboard_pipeline_sync,
 )
 from ..services.comfly_veo_exec import _resolve_comfly_credentials
@@ -1451,6 +1453,47 @@ async def _mix_local_bestseller_bgm_if_needed(
         )
 
 
+def _video_tasks_from_manifest(job: Dict[str, Any]) -> List[Dict[str, Any]]:
+    artifacts = read_manifest_artifacts(str(job.get("job_output_dir") or ""))
+    if not isinstance(artifacts, dict):
+        return []
+    tasks: List[Dict[str, Any]] = []
+    for seg in artifacts.get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        task_id = str(seg.get("task_id") or "").strip()
+        if not task_id:
+            continue
+        tasks.append(
+            {
+                "index": int(seg.get("index") or 0),
+                "task_id": task_id,
+                "video_url": str(seg.get("video_url") or ""),
+                "video_channel": str(seg.get("video_channel") or ""),
+                "video_model": str(seg.get("model") or ""),
+                "video_base_url": str(seg.get("video_base_url") or ""),
+                "status": str(seg.get("status") or ""),
+                "workflow_mode": str(seg.get("workflow_mode") or ""),
+                "first_frame_image_url": str(seg.get("reference_image_url") or ""),
+            }
+        )
+    tasks.sort(key=lambda item: int(item.get("index") or 0))
+    return tasks
+
+
+def _sync_job_video_tasks(job: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Persist submitted video task_ids into the job record.
+
+    This is what makes recovery possible after the client stops polling or
+    restarts: the job keeps the upstream task_id even if its thread is gone.
+    """
+    tasks = _video_tasks_from_manifest(job)
+    if tasks and tasks != (job.get("video_tasks") or []):
+        update_job(str(job.get("job_id") or ""), video_tasks=tasks)
+        job["video_tasks"] = tasks
+    return tasks
+
+
 async def _seedance_job_runner(job_id: str) -> None:
     job = get_job(job_id)
     if not job:
@@ -1847,6 +1890,14 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool) -> Dict[str
         "requires_caption": requires_caption,
         "caption_ready": caption_ready,
     }
+    video_tasks = job.get("video_tasks") if isinstance(job.get("video_tasks"), list) else []
+    out["video_tasks"] = video_tasks
+    out["pending_video_tasks"] = sum(
+        1 for task in video_tasks
+        if isinstance(task, dict)
+        and str(task.get("task_id") or "").strip()
+        and not str(task.get("video_url") or "").strip()
+    )
     job_out = job.get("job_output_dir") or ""
     prog = read_manifest_progress(str(job_out))
     if prog:
@@ -2004,6 +2055,7 @@ async def comfly_seedance_pipeline_job_status(
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     if int(job.get("user_id") or -1) != int(current_user.id):
         raise HTTPException(status_code=403, detail="无权查看该任务")
+    _sync_job_video_tasks(job)
     payload = _job_status_response(job, include_full=not compact)
     if not compact and request is not None and payload.get("result") is not None:
         payload["result"] = _with_local_final_video_url(payload.get("result"), request, job)
@@ -2021,6 +2073,102 @@ async def comfly_seedance_pipeline_jobs(
     return {
         "ok": True,
         "items": [_recent_job_summary(job, request=request) for job in rows],
+    }
+
+
+@router.post("/api/comfly-seedance-tvc/pipeline/jobs/{job_id}/reconcile", summary="按已保存的 task_id 补查/续跑未完成分段")
+async def comfly_seedance_pipeline_job_reconcile(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    job = get_job_any(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    if int(job.get("user_id") or -1) != int(current_user.id):
+        raise HTTPException(status_code=403, detail="无权操作该任务")
+    tasks = job.get("video_tasks") or []
+    if not tasks:
+        tasks = _sync_job_video_tasks(job)
+    pending = [
+        task for task in tasks
+        if str(task.get("task_id") or "").strip() and not str(task.get("video_url") or "").strip()
+    ]
+    if not pending:
+        return {"ok": True, "job_id": job_id, "reconciled": 0, "status": job.get("status")}
+
+    inp = dict(job.get("inp") or {})
+    # Pass all known segments so completed clips are included in the merge too.
+    inp["resume_tasks"] = tasks
+    inp["output_dir"] = job.get("job_output_dir") or inp.get("output_dir")
+    # Reconcile should be a quick check, not another 15-minute poll loop.
+    inp["max_polls"] = min(6, max(1, int(inp.get("max_polls") or 6)))
+    inp["poll_interval_seconds"] = min(5, max(1, int(inp.get("poll_interval_seconds") or 2)))
+    update_job(job_id, status="post_processing", post_status="reconciling", post_stage="reconcile")
+    try:
+        result = await asyncio.to_thread(run_resume_pipeline_sync, inp)
+    except Exception as exc:
+        detail = str(exc)[:2000]
+        update_job(job_id, status="failed", error=detail, post_status="failed", post_stage="reconcile")
+        raise HTTPException(status_code=500, detail=f"补查失败：{detail}") from exc
+
+    saved_assets: List[Dict[str, Any]] = []
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    final_path = str(final_video.get("path") or "").strip()
+    final_kind = str(final_video.get("kind") or "").strip().lower()
+    final_url = str(final_video.get("url") or "").strip()
+    # multi_clip_remote means the merge failed; do not report a broken first-clip URL as success.
+    has_video = bool(final_path) or (
+        bool(final_url) and final_kind in {"merged_final", "merged_local", "single_clip_copy"}
+    )
+    if final_path:
+        try:
+            asset = await _save_local_final_video_asset(
+                local_path=final_path,
+                current_user=_ServerUser(id=int(job.get("user_id") or 0)),
+                prompt=_seedance_task_text(inp),
+                video_model=_video_model_from_result(result),
+                auth_header=str(job.get("auth_header") or ""),
+                installation_id=str(job.get("installation_id") or ""),
+                generation_task_id=job_id,
+            )
+            if asset:
+                saved_assets.append(
+                    {
+                        "source_url": asset.get("source_url") or "",
+                        "task_id": job_id,
+                        "asset": asset,
+                        "kind": "merged_final",
+                    }
+                )
+                final_video = {
+                    **final_video,
+                    "url": asset.get("source_url") or final_video.get("url"),
+                    "asset_id": asset.get("asset_id") or "",
+                    "kind": "merged_final",
+                }
+                result = {**result, "final_video": final_video}
+        except Exception as exc:  # noqa: BLE001 - keep the playable local result
+            logger.warning("[seedance-tvc] reconcile final asset save failed job_id=%s err=%s", job_id, str(exc)[:300])
+
+    update_job(
+        job_id,
+        status="completed" if has_video else "failed",
+        error=None if has_video else "补查完成，但上游仍未返回可播放视频",
+        result=result,
+        saved_assets=saved_assets,
+        post_status="completed" if has_video else "failed",
+        post_stage="reconcile",
+    )
+    refreshed = get_job_any(job_id) or job
+    remaining = _sync_job_video_tasks(refreshed)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "reconciled": len(pending),
+        "status": "completed" if has_video else "failed",
+        "result": result,
+        "saved_assets": saved_assets,
+        "video_tasks": remaining,
     }
 
 

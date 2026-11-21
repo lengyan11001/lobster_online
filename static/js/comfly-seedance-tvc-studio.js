@@ -2526,6 +2526,7 @@
       '</div>',
       '<div class="seedance-segment-toolbar">',
       '<button type="button" class="btn btn-primary btn-sm seedance-segment-compose-btn" data-seedance-segment-merge' + (videoReady ? '' : ' disabled') + '>合成已有视频</button>',
+      '<button type="button" class="btn btn-ghost btn-sm" data-seedance-reconcile>补查未完成分段</button>',
       '<button type="button" class="btn btn-ghost btn-sm" data-seedance-segment-refresh>刷新状态</button>',
       '</div>',
       '<div class="seedance-segment-card-list">',
@@ -2648,6 +2649,38 @@
       btn.dataset.bound = '1';
       btn.addEventListener('click', function() {
         refreshJobStatus(true);
+      });
+    });
+    document.querySelectorAll('[data-seedance-reconcile]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function() {
+        var base = pipelineBase();
+        var jobId = String(state.currentJobId || '').trim();
+        if (!base || !jobId) return showMessage('当前没有可补查的任务。');
+        if (btn.disabled) return;
+        btn.disabled = true;
+        showMessage('正在按 task_id 补查未完成分段...');
+        fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(jobId) + '/reconcile', {
+          method: 'POST',
+          headers: authHeadersSafe()
+        })
+          .then(function(response) {
+            return response.json().catch(function() { return {}; }).then(function(data) {
+              return { ok: response.ok, data: data || {} };
+            });
+          })
+          .then(function(result) {
+            if (!result.ok) throw new Error(responseErrorText(result.data, '补查失败'));
+            showMessage('补查完成：' + (result.data.reconciled || 0) + ' 段，状态 ' + (result.data.status || ''));
+            refreshJobStatus(false);
+          })
+          .catch(function(err) {
+            showMessage('补查失败：' + normalizeApiErrorText(err && (err.message || err), '未知错误'));
+          })
+          .then(function() {
+            btn.disabled = false;
+          });
       });
     });
     document.querySelectorAll('[data-seedance-segment-merge]').forEach(function(btn) {
