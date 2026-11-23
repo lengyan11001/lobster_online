@@ -2437,6 +2437,17 @@ class DouyinCommentScraper:
             )
             return False
 
+    async def _is_captcha_page(self, page: Page) -> bool:
+        try:
+            url = str(getattr(page, "url", "") or "").lower()
+            title = str(await page.title() or "")
+            if "verifycenter" in url or "/captcha" in url or "验证码" in title or "安全验证" in title:
+                return True
+            text = str(await page.evaluate("() => document.body ? document.body.innerText.slice(0, 6000) : ''") or "")
+            return any(sig in text for sig in ("请完成下列验证", "安全验证", "滑动验证", "拖动滑块", "验证码"))
+        except Exception:
+            return False
+
     async def _has_login_intercept(self, page: Page) -> bool:
         try:
             return bool(
@@ -2476,6 +2487,22 @@ class DouyinCommentScraper:
             return False
 
     async def _raise_if_login_intercept(self, page: Page):
+        if await self._is_captcha_page(page):
+            try:
+                wall_event = await session_health.capture_login_wall(
+                    page,
+                    account_id=self.account_id,
+                    action="captcha_intercept",
+                    reason="page_shows_captcha_or_verify",
+                )
+                session_health.mark_need_relogin(
+                    self.account_id,
+                    reason="page_shows_captcha_or_verify",
+                    url=str(wall_event.get("url") or ""),
+                )
+            except Exception:
+                pass
+            raise RuntimeError("抖音触发风控验证（验证码/安全验证），请人工在浏览器完成验证后再执行")
         if await self._has_login_intercept(page):
             # 掉线跟踪：先留现场（URL/验证类型/页面文本/截图）再抛错，
             # 这样下次能从诊断包里直接看到"抖音要的是哪种验证"。
