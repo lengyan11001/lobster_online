@@ -596,8 +596,10 @@ if ($proc -and $proc.CommandLine) {{
                             if (!node) return null;
                             const clickable = node.matches?.('[href*="/video/"]')
                                 ? node
-                                : node.querySelector?.('[href*="/video/"]') || node;
+                                : node.querySelector?.('[href*="/video/"]') || null;
                             if (!clickable) return null;
+                            const href = String(clickable.getAttribute?.('href') || '');
+                            if (href.includes('/root/live/') || href.includes('/live/')) return null;
                             clickable.scrollIntoView?.({ block: 'center', inline: 'center', behavior: 'instant' });
                             const rect = clickable.getBoundingClientRect();
                             if (!isVisible(clickable)) return null;
@@ -744,6 +746,16 @@ if ($proc -and $proc.CommandLine) {{
         await self._focus_video_page(page)
         await page.mouse.wheel(0, random.randint(820, 1320))
 
+    async def _is_live_room_page(self, page: Page) -> bool:
+        try:
+            url = str(getattr(page, "url", "") or "")
+            if "/root/live/" in url or "/live/" in url:
+                return True
+            title = str(await page.title() or "")
+            return "直播间" in title or "抖音直播" in title
+        except Exception:
+            return False
+
     async def _run_session(self, account: Dict):
         account_id = int(account.get("id", 0) or 0)
         port = int(account.get("port", 0) or 0)
@@ -865,6 +877,15 @@ if ($proc -and $proc.CommandLine) {{
                 opened = await self._open_first_jingxuan_video(page)
                 if not opened:
                     raise RuntimeError("未能打开抖音精选页的首个视频")
+                if await self._is_live_room_page(page):
+                    self.broadcast_log(
+                        f"[抖音养号][账号{account_id}] 打开到直播间，已返回精选页重新选择视频。",
+                        "warning",
+                    )
+                    await page.goto("https://www.douyin.com/jingxuan", wait_until="domcontentloaded", timeout=45000)
+                    await _sleep_with_stop_check(random.randint(2, 5), should_continue)
+                    if not await self._open_first_jingxuan_video(page):
+                        raise RuntimeError("从直播间返回后未能重新打开视频")
 
                 watched_count = 1
                 self._set_state(account_id, current_video_count=watched_count, last_action="已进入首个视频，开始自然观看")
@@ -874,6 +895,17 @@ if ($proc -and $proc.CommandLine) {{
                     remaining = int(max(0, deadline - time.monotonic()))
                     if remaining <= 0:
                         break
+
+                    if await self._is_live_room_page(page):
+                        self.broadcast_log(
+                            f"[抖音养号][账号{account_id}] 当前页面是直播间，已返回精选页继续养号。",
+                            "warning",
+                        )
+                        await page.goto("https://www.douyin.com/jingxuan", wait_until="domcontentloaded", timeout=45000)
+                        await _sleep_with_stop_check(random.randint(2, 5), should_continue)
+                        if not await self._open_first_jingxuan_video(page):
+                            raise RuntimeError("从直播间返回后未能重新打开视频")
+                        continue
 
                     dwell_seconds = min(remaining, random.randint(4, 38))
                     self._set_state(

@@ -47,6 +47,31 @@ def test_nurture_scheduler_emit_progress_supports_sync_and_async_callbacks():
     assert seen[-1] == ("async", {"account_id": 2, "likes_sent": 4})
 
 
+class _FakePage:
+    def __init__(self, url: str = "", title: str = "") -> None:
+        self.url = url
+        self._title = title
+
+    async def title(self) -> str:
+        return self._title
+
+
+def test_nurture_detects_live_room_by_url_and_title():
+    scheduler = nurture.DouyinAccountNurtureScheduler(
+        accounts=[], config={}, broadcast_log=lambda *_args: None
+    )
+    assert asyncio.run(scheduler._is_live_room_page(_FakePage(url="https://www.douyin.com/root/live/123"))) is True
+    assert asyncio.run(scheduler._is_live_room_page(_FakePage(title="兔娘的抖音直播间 - 抖音直播"))) is True
+    assert asyncio.run(scheduler._is_live_room_page(_FakePage(url="https://www.douyin.com/jingxuan", title="抖音精选电脑版"))) is False
+
+
+def test_nurture_skips_and_recovers_from_live_rooms():
+    source = inspect.getsource(nurture.DouyinAccountNurtureScheduler)
+    assert "打开到直播间，已返回精选页重新选择视频" in source
+    assert "当前页面是直播间，已返回精选页继续养号" in source
+    assert "href.includes('/root/live/')" in source
+
+
 def test_nurture_once_accepts_progress_callback():
     sig = inspect.signature(douyin_api.douyin_run_account_nurture_once)
     assert "progress_callback" in sig.parameters
