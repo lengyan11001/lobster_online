@@ -15927,7 +15927,7 @@ async def douyin_get_account_nurture_status():
     return {"code": 200, "status": snapshot}
 
 
-async def douyin_run_account_nurture_once(request: Optional[dict] = None):
+async def douyin_run_account_nurture_once(request: Optional[dict] = None, progress_callback=None):
     global douyin_account_nurture_scheduler
 
     source = request if isinstance(request, dict) else {}
@@ -15976,6 +15976,7 @@ async def douyin_run_account_nurture_once(request: Optional[dict] = None):
         config=runtime_config,
         broadcast_log=douyin_log,
         enabled_account_ids=[int(account.get("id", 0) or 0) for account in selected_online_accounts],
+        progress_callback=progress_callback,
     )
 
     errors: List[str] = []

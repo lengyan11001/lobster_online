@@ -6541,6 +6541,26 @@ def _merge_scheduled_douyin_collection_params(
     return merged
 
 
+def _merge_scheduled_douyin_nurture_params(
+    online_params: Any,
+    workflow_params: Any,
+) -> Dict[str, Any]:
+    """Keep the one-shot duration/account chosen in H5 over stale Online defaults."""
+    merged = dict(online_params) if isinstance(online_params, dict) else {}
+    workflow = dict(workflow_params) if isinstance(workflow_params, dict) else {}
+    for key in (
+        "duration_minutes",
+        "sales_schedule_duration_minutes",
+        "nurture_duration_min",
+        "nurture_duration_max",
+        "account_id",
+        "account_ids",
+    ):
+        if key in workflow and workflow.get(key) not in (None, "", []):
+            merged[key] = workflow.get(key)
+    return merged
+
+
 def _merge_scheduled_douyin_precise_touch_params(
     online_params: Any,
     workflow_params: Any,
@@ -7299,6 +7319,7 @@ async def _run_scheduled_douyin_sales_action(
     cloud: Optional[httpx.AsyncClient] = None,
     base: str = "",
     headers: Optional[Dict[str, str]] = None,
+    run_id: str = "",
 ) -> Dict[str, Any]:
     source = dict(params) if isinstance(params, dict) else {}
     for target, aliases in (
@@ -7349,7 +7370,43 @@ async def _run_scheduled_douyin_sales_action(
         payload = {"duration_minutes": duration_minutes or random.randint(duration_min, duration_max)}
         if account_id > 0:
             payload["account_ids"] = [account_id]
-        result = await douyin_run_account_nurture_once(payload)
+        nurture_progress = None
+        if run_id:
+            last_progress_at = 0.0
+
+            async def nurture_progress(info):
+                nonlocal last_progress_at
+                try:
+                    _scheduled_task_activity[run_id] = time.monotonic()
+                    now = time.monotonic()
+                    if now - last_progress_at < 20:
+                        return
+                    last_progress_at = now
+                    if cloud is None or not base or not headers:
+                        return
+                    account_no = int((info or {}).get("account_id") or 0)
+                    watched = int((info or {}).get("watched_count") or 0)
+                    likes = int((info or {}).get("likes_sent") or 0)
+                    minutes = int((info or {}).get("session_minutes") or 0)
+                    last_action = str((info or {}).get("last_action") or "养号执行中").strip()
+                    await _post_task_event(
+                        cloud,
+                        base,
+                        headers,
+                        run_id,
+                        "progress",
+                        {
+                            "stage": "account_nurture",
+                            "text": f"抖音养号执行中：账号 {account_no}，已浏览 {watched} 条视频，点赞 {likes} 次；{last_action}",
+                            "account_id": account_no,
+                            "watched_count": watched,
+                            "likes_sent": likes,
+                            "session_minutes": minutes,
+                        },
+                    )
+                except Exception:
+                    pass
+        result = await douyin_run_account_nurture_once(payload, progress_callback=nurture_progress)
         if not isinstance(result, dict):
             return {"code": 500, "msg": "抖音养号启动失败"}
         normalized = dict(result)
@@ -8175,12 +8232,16 @@ async def _run_scheduled_douyin_leads(
             params = _merge_scheduled_douyin_collection_params(params, workflow_params)
         elif action == "precise_touch":
             params = _merge_scheduled_douyin_precise_touch_params(params, workflow_params)
+        elif action == "account_nurture":
+            params = _merge_scheduled_douyin_nurture_params(params, workflow_params)
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         online_params = _load_scheduled_douyin_online_config_params(action)
         if action == "search_collect":
             params = _merge_scheduled_douyin_collection_params(online_params, workflow_params)
         elif action == "precise_touch":
             params = _merge_scheduled_douyin_precise_touch_params(online_params, workflow_params)
+        elif action == "account_nurture":
+            params = _merge_scheduled_douyin_nurture_params(online_params, workflow_params)
         else:
             params = online_params
     if h5_one_shot:
@@ -8213,6 +8274,7 @@ async def _run_scheduled_douyin_leads(
                 cloud=cloud,
                 base=base,
                 headers=headers,
+                run_id=run_id,
             )
         else:
             raise RuntimeError(f"暂不支持的抖音获客任务类型：{action}")
@@ -15138,7 +15200,7 @@ async def _scheduled_inactivity_watchdog(
                     run_id,
                     "failed",
                     {
-                        "text": "执行无进展超过 40 分钟，本地已中断并释放队列",
+                        "text": f"执行无进展超过 {max(1, int(round(timeout_seconds / 60)))} 分钟，本地已中断并释放队列",
                         "stage": "no_progress_timeout",
                     },
                 )

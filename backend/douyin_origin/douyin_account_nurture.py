@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import random
 import subprocess
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
@@ -50,10 +51,12 @@ class DouyinAccountNurtureScheduler:
         config: Dict,
         broadcast_log: Callable[[str, str], None],
         enabled_account_ids: Optional[List[int]] = None,
+        progress_callback: Optional[Callable[[Dict], Any]] = None,
     ):
         self.accounts = accounts or []
         self.config = config or {}
         self.broadcast_log = broadcast_log
+        self.progress_callback = progress_callback
         self.is_running = True
         self.started_at = _now_text()
         self.worker_tasks: List[asyncio.Task] = []
@@ -78,6 +81,16 @@ class DouyinAccountNurtureScheduler:
             self.enabled_account_ids = {int(account_id) for account_id in enabled_account_ids if int(account_id) in online_ids}
         self._trigger_immediate_account_ids = set(self.enabled_account_ids)
         self._sync_participation_flags()
+
+    async def _emit_progress(self, payload: Dict) -> None:
+        if not self.progress_callback:
+            return
+        try:
+            result = self.progress_callback(dict(payload))
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            pass
 
     def _build_initial_state(self, account: Dict) -> Dict:
         account_id = int(account.get("id", 0) or 0)
@@ -763,6 +776,13 @@ if ($proc -and $proc.CommandLine) {{
             f"[抖音养号][账号{account_id}] 开始新一轮养号会话，目标时长约 {session_minutes} 分钟，端口 {port}，资料目录 {profile_dir}",
             "info",
         )
+        await self._emit_progress({
+            "account_id": account_id,
+            "session_minutes": session_minutes,
+            "watched_count": 0,
+            "likes_sent": 0,
+            "last_action": "开始新一轮养号会话",
+        })
 
         browser: Optional[Browser] = None
         context: Optional[BrowserContext] = None
@@ -894,6 +914,13 @@ if ($proc -and $proc.CommandLine) {{
                         last_action="已下滑切换到下一个视频",
                     )
                     await _sleep_with_stop_check(random.randint(2, 6), should_continue)
+                    await self._emit_progress({
+                        "account_id": account_id,
+                        "session_minutes": session_minutes,
+                        "watched_count": watched_count,
+                        "likes_sent": likes_sent,
+                        "last_action": f"已浏览 {watched_count} 条视频",
+                    })
 
                 state = self.account_states.get(account_id, {})
                 completed_sessions = int(state.get("completed_sessions", 0) or 0)
@@ -913,6 +940,13 @@ if ($proc -and $proc.CommandLine) {{
                         f"[抖音养号][账号{account_id}] 本轮会话完成，共浏览约 {watched_count} 条视频，随机点赞 {likes_sent} 次。",
                         "success",
                     )
+                    await self._emit_progress({
+                        "account_id": account_id,
+                        "session_minutes": session_minutes,
+                        "watched_count": watched_count,
+                        "likes_sent": likes_sent,
+                        "last_action": "本轮养号会话完成",
+                    })
                 elif self.is_running:
                     self._set_state(
                         account_id,
