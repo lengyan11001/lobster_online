@@ -1,7 +1,7 @@
 {
-  "version": "2.0.355",
-  "build": 663,
-  "applied_at": "2026-11-24T13:57:07+08:00",
-  "note": "修复抖音养号直播间卡住/进度事件/验证码快速失败/父任务失败清理排队子任务",
-  "bundle_sha256": "c6eced4deb46885b826f360a33e3fedbeabd6a5aba82e8813bee19bc15811842"
+  "version": "2.0.356",
+  "build": 664,
+  "applied_at": "2026-11-24T15:23:22+08:00",
+  "note": "发布文案锁定模板语种：中文模板不再生成英文话题标签",
+  "bundle_sha256": "0e83b638ea72ffa90a6bc4e9fcaa834824adb087f95a56cca9d2694b5ee4658a"
 }
