@@ -15398,6 +15398,50 @@ async def _process_publish_request_detached(
                 logger.warning("[SCHEDULED-TASK] publish failure callback failed run_id=%s: %s", run_id, post_exc)
 
 
+async def _scheduled_task_wake_stream(wake_event: asyncio.Event) -> None:
+    """Hold an SSE connection that fires ``wake_event`` for executor runs.
+
+    The cloud still owns claiming; this only removes the 90s poll latency for
+    H5 live-executor tasks. Workflow runs are not recorded server-side yet, so
+    they keep the existing interval. Any failure falls back to polling.
+    """
+    backoff = 1.0
+    while True:
+        base = _cloud_base()
+        jwt_token, installation_id = _auth_context()
+        if not base or not jwt_token:
+            await asyncio.sleep(5.0)
+            continue
+        started = time.monotonic()
+        try:
+            timeout = httpx.Timeout(None, connect=10.0, read=45.0, write=10.0, pool=10.0)
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                async with client.stream(
+                    "GET",
+                    f"{base}/api/scheduled-tasks/stream",
+                    headers=_headers(jwt_token, installation_id),
+                ) as resp:
+                    if resp.status_code == 401:
+                        await asyncio.sleep(30.0)
+                        continue
+                    resp.raise_for_status()
+                    backoff = 1.0
+                    logger.info("[SCHEDULED-TASK] wake stream connected installation=%s", installation_id)
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data:"):
+                            wake_event.set()
+                        elif line.startswith("event:") and "reconnect" in line:
+                            break
+                        if time.monotonic() - started > 20 * 60:
+                            break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("[SCHEDULED-TASK] wake stream disconnected: %r", exc)
+        await asyncio.sleep(min(30.0, backoff) * random.uniform(0.7, 1.3))
+        backoff = min(backoff * 2, 30.0)
+
+
 async def h5_chat_poll_loop() -> None:
     if not _enabled():
         logger.info("[H5-CHAT] remote H5 chat channel disabled")
@@ -15431,6 +15475,9 @@ async def h5_chat_poll_loop() -> None:
     active_task_runs: set[asyncio.Task] = set()
     active_publish_runs: set[asyncio.Task] = set()
     poll_error_streak = 0
+    wake_event = asyncio.Event()
+    task_wake_pending = False
+    asyncio.create_task(_scheduled_task_wake_stream(wake_event))
     # An idle H5 queue backs off to the idle interval (and snaps back to the
     # responsive interval as soon as a message shows up) so a quiet fleet does
     # not keep hammering the cloud every 10-15 seconds.
@@ -15468,6 +15515,10 @@ async def h5_chat_poll_loop() -> None:
                 # 避免一次 502 就让服务端认为任务停摆。
                 await _flush_task_control_outbox(client, headers)
                 now_loop = asyncio.get_event_loop().time()
+                if wake_event.is_set():
+                    wake_event.clear()
+                    last_task_poll_at = 0.0
+                    task_wake_pending = True
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
                     try:
                         heartbeat_payload = {
@@ -15559,12 +15610,17 @@ async def h5_chat_poll_loop() -> None:
                 )
                 if task_slots > 0 and now_loop - last_task_poll_at >= task_poll_interval:
                     last_task_poll_at = now_loop
+                    task_headers = headers
+                    if task_wake_pending:
+                        # Skip the server's per-worker 20s empty cache: the run
+                        # may live in a different uvicorn worker.
+                        task_headers = {**headers, "X-Lobster-Wake": "1"}
                     task_resp = await request_with_auth_retry(
                         client,
                         "GET",
                         f"{base}/api/scheduled-tasks/pending",
                         params={"limit": task_slots},
-                        headers=headers,
+                        headers=task_headers,
                     )
                     if task_resp.status_code == 401:
                         logger.warning("[SCHEDULED-TASK] 登录已失效（续签也失败），请重新登录")
@@ -15580,6 +15636,7 @@ async def h5_chat_poll_loop() -> None:
                         continue
                     if task_resp.status_code < 400:
                         task_items = (task_resp.json() or {}).get("items") or []
+                        task_wake_pending = False
                         # The cloud reaps runs from a previous client process
                         # while serving this claim, so the exit reason has now
                         # been consumed and must not be replayed.
@@ -15638,7 +15695,15 @@ async def h5_chat_poll_loop() -> None:
                         last_publish_poll_at + publish_poll_interval if publish_slots > 0 else now_loop + publish_poll_interval,
                         last_heartbeat_at + heartbeat_interval,
                     )
-                    await asyncio.sleep(max(0.5, min(5.0, next_due - asyncio.get_event_loop().time())))
+                    timeout_s = max(0.5, min(5.0, next_due - asyncio.get_event_loop().time()))
+                    try:
+                        await asyncio.wait_for(wake_event.wait(), timeout=timeout_s)
+                    except asyncio.TimeoutError:
+                        pass
+                    else:
+                        wake_event.clear()
+                        last_task_poll_at = 0.0
+                        task_wake_pending = True
                     continue
                 for item in items:
                     active_items.add(asyncio.create_task(_process_item_detached(base, jwt_token, installation_id, item)))
