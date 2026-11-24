@@ -168,8 +168,16 @@ async def generate_publish_copy(
     }.get((platform or "").strip().lower(), platform or "该平台")
 
     lang = content_lang.normalize(language) if str(language or "").strip() else ""
+    if lang:
+        lang_rule = content_lang.instruction(lang) + "\n"
+    else:
+        # 没拿到模板语种也不能裸跑：素材是中文时必须出中文标签，历史上就是这里漏了约束导致英文 tags。
+        lang_rule = (
+            "【目标语种】跟随素材正文/口播的语言；素材为中文时标题、正文、话题标签必须全部使用简体中文，"
+            "话题标签不得出现英文或中英混排。\n"
+        )
     sys = (
-        (content_lang.instruction(lang) + "\n" if lang else "")
+        lang_rule
         + "你是短视频与图文「发布文案」助手，只根据给定素材信息写可上架的标题与话术。\n"
         "【硬性规则】\n"
         "1. 只输出一个 JSON 对象，不要 Markdown 说明、不要代码块外的任何文字。\n"

@@ -83,3 +83,35 @@ async def test_online_publish_copy_never_falls_back_to_local_key(monkeypatch):
             filename="video.mp4",
             raw_token="",
         )
+
+
+@pytest.mark.asyncio
+async def test_publish_copy_prompt_defaults_to_chinese_tags_when_language_missing(monkeypatch):
+    """没传模板语种时也要锁中文标签（模板选了中文却出英文 tags 的兜底）。"""
+    monkeypatch.setattr(publish_copy_llm.settings, "lobster_edition", "online")
+    monkeypatch.setattr(publish_copy_llm.settings, "auth_server_base", "https://server.example")
+    monkeypatch.setattr(
+        publish_copy_llm.settings,
+        "lobster_orchestration_sutui_chat_model",
+        "server-default-model",
+    )
+    captured = {}
+
+    async def fake_chat_openai(messages, cfg, tools, raw_token, sutui_token=None, **kwargs):
+        captured["system"] = messages[0]["content"]
+        return '{"title":"客服场景","description":"正文","tags":"同城,客服"}'
+
+    monkeypatch.setattr(chat, "_chat_openai", fake_chat_openai)
+
+    result = await publish_copy_llm.generate_publish_copy(
+        platform="douyin",
+        media_type="video",
+        asset_prompt="客服把客户地址发到群里，信息全曝光。",
+        filename="video.mp4",
+        raw_token="server-token",
+        chat_model="sutui",
+    )
+
+    assert "简体中文" in captured["system"]
+    assert "话题标签" in captured["system"]
+    assert result[2] == "同城,客服"

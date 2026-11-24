@@ -44,6 +44,7 @@ from ..services.document_text_extractor import (
 )
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
+from ..services import content_language
 from ..services import native_wechat_engine
 from ..services.cloud_auth_retry import request_with_auth_retry
 from ..services import native_whatsapp_engine
@@ -4000,6 +4001,11 @@ async def _generate_scheduled_publish_copy(
         "不要 Markdown，不要解释。"
         + _platform_publish_rules(platform)
     )
+    # 模板选了中文却出英文标签的根因：这段提示词以前没有任何语种约束，
+    # 父节点 prompt/文件名是英文时模型会把 tags 写成英文。
+    target_language = str(generated.get("language") or "").strip()
+    if target_language:
+        system = content_language.instruction(target_language) + "\n" + system
     if source_script:
         system += (
             "\nThe source_oral_script is the primary factual source. Create platform copy from its actual topic and claims; "
@@ -4019,9 +4025,14 @@ async def _generate_scheduled_publish_copy(
                 "source_oral_script": source_script,
                 "skill_result_summary": _compact_result_text(result)[:1200],
                 "result_refs": refs,
+                "target_language": target_language,
                 "requirements": (
                     "标题、正文、标签要适合所选平台；不要编造不存在的优惠、价格或地址。"
                     " When source_oral_script is present, derive every field from that script."
+                    + (
+                        " 标题、正文、话题标签必须全部使用目标语种，话题标签不得出现英文或中英混排。"
+                        if target_language else ""
+                    )
                 ),
             },
             temperature=0.55,
@@ -4130,7 +4141,23 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         or generated.get("keywords")
         or ""
     )
-    language = first_text(generated.get("language"), local_result.get("language"), record.get("language"), limit=64)
+    # 语种优先取父节点产出里显式写的；没有就看父节点任务参数里的模板 requirements
+    # （数字人/同城爆款/口播等 client_workflow 都把语种放在 params.requirements）。
+    parent_params = result_payload.get("params") if isinstance(result_payload.get("params"), dict) else {}
+    parent_requirements = parent_params.get("requirements") if isinstance(parent_params.get("requirements"), dict) else {}
+    local_params = local_result.get("params") if isinstance(local_result.get("params"), dict) else {}
+    local_requirements = local_params.get("requirements") if isinstance(local_params.get("requirements"), dict) else {}
+    language = first_text(
+        generated.get("language"),
+        local_result.get("language"),
+        record.get("language"),
+        publish_draft.get("language"),
+        parent_requirements.get("language"),
+        parent_requirements.get("target_language"),
+        local_requirements.get("language"),
+        local_requirements.get("target_language"),
+        limit=64,
+    )
     source_content_mode = ""
     if str(publish_draft.get("source_task") or "").strip() == "moments_candidate":
         source_content_mode = "ip_moment_first"
@@ -14340,6 +14367,16 @@ async def _run_client_workflow_action(
             # call rewriting it.
             publish_description = source_content or source_script
         publish_tags = str(source.get("tags") or "").strip()
+        publish_options = dict(source.get("options")) if isinstance(source.get("options"), dict) else {}
+        publish_language = str(
+            material_source.get("source_language")
+            or publish_options.get("content_language")
+            or source.get("content_language")
+            or source.get("language")
+            or ""
+        ).strip()
+        if publish_language and not publish_options.get("content_language"):
+            publish_options["content_language"] = publish_language
         generated_publish_copy: Dict[str, str] = {}
         generate_copy = bool(source.get("ai_publish_copy", True)) and not (
             _is_wechat_moments_platform(platform)
@@ -14355,7 +14392,7 @@ async def _run_client_workflow_action(
                     "script": source_script,
                     "caption_hint": str(material_source.get("source_caption") or "").strip(),
                     "tags": str(material_source.get("source_tags") or "").strip(),
-                    "language": str(material_source.get("source_language") or "").strip(),
+                    "language": publish_language,
                 },
                 result=material_source,
                 refs={
@@ -14410,7 +14447,7 @@ async def _run_client_workflow_action(
                 "description": publish_description or str(material_source.get("source_caption") or material_source.get("description") or "").strip(),
                 "tags": publish_tags,
                 "media_type": str(material_source.get("media_type") or source.get("media_type") or "image_text").strip() or "image_text",
-                "options": source.get("options") if isinstance(source.get("options"), dict) else {},
+                "options": dict(publish_options),
             }
             publish_result = await _submit_local_publish_draft(draft=draft, headers=headers)
             return {
@@ -14427,7 +14464,6 @@ async def _run_client_workflow_action(
         account_nickname = str(source.get("account_nickname") or "").strip()
         if not account_nickname:
             raise RuntimeError("发布中心入库缺少发布账号昵称")
-        publish_options = dict(source.get("options")) if isinstance(source.get("options"), dict) else {}
         if source_script:
             publish_options["_source_prompt"] = source_script
         publish_body: Dict[str, Any] = {

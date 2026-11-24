@@ -1,3 +1,4 @@
+import json
 import pytest
 import httpx
 
@@ -731,3 +732,116 @@ async def test_parent_material_rejects_previous_day_when_today_has_none():
             },
             current_item={"id": "child", "created_at": "2026-07-27T00:45:00"},
         )
+
+
+def test_parent_language_comes_from_template_requirements():
+    """模板语种挂在父节点 params.requirements 上时，子发布也要拿到（中文模板不能出英文标签）。"""
+    context = _extract_parent_publish_context(
+        {
+            "task_kind": "client_workflow",
+            "action": "shanjian_digital_human_video",
+            "params": {
+                "requirements": {
+                    "language": "zh-CN",
+                    "target_language": "简体中文",
+                    "common": "目标语种：简体中文",
+                }
+            },
+            "local_result": {
+                "action": "shanjian_digital_human_video",
+                "script": "客服把客户地址发到群里，信息全曝光。",
+            },
+        }
+    )
+
+    assert context["source_language"] == "zh-CN"
+
+
+def test_parent_language_falls_back_to_local_result_requirements():
+    context = _extract_parent_publish_context(
+        {
+            "local_result": {
+                "params": {"requirements": {"target_language": "繁體中文"}},
+                "script": "繁體中文口播",
+            }
+        }
+    )
+
+    assert context["source_language"] == "繁體中文"
+
+
+@pytest.mark.asyncio
+async def test_publish_copy_prompt_locks_language_for_tags(monkeypatch):
+    captured = {}
+
+    async def fake_llm(*, base, headers, system, user_payload, temperature=0.0):
+        captured["system"] = system
+        captured["payload"] = user_payload
+        return json.dumps({"title": "标题", "description": "正文", "tags": "同城,客服,数字化"})
+
+    monkeypatch.setattr(channel, "_call_scheduled_llm", fake_llm)
+
+    result = await channel._generate_scheduled_publish_copy(
+        base="https://example.com",
+        headers={},
+        capability_id="hifly.video.create_by_tts",
+        generated={"title": "数字人口播", "language": "zh-CN", "tags": ""},
+        result={},
+        refs={"asset_ids": [], "urls": []},
+        platform="douyin",
+        task_title="数字人口播",
+        caption="",
+        source_script="客服把客户地址发到群里，信息全曝光。",
+    )
+
+    assert "【目标语种" in captured["system"]
+    assert "简体中文" in captured["system"]
+    assert "话题标签" in captured["system"]
+    assert captured["payload"]["target_language"] == "zh-CN"
+    assert "话题标签必须全部使用目标语种" in captured["payload"]["requirements"]
+    assert "同城" in result["tags"] and "客服" in result["tags"]
+
+
+@pytest.mark.asyncio
+async def test_publish_content_passes_language_into_local_publish_options(monkeypatch):
+    async def resolve_parent(*args, **kwargs):
+        return {
+            "asset_id": "video-asset",
+            "media_type": "video",
+            "source_script": "客服把客户地址发到群里。",
+            "source_title": "客服场景",
+            "source_language": "zh-CN",
+            "source_run_id": "parent-run",
+        }
+
+    async def generate_copy(**kwargs):
+        assert kwargs["generated"]["language"] == "zh-CN"
+        return {"title": "标题", "description": "正文", "tags": "#同城"}
+
+    calls = []
+
+    async def post_local(path, body, **kwargs):
+        calls.append((path, body))
+        return {"ok": True}
+
+    monkeypatch.setattr(channel, "_resolve_parent_workflow_material", resolve_parent)
+    monkeypatch.setattr(channel, "_generate_scheduled_publish_copy", generate_copy)
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+
+    await channel._run_client_workflow_action(
+        "publish_content",
+        {
+            "platform": "douyin",
+            "source_mode": "parent_latest_run",
+            "source_workflow_node_id": "digital-human-node",
+            "account_nickname": "default douyin",
+            "ai_publish_copy": True,
+        },
+        headers={},
+        run_id="child-run",
+        cloud=object(),
+        base="https://example.com",
+    )
+
+    body = calls[0][1]
+    assert body["options"]["content_language"] == "zh-CN"
