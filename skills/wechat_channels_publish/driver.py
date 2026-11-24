@@ -1498,7 +1498,9 @@ _PUBLISH_DIALOG_JS = r"""
           if (cb) {
             checkboxChecked = 'checked' in cb ? !!cb.checked
                             : String(cb.getAttribute ? cb.getAttribute('aria-checked') : '').toLowerCase() === 'true';
-            cb.setAttribute('data-lobster-target', 'notice-checkbox');
+            const wrap = cb.closest('label, [role="checkbox"], .ant-checkbox-wrapper') || cb;
+            const tgt = visible(wrap) ? wrap : cb;
+            tgt.setAttribute('data-lobster-target', 'notice-checkbox');
             hasCheckbox = true;
           } else {
             const tgt = el.closest('button, [role="button"], a') || el;
@@ -1658,11 +1660,25 @@ async def _handle_original_notice(page: Any, enabled: bool, _step, *, declare_or
         info = await _probe_publish_dialogs(page)
         if not info.get("notice") and not info.get("has_continue"):
             return ""
+        checkbox_stuck = False
         if bool(enabled) and info.get("has_checkbox") and not info.get("checkbox_checked"):
-            if await _click_tagged(page, "notice-checkbox"):
-                _step("勾选原创提示不再提醒/同意条款", True)
+            clicked = await _click_tagged(page, "notice-checkbox")
+            await _delay(0.25, 0.6)
+            info = await _probe_publish_dialogs(page)
+            if info.get("has_checkbox") and not info.get("checkbox_checked"):
+                # 有些版本复选框在 shadow root 里，点文本 span 不会触发 input，再点一次可见容器
+                clicked = await _click_tagged(page, "notice-checkbox") or clicked
                 await _delay(0.25, 0.6)
                 info = await _probe_publish_dialogs(page)
+            if info.get("has_checkbox") and not info.get("checkbox_checked"):
+                checkbox_stuck = True
+                # 条款勾不上时「声明原创」通常是禁用按钮，点下去不会提交，页面会一直停在 /post/create
+                _step("勾选原创提示不再提醒/同意条款", False, reason="checkbox_not_checked", clicked=bool(clicked))
+            elif clicked:
+                _step("勾选原创提示不再提醒/同意条款", True)
+        if declare_original and checkbox_stuck and info.get("has_checkbox"):
+            # 宁可这次不声明原创，也不能把发布卡死：退回到「取消」路径，先发出去
+            declare_original = False
         # 2026-10-17：用户截图里的弹窗是「原创权益」——勾选"我已阅读并同意《原创声明须知》和《使用条款》"
         # +「取消」/「声明原创」。不声明原创就点取消，回到编辑页再点发表（不带原创）。
         if not declare_original and info.get("has_cancel") and info.get("has_continue"):
@@ -1689,6 +1705,50 @@ async def _handle_original_notice(page: Any, enabled: bool, _step, *, declare_or
 
 
 
+_PUBLISH_SUCCESS_WORDS = ("发表成功", "发布成功", "提交成功", "已发表", "已发布", "已提交审核", "审核中", "发布完成", "内容已发布")
+_PUBLISH_BUSY_WORDS = ("发表中", "发布中", "提交中", "正在发表", "正在发布", "正在提交", "请稍候")
+
+
+def _publish_in_flight(text: str) -> bool:
+    return any(word in str(text or "") for word in _PUBLISH_BUSY_WORDS)
+
+
+async def _publish_success_now(page: Any) -> bool:
+    "判断发表是否已经生效：出现成功提示，或已经离开 /post/create。"
+    try:
+        text = await _deep_text(page)
+    except Exception:
+        text = ""
+    if any(word in text for word in _PUBLISH_SUCCESS_WORDS):
+        return True
+    url = (getattr(page, "url", "") or "").split("?")[0].rstrip("/")
+    return bool(url) and not url.endswith("/post/create") and "/login" not in url
+
+
+async def _reclick_publish_if_stuck(page: Any, _step) -> bool:
+    "原创弹窗关掉后页面仍停在编辑页时，补点一次发表（否则会空等 45 秒）。"
+    try:
+        text = await _deep_text(page)
+    except Exception:
+        text = ""
+    if _publish_in_flight(text):
+        _step("发表处理中，等待结果", True)
+        return False
+    btn = await _wait_publish_ready(page, 8, _step)
+    if not btn:
+        return False
+    try:
+        await _human_click(page, btn, timeout_ms=12000)
+    except Exception:
+        try:
+            await btn.click(force=True, timeout=_pw_ms(12000))
+        except Exception:
+            return False
+    _step("再次点击发表", True)
+    await asyncio.sleep(2.5)
+    return True
+
+
 async def _verify_publish_result(page: Any, _step) -> Dict[str, Any]:
     success_words = ("发表成功", "发布成功", "提交成功", "已发表", "已发布", "已提交审核", "审核中", "发布完成", "内容已发布")
     fail_words = ("发表失败", "发布失败", "提交失败", "请上传", "不能为空", "格式不支持", "审核失败", "资料不完整", "内容不合规")
@@ -1696,10 +1756,32 @@ async def _verify_publish_result(page: Any, _step) -> Dict[str, Any]:
     def _excerpt(text: str, limit: int = 260) -> str:
         return " ".join((text or "").split())[:limit]
 
-    for _ in range(45):
+    for tick in range(45):
         text = await _deep_text(page)
         url = getattr(page, "url", "") or ""
         excerpt = _excerpt(text)
+        if tick == 12:
+            try:
+                dlg = await _probe_publish_dialogs(page)
+            except Exception:
+                dlg = {}
+            if isinstance(dlg, dict) and (dlg.get("notice") or dlg.get("has_continue")):
+                _step(
+                    "原创声明弹窗未完成",
+                    False,
+                    buttons=(dlg.get("buttons") or [])[:20],
+                    checkbox=bool(dlg.get("has_checkbox")),
+                    checked=bool(dlg.get("checkbox_checked")),
+                    url=url,
+                )
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "url": url,
+                    "error": "视频号原创声明弹窗未能完成（条款未勾选或按钮不可用），已停止空等",
+                    "dialog_buttons": (dlg.get("buttons") or [])[:20],
+                    "page_text_excerpt": excerpt,
+                }
         matched_fail = next((word for word in fail_words if word in text), "")
         if matched_fail:
             _step("检测发布结果", False, matched=matched_fail, url=url)
@@ -1945,26 +2027,24 @@ class WechatChannelsDriver(BaseDriver):
                 _step("确认发表", True)
 
             # 2026-10-17 线上（diag_20261017090024_4f4cac8a）：点发表后弹「原创声明」，
-            # 我们的「继续」实际点的是「我知道了」——这只是关掉提示，发表并没有提交，
-            # 于是 45 秒后停在 /platform/post/create 报"发布结果未明确识别"。
-            # 如果弹窗按钮不是"发表/确认/提交"，说明只是关闭提示：再点一次发表。
-            if notice_handled and not _notice_button_is_submit(notice_button):
-                _step("原创提示已关闭，再次点击发表", True, notice_button=notice_button)
-                await asyncio.sleep(0.8)
-                retry_btn = await _wait_publish_ready(page, 20, _step)
-                if retry_btn:
-                    try:
-                        await _human_click(page, retry_btn, timeout_ms=12000)
-                    except Exception:
-                        await retry_btn.click(force=True, timeout=_pw_ms(12000))
-                    _step("再次点击发表", True)
-                    for _ in range(2):
-                        again = await _handle_original_notice(
-                            page, bool(notice_no_remind), _step, declare_original=declare_original
-                        )
-                        if again:
-                            break
-                        await asyncio.sleep(0.5)
+            # 我们的「继续」实际点的是「我知道了」——这只是关掉提示，发表并没有提交。
+            # 2026-11-24 线上（diag_20261124094127_ad611ee1）：点的是「声明原创」，但条款没勾上时
+            # 该按钮是禁用的，点完弹窗关掉、页面仍停在 /post/create，白等 45 秒。
+            # 所以不再相信按钮文案：等几秒确认是否真的提交，没提交就补点一次发表。
+            await asyncio.sleep(2.5)
+            for _ in range(2):
+                if await _publish_success_now(page):
+                    break
+                again = await _handle_original_notice(
+                    page, bool(notice_no_remind), _step, declare_original=declare_original
+                )
+                if again:
+                    await asyncio.sleep(1.5)
+                    continue
+                if await _reclick_publish_if_stuck(page, _step):
+                    await asyncio.sleep(2.0)
+                else:
+                    break
 
             result = await _verify_publish_result(page, _step)
             result["applied"] = applied
