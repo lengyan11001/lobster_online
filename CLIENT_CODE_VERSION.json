@@ -1,7 +1,7 @@
 {
-  "version": "2.0.356",
-  "build": 664,
-  "applied_at": "2026-11-24T15:23:22+08:00",
-  "note": "发布文案锁定模板语种：中文模板不再生成英文话题标签",
-  "bundle_sha256": "0e83b638ea72ffa90a6bc4e9fcaa834824adb087f95a56cca9d2694b5ee4658a"
+  "version": "2.0.357",
+  "build": 665,
+  "applied_at": "2026-11-24T18:22:42+08:00",
+  "note": "H5 执行台任务 SSE 秒级领取；同设备队列即时交接；视频号原创声明不卡发布",
+  "bundle_sha256": "56bbc103298a4fe5f317fe78bae099c61cefb289d13fd6fb6eef171acc7181b9"
 }
