@@ -15494,8 +15494,17 @@ async def h5_chat_poll_loop() -> None:
 
     while True:
         _reap_channel_tasks(active_items, "H5-CHAT")
+        task_runs_before = len(active_task_runs)
         _reap_channel_tasks(active_task_runs, "SCHEDULED-TASK")
+        if len(active_task_runs) < task_runs_before:
+            # A device runs one executor task at a time. As soon as one
+            # finishes, claim the next queued run instead of waiting 90s.
+            last_task_poll_at = 0.0
+            task_wake_pending = True
+        publish_runs_before = len(active_publish_runs)
         _reap_channel_tasks(active_publish_runs, "SCHEDULED-PUBLISH")
+        if len(active_publish_runs) < publish_runs_before:
+            last_publish_poll_at = 0.0
 
         base = _cloud_base()
         jwt_token, installation_id = _auth_context()
