@@ -1,7 +1,7 @@
 {
-  "version": "2.0.350",
-  "build": 658,
-  "applied_at": "2026-11-19T16:29:35+08:00",
-  "note": "今日总结 + 群成员导出；读走本地库",
-  "bundle_sha256": "a5370d10ac62973af8f8bf2603bd24ecb35f8f631f5d7b5c202b5a977c13f77a"
+  "version": "2.0.355",
+  "build": 663,
+  "applied_at": "2026-11-24T13:57:07+08:00",
+  "note": "修复抖音养号直播间卡住/进度事件/验证码快速失败/父任务失败清理排队子任务",
+  "bundle_sha256": "c6eced4deb46885b826f360a33e3fedbeabd6a5aba82e8813bee19bc15811842"
 }
