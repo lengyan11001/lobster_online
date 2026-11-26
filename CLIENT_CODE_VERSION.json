@@ -1,7 +1,7 @@
 {
-  "version": "2.0.360",
-  "build": 668,
-  "applied_at": "2026-11-26T14:05:18+08:00",
-  "note": "代理池二级页/批量测试/评分/IP类型识别；YouTube 风控改造；AI 调度助手草稿与滚动修复",
-  "bundle_sha256": "c87367d56a80968c7899673b123dbea91aa60cb75995fc22f9cdd9d2a777b4df"
+  "version": "2.0.361",
+  "build": 670,
+  "applied_at": "2026-11-26T17:10:58+08:00",
+  "note": "海外：YouTube 自动文案标签语种修复；代理池/评分/IP类型；AI 调度草稿修复",
+  "bundle_sha256": "133d99ae51f1b9d6af770e55e51cfac7c06c51c7e2c68377b8dde329dd16253e"
 }
