@@ -484,32 +484,74 @@ def _fetch_manifest_with_retry(url: str) -> dict:
     raise last_exc
 
 
-def _download_file(url: str, dest: Path, timeout: int = 900) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "LobsterClientCode/1.0"})
+_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_RETRY_DELAY_SECONDS = 3.0
+
+
+def _open_url(req: urllib.request.Request, timeout: int):
+    try:
+        return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
+    except urllib.error.URLError as exc:
+        text = str(exc).upper()
+        if "CERTIFICATE_VERIFY_FAILED" not in text and "SSL" not in text:
+            raise
+        print(f"[code] [WARN] SSL 证书校验失败，降级为不校验模式重试: {exc}", flush=True)
+        retry = urllib.request.Request(req.full_url, headers=dict(req.headers))
+        return urllib.request.urlopen(retry, timeout=timeout, context=_ssl_context(allow_unverified=True))
+
+
+def _download_file(
+    url: str,
+    dest: Path,
+    timeout: int = 900,
+    *,
+    expected_sha: str = "",
+    label: str = "bundle",
+) -> None:
+    """下载并校验；网络中断时自动重试，服务端支持 Range 时断点续传。"""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.downloading.{os.getpid()}")
-    if tmp.exists():
-        tmp.unlink()
-    try:
-        with tmp.open("wb") as f:
-            try:
-                with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
-                    shutil.copyfileobj(resp, f, length=1024 * 1024)
-            except urllib.error.URLError as e:
-                if "CERTIFICATE_VERIFY_FAILED" not in str(e) and "SSL" not in str(e).upper():
-                    raise
-                print(f"[code] [WARN] SSL 璇佷功楠岃瘉澶辫触锛岄檷绾т负涓嶉獙璇佹ā寮? {e}", flush=True)
-                req2 = urllib.request.Request(req.full_url, headers=dict(req.headers))
-                with urllib.request.urlopen(req2, timeout=timeout, context=_ssl_context(allow_unverified=True)) as resp:
-                    shutil.copyfileobj(resp, f, length=1024 * 1024)
-        os.replace(str(tmp), str(dest))
-    except Exception:
+    last_error: Exception | None = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        resume_from = tmp.stat().st_size if tmp.exists() else 0
+        headers = {"User-Agent": "LobsterClientCode/1.0"}
+        if resume_from > 0:
+            headers["Range"] = f"bytes={resume_from}-"
+        req = urllib.request.Request(url, headers=headers)
         try:
-            if tmp.exists():
-                tmp.unlink()
+            with _open_url(req, timeout) as resp:
+                status = int(getattr(resp, "status", 200) or 200)
+                if resume_from and status != 206:
+                    resume_from = 0
+                declared = str(resp.headers.get("Content-Length") or "").strip()
+                expected_total = resume_from + int(declared) if declared.isdigit() else 0
+                with tmp.open("ab" if resume_from else "wb") as fh:
+                    shutil.copyfileobj(resp, fh, length=1024 * 1024)
+            size = tmp.stat().st_size if tmp.exists() else 0
+            if expected_total and size != expected_total:
+                raise OSError(f"下载不完整 {size}/{expected_total} 字节")
+            if expected_sha and _sha256_file(tmp) != expected_sha:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                raise OSError("SHA256 与 manifest 不一致（文件被截断或内容被改写）")
+            os.replace(str(tmp), str(dest))
+            return
+        except Exception as exc:  # noqa: BLE001 - 任何中断都重试
+            last_error = exc
+            print(
+                f"[code] [WARN] {label} 下载中断（第 {attempt}/{_DOWNLOAD_ATTEMPTS} 次）: {exc}",
+                flush=True,
+            )
+            if attempt < _DOWNLOAD_ATTEMPTS:
+                time.sleep(_DOWNLOAD_RETRY_DELAY_SECONDS * attempt)
+    if tmp.exists():
+        try:
+            tmp.unlink()
         except OSError:
             pass
-        raise
+    raise last_error if last_error else RuntimeError("download failed")
 
 
 def _sha256_file(path: Path) -> str:
@@ -965,6 +1007,23 @@ def _artifact_url(item: dict[str, Any]) -> str:
     return str(item.get("url") or item.get("bundle_url") or "").strip()
 
 
+def _artifact_urls(item: dict[str, Any]) -> list[str]:
+    """按优先级返回候选下载地址；主源失败时自动切换备用源。"""
+    candidates: list[str] = []
+    extra = item.get("urls")
+    if isinstance(extra, list):
+        candidates.extend(str(u or "").strip() for u in extra)
+    for key in ("url", "bundle_url", "url_alt", "bundle_url_alt"):
+        candidates.append(str(item.get(key) or "").strip())
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in candidates:
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
 def _artifact_sha(item: dict[str, Any]) -> str:
     return str(item.get("sha256") or "").strip().lower()
 
@@ -1354,7 +1413,7 @@ def _download_verified(url: str, expect_sha: str, dest: Path, *, label: str) -> 
         return False
     print(f"[code-progress] download_start label={label} url={url}", flush=True)
     try:
-        _download_file(url, dest)
+        _download_file(url, dest, expected_sha=expect_sha, label=label)
     except Exception as e:
         print(f"[code] [WARN] {label} 下载失败: {e}", flush=True)
         return False
@@ -1711,13 +1770,20 @@ def _apply_resources(resources: Any, tdir: Path) -> None:
 
 
 def _apply_update_artifact(artifact: dict[str, Any], tdir: Path, *, label: str) -> list[str] | None:
-    url = _artifact_url(artifact)
+    urls = _artifact_urls(artifact)
     sha = _artifact_sha(artifact)
     paths = _artifact_paths(artifact)
     if not _validate_paths(paths):
         return None
     zpath = tdir / f"{label}.zip"
-    if not _download_verified(url, sha, zpath, label=label):
+    downloaded = False
+    for index, url in enumerate(urls, start=1):
+        if index > 1:
+            print(f"[code] 切换备用下载源（{index}/{len(urls)}）: {url}", flush=True)
+        if _download_verified(url, sha, zpath, label=label):
+            downloaded = True
+            break
+    if not downloaded:
         return None
     _stop_client_services_before_update()
     try:
@@ -1851,6 +1917,8 @@ def _main_locked() -> int:
         if applied is None:
             full_artifact = {
                 "url": manifest.get("bundle_url"),
+                "url_alt": manifest.get("bundle_url_alt"),
+                "urls": manifest.get("bundle_urls"),
                 "sha256": manifest.get("sha256"),
                 "paths": manifest.get("paths") or list(DEFAULT_PATHS),
             }
