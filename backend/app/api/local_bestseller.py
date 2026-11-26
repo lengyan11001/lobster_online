@@ -4,6 +4,8 @@ import asyncio
 import json
 import re
 from pathlib import Path
+
+from ..services.tos_public import rewrite_tos_url
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -130,7 +132,8 @@ def _normalize_bgm_option(
     if not key:
         normalized = re.sub(r"[^a-z0-9]+", "-", music_name.lower()).strip("-")
         key = normalized or fallback_key or "default-bgm"
-    bgm_url = str(item.get("bgm_url") or item.get("url") or "").strip()
+    bgm_url = rewrite_tos_url(str(item.get("bgm_url") or item.get("url") or "").strip())
+    default_url = rewrite_tos_url(default_url)
     try:
         volume = float(item.get("volume") if item.get("volume") is not None else default_volume)
     except Exception:
