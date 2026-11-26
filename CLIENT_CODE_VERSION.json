@@ -1,7 +1,7 @@
 {
-  "version": "2.0.357",
-  "build": 665,
-  "applied_at": "2026-11-24T18:22:42+08:00",
-  "note": "H5 执行台任务 SSE 秒级领取；同设备队列即时交接；视频号原创声明不卡发布",
-  "bundle_sha256": "56bbc103298a4fe5f317fe78bae099c61cefb289d13fd6fb6eef171acc7181b9"
+  "version": "2.0.358",
+  "build": 666,
+  "applied_at": "2026-11-26T12:25:37+08:00",
+  "note": "YouTube 上传页改版：状态卡片/三步授权/概览数据；发布中心接入 YouTube 账号与批量发布；source_url 自动补传",
+  "bundle_sha256": "7f95b297c160d2842772e978ca5168826bd06602dc1c942afd3bee1326415b6d"
 }
