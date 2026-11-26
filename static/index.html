@@ -1802,41 +1802,56 @@
             </div>
           </div>
 
-          <!-- YouTube 多账号（技能商店卡片进入） -->
+          <!-- YouTube 上传（技能商店卡片进入；配置/数据唯一入口） -->
           <div id="content-youtube-accounts" class="content-block">
-            <div class="card">
-              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;">
-                <h3 style="margin:0;">YouTube 账号</h3>
+            <div class="card" style="padding:1rem 1.1rem;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;">
+                <div>
+                  <h3 style="margin:0;">YouTube 上传</h3>
+                  <p class="meta" style="margin:0.25rem 0 0 0;font-size:0.82rem;">管理频道授权、上传数据与定时发布</p>
+                </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
                   <button type="button" id="youtubeAccountsBackBtn" class="btn btn-ghost btn-sm">← 返回技能商店</button>
+                  <button type="button" id="youtubeAccountsRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
                   <button type="button" id="youtubeAccountsAddBtn" class="btn btn-primary btn-sm">+ 添加账号</button>
                 </div>
               </div>
-              <p style="font-size:0.82rem;color:var(--text-muted);margin:0.75rem 0;line-height:1.55;">
-                在 Google Cloud 创建 OAuth 客户端（类型一般为「Web 应用」），将下方<strong>回调地址</strong>加入「已授权的重定向 URI」。
-                每个频道/账号一条记录：填写 Client ID、Secret 与可选代理；保存后会<strong>自动打开浏览器</strong>完成授权，成功即标记为「可用」。
-                在对话中说明素材 <code>asset_id</code> 与目标账号 ID（<code>yt_</code> 开头），例如：把素材 xxx 发到 YouTube 账号 yt_abcd12345678。
-                每个账号可点「定时发布」配置<strong>间隔分钟 + 素材队列</strong>（到点自动上传下一条，不含审核后发布流程）。
-              </p>
-              <div class="form-group" style="margin-bottom:0.75rem;">
-                <label style="font-size:0.85rem;">OAuth 重定向 URI（复制到 Google Cloud）</label>
-                <pre id="youtubeAccountsRedirectPre" style="margin:0;padding:0.5rem;font-size:0.78rem;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,0.2);border-radius:6px;max-height:4rem;overflow:auto;">加载中…</pre>
+              <div id="youtubeSummaryBar" style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.9rem;padding-top:0.8rem;border-top:1px solid var(--border);font-size:0.82rem;">
+                <span>账号 <strong id="ytSumAccounts">0</strong></span>
+                <span style="color:#34d399;">在线 <strong id="ytSumReady">0</strong></span>
+                <span style="color:#fb923c;">待授权 <strong id="ytSumPending">0</strong></span>
+                <span style="color:#f87171;">异常 <strong id="ytSumError">0</strong></span>
               </div>
-              <div id="youtubeAccountsList"></div>
-              <div class="section-divider"></div>
-              <div class="section-title" style="font-size:0.95rem;">测试上传</div>
-              <p style="font-size:0.78rem;color:var(--text-muted);margin:0 0 0.5rem 0;">选择已授权账号并填写素材库中的视频 asset_id。默认公开；AI 成片与脚本批量会设置不同的合成内容披露。</p>
-              <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">
-                <select id="youtubeAccountsTestSelect" style="min-width:12rem;padding:0.45rem;font-size:0.88rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);"></select>
-                <select id="youtubeAccountsTestMaterialOrigin" title="素材来源" style="min-width:9rem;padding:0.45rem;font-size:0.88rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
-                  <option value="script_batch">脚本批量</option>
-                  <option value="ai_generated">AI 生成</option>
-                </select>
-                <input type="text" id="youtubeAccountsTestAssetId" placeholder="asset_id" autocomplete="off" style="flex:1;min-width:10rem;padding:0.45rem;font-size:0.88rem;">
-                <input type="text" id="youtubeAccountsTestTitle" placeholder="标题（可选）" autocomplete="off" style="min-width:8rem;padding:0.45rem;font-size:0.88rem;">
-                <button type="button" id="youtubeAccountsTestBtn" class="btn btn-ghost btn-sm">测试上传</button>
+            </div>
+            <div id="youtubeAccountsList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:0.85rem;margin-top:0.9rem;"></div>
+
+            <details id="youtubeTestPanel" style="margin-top:1rem;">
+              <summary style="cursor:pointer;font-size:0.85rem;color:var(--text-muted);">测试上传</summary>
+              <div class="card" style="margin-top:0.5rem;padding:0.85rem;">
+                <p style="font-size:0.78rem;color:var(--text-muted);margin:0 0 0.5rem 0;">选择已授权账号并填写素材库中的视频 asset_id。默认公开；AI 成片与脚本批量会设置不同的合成内容披露。</p>
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:flex-end;">
+                  <select id="youtubeAccountsTestSelect" style="min-width:12rem;padding:0.45rem;font-size:0.88rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);"></select>
+                  <select id="youtubeAccountsTestMaterialOrigin" title="素材来源" style="min-width:9rem;padding:0.45rem;font-size:0.88rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
+                    <option value="script_batch">脚本批量</option>
+                    <option value="ai_generated">AI 生成</option>
+                  </select>
+                  <input type="text" id="youtubeAccountsTestAssetId" placeholder="asset_id" autocomplete="off" style="flex:1;min-width:10rem;padding:0.45rem;font-size:0.88rem;">
+                  <input type="text" id="youtubeAccountsTestTitle" placeholder="标题（可选）" autocomplete="off" style="min-width:8rem;padding:0.45rem;font-size:0.88rem;">
+                  <button type="button" id="youtubeAccountsTestBtn" class="btn btn-ghost btn-sm">测试上传</button>
+                </div>
+                <div id="youtubeAccountsTestMsg" class="msg" style="display:none;margin-top:0.5rem;"></div>
               </div>
-              <div id="youtubeAccountsTestMsg" class="msg" style="display:none;margin-top:0.5rem;"></div>
+            </details>
+          </div>
+
+          <!-- YouTube 账号详情抽屉 -->
+          <div id="youtubeAccountDrawer" class="modal-mask" style="display:none;">
+            <div class="modal" style="max-width:560px;max-height:82vh;overflow:auto;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+                <h4 id="youtubeDrawerTitle" style="margin:0;font-size:1.05rem;">账号详情</h4>
+                <button type="button" class="btn btn-ghost btn-sm" id="youtubeDrawerClose">关闭</button>
+              </div>
+              <div id="youtubeDrawerBody" style="font-size:0.85rem;"></div>
             </div>
           </div>
 
@@ -2926,37 +2941,76 @@
   </div>
 
   <!-- YouTube 添加/编辑账号弹窗 -->
+  <!-- 添加 YouTube 账号（三步：填写信息 → 浏览器授权 → 完成） -->
   <div id="youtubeAccountAddModal" class="modal-mask">
-    <div class="modal" style="max-width:440px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+    <div class="modal" style="max-width:460px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
         <h4 id="youtubeAccountModalTitle" style="margin:0;font-size:1.05rem;">添加 YouTube 账号</h4>
         <button type="button" class="btn btn-ghost btn-sm" id="youtubeAccountAddModalClose">关闭</button>
       </div>
-      <p id="youtubeAccountModalHint" style="font-size:0.78rem;color:var(--text-muted);margin:0 0 0.75rem 0;">保存后将生成账号 ID（yt_ 开头），并自动打开浏览器向 Google 授权。</p>
-      <div class="modal-field">
-        <label>备注名 <span style="font-weight:normal;color:var(--text-muted);">(可选)</span></label>
-        <input type="text" id="youtubeAddLabel" placeholder="例如：主频道" autocomplete="off">
+      <div id="youtubeAddStepBar" style="display:flex;gap:0.5rem;font-size:0.78rem;color:var(--text-muted);margin-bottom:0.9rem;">
+        <span data-yt-step="1" style="color:var(--text);">1 填写信息</span>
+        <span>→</span>
+        <span data-yt-step="2">2 浏览器授权</span>
+        <span>→</span>
+        <span data-yt-step="3">3 完成</span>
       </div>
-      <div class="modal-field">
-        <label>OAuth Client ID</label>
-        <input type="text" id="youtubeAddClientId" placeholder="xxx.apps.googleusercontent.com" autocomplete="off">
+
+      <div id="youtubeAddStep1">
+        <div class="modal-field">
+          <label>备注名 <span style="font-weight:normal;color:var(--text-muted);">(可选)</span></label>
+          <input type="text" id="youtubeAddLabel" placeholder="例如：主频道" autocomplete="off">
+        </div>
+        <div class="modal-field">
+          <label>OAuth Client ID</label>
+          <input type="text" id="youtubeAddClientId" placeholder="xxx.apps.googleusercontent.com" autocomplete="off">
+        </div>
+        <div class="modal-field">
+          <label>OAuth Client Secret</label>
+          <input type="password" id="youtubeAddClientSecret" placeholder="GOCSPX-…" autocomplete="new-password">
+        </div>
+        <div class="modal-field">
+          <label>代理地址 <span style="font-weight:normal;color:var(--text-muted);">(可选)</span></label>
+          <input type="text" id="youtubeAddProxy" placeholder="http://静态IP:端口" autocomplete="off">
+        </div>
+        <div class="modal-field">
+          <label>代理用户名 / 密码 <span style="font-weight:normal;color:var(--text-muted);">(可选)</span></label>
+          <input type="text" id="youtubeAddProxyUser" placeholder="用户名" autocomplete="off" style="margin-bottom:0.35rem;">
+          <input type="password" id="youtubeAddProxyPass" placeholder="密码" autocomplete="new-password">
+        </div>
+        <div class="modal-field">
+          <label>OAuth 重定向 URI（复制到 Google Cloud）</label>
+          <div style="display:flex;gap:0.4rem;align-items:center;margin-top:0.35rem;">
+            <code id="youtubeAccountsRedirectPre" style="flex:1;font-size:0.72rem;word-break:break-all;background:rgba(0,0,0,0.2);padding:0.4rem;border-radius:5px;">加载中…</code>
+            <button type="button" class="btn btn-ghost btn-sm" id="youtubeCopyRedirectBtn">复制</button>
+          </div>
+        </div>
+        <div id="youtubeAccountAddMsg" class="msg" style="display:none;margin-bottom:0.5rem;"></div>
+        <div class="btns" style="justify-content:flex-end;margin-top:0.5rem;">
+          <button type="button" class="btn btn-primary" id="youtubeAccountAddSaveBtn">保存并授权</button>
+        </div>
       </div>
-      <div class="modal-field">
-        <label>OAuth Client Secret</label>
-        <input type="password" id="youtubeAddClientSecret" placeholder="GOCSPX-…" autocomplete="new-password">
+
+      <div id="youtubeAddStep2" style="display:none;">
+        <div style="padding:1.2rem 0.5rem;text-align:center;">
+          <div style="font-size:1.6rem;margin-bottom:0.4rem;">◌</div>
+          <p id="youtubeAddWaitMsg" style="margin:0 0 0.35rem 0;font-weight:600;">正在等待 Google 授权…</p>
+          <p class="meta" style="font-size:0.8rem;margin:0;">已打开 Chrome，请选择频道并同意授权。完成后本窗口会自动更新。</p>
+        </div>
+        <div class="btns" style="justify-content:space-between;margin-top:0.5rem;">
+          <button type="button" class="btn btn-ghost" id="youtubeAddCancelBtn">取消</button>
+          <button type="button" class="btn btn-primary" id="youtubeAddReopenBtn">重新打开授权页</button>
+        </div>
       </div>
-      <div class="modal-field">
-        <label>代理地址 <span style="font-weight:normal;color:var(--text-muted);">(可选)</span></label>
-        <input type="text" id="youtubeAddProxy" placeholder="http://静态IP:端口" autocomplete="off">
-      </div>
-      <div class="modal-field">
-        <label>代理用户名 / 密码 <span style="font-weight:normal;color:var(--text-muted);">(可选)</span></label>
-        <input type="text" id="youtubeAddProxyUser" placeholder="用户名" autocomplete="off" style="margin-bottom:0.35rem;">
-        <input type="password" id="youtubeAddProxyPass" placeholder="密码" autocomplete="new-password">
-      </div>
-      <div id="youtubeAccountAddMsg" class="msg" style="display:none;margin-bottom:0.5rem;"></div>
-      <div class="btns" style="justify-content:flex-end;margin-top:0.5rem;">
-        <button type="button" class="btn btn-primary" id="youtubeAccountAddSaveBtn">保存并授权</button>
+
+      <div id="youtubeAddStep3" style="display:none;">
+        <div style="padding:1rem 0.25rem;text-align:left;">
+          <p style="margin:0 0 0.35rem 0;font-size:1.1rem;font-weight:600;color:#34d399;">✓ 授权成功</p>
+          <p id="youtubeAddSuccessText" class="meta" style="margin:0;font-size:0.82rem;"></p>
+        </div>
+        <div class="btns" style="justify-content:flex-end;margin-top:0.5rem;">
+          <button type="button" class="btn btn-primary" id="youtubeAddDoneBtn">完成</button>
+        </div>
       </div>
     </div>
   </div>

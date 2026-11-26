@@ -1139,6 +1139,66 @@ def put_youtube_publish_schedule(
 # ── YouTube Analytics ──────────────────────────────────────────────────────
 
 
+_overview_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+
+
+@router.get("/api/youtube-publish/accounts/{account_id}/overview", summary="频道概览（卡片用）")
+async def youtube_account_overview(
+    account_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    ent = get_youtube_account_entry(current_user.id, account_id)
+    if not ent:
+        raise HTTPException(404, detail="YouTube 账号不存在")
+    if str(ent.get("status") or "") != "ready":
+        return {"ok": False, "status": str(ent.get("status") or "pending"), "error": "账号未完成授权"}
+    now = time.time()
+    cached = _overview_cache.get(account_id)
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    from ..services.youtube_analytics import _refresh_access_token
+
+    proxy_url, _src = _youtube_account_proxy_url(ent)
+    token = await _refresh_access_token(
+        (ent.get("oauth_client_id") or "").strip(),
+        (ent.get("oauth_client_secret") or "").strip(),
+        (ent.get("refresh_token") or "").strip(),
+        proxy_url,
+    )
+    kwargs, _ = youtube_httpx_client_kwargs(
+        (ent.get("proxy_server") or "").strip() or None,
+        (ent.get("proxy_username") or "").strip() or None,
+        (ent.get("proxy_password") or "").strip() or None,
+        timeout=20.0,
+    )
+    async with httpx.AsyncClient(**kwargs) as c:
+        r = await c.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={"part": "snippet,statistics,contentDetails", "mine": "true"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if r.status_code >= 400:
+        return {"ok": False, "error": f"YouTube API {r.status_code}: {r.text[:200]}"}
+    items = (r.json() or {}).get("items") or []
+    if not items:
+        return {"ok": False, "error": "未找到 YouTube 频道（可能需要重新授权）"}
+    item = items[0]
+    sn = item.get("snippet") or {}
+    st = item.get("statistics") or {}
+    cd = item.get("contentDetails") or {}
+    out = {
+        "ok": True,
+        "channel_title": str(sn.get("title") or ""),
+        "thumbnail": str(((sn.get("thumbnails") or {}).get("default") or {}).get("url") or ""),
+        "subscriber_count": int(st.get("subscriberCount") or 0),
+        "view_count": int(st.get("viewCount") or 0),
+        "video_count": int(st.get("videoCount") or 0),
+        "uploads_playlist": str(((cd.get("relatedPlaylists") or {}).get("uploads")) or ""),
+    }
+    _overview_cache[account_id] = (now, out)
+    return out
+
+
 @router.get("/api/youtube-publish/accounts/{account_id}/analytics")
 async def youtube_account_analytics(
     account_id: str,
