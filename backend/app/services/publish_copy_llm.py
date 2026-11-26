@@ -62,6 +62,10 @@ def _platform_copy_limits(platform: str, media_type: str) -> str:
     elif p == "wechat_channels":
         lines.append("短标题：最多 16 个字，只能使用中英文和数字，不要标点、特殊符号或 Emoji。")
         lines.append("描述：宜控制在 800 字以内，可带少量话题。")
+    elif p == "youtube":
+        lines.append("标题：不超过 100 个字符，简洁明确，不要写文件名。")
+        lines.append("描述：200-800 字，说明内容亮点；总长度不超过 5000 字节。")
+        lines.append("标签：输出 5-12 个，逗号分隔，总长度不超过 500 字符。")
     else:
         lines.append("标题：宜简短有力，不超过 30 字。")
         lines.append("描述：清晰说明内容亮点，避免空洞套话。")
@@ -165,6 +169,7 @@ async def generate_publish_copy(
         "tiktok": "TikTok",
         "bilibili": "B站",
         "kuaishou": "快手",
+        "youtube": "YouTube",
     }.get((platform or "").strip().lower(), platform or "该平台")
 
     lang = content_lang.normalize(language) if str(language or "").strip() else ""

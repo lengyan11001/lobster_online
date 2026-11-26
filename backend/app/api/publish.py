@@ -2509,18 +2509,55 @@ async def create_publish_task(
         if not yt_id:
             raise HTTPException(400, detail="YouTube 账号未绑定，请删除后重新添加")
         opts = body.options if isinstance(body.options, dict) else {}
+        title_in = (body.title or "").strip()
+        desc_in = (body.description or "").strip()
+        tags_in = (body.tags or "").strip()
+        if not title_in or not desc_in or not tags_in:
+            try:
+                from ..services.publish_copy_llm import generate_publish_copy
+
+                gen_title, gen_desc, gen_tags = await generate_publish_copy(
+                    platform="youtube",
+                    media_type=_infer_asset_media_type(asset) if asset is not None else "video",
+                    asset_prompt=((getattr(asset, "prompt", None) or "").strip() if asset is not None else "")
+                    or str(opts.get("_source_prompt") or ""),
+                    filename=(getattr(asset, "filename", None) or "video.mp4") if asset is not None else "video.mp4",
+                    hint_title=title_in,
+                    hint_desc=desc_in,
+                    hint_tags=tags_in,
+                    language=str(opts.get("content_language") or ""),
+                    raw_token=_bearer_from_request(request) or None,
+                    chat_model=_chat_model_from_request(request) or None,
+                )
+                title_in = title_in or gen_title
+                desc_in = desc_in or gen_desc
+                tags_in = tags_in or gen_tags
+                logger.info(
+                    "[PUBLISH-API] YouTube 文案自动生成 title=%r desc_len=%d tags_len=%d",
+                    title_in[:100],
+                    len(desc_in),
+                    len(tags_in),
+                )
+            except Exception as e:
+                logger.warning("[PUBLISH-API] YouTube 文案自动生成失败，使用素材兜底: %s", e)
+        if len(title_in) > 100:
+            title_in = title_in[:100]
+        if len(desc_in.encode("utf-8")) > 5000:
+            desc_in = desc_in.encode("utf-8")[:5000].decode("utf-8", "ignore")
         privacy = str(opts.get("privacy_status") or "public").strip().lower()
         if privacy not in ("private", "unlisted", "public"):
             privacy = "public"
         material = str(opts.get("material_origin") or "script_batch").strip().lower()
         if material not in ("ai_generated", "script_batch"):
             material = "script_batch"
-        tags = [t for t in _re.split(r"[,，\s]+", str(body.tags or "")) if t.strip()][:50]
+        tags = [t for t in _re.split(r"[,，\s]+", tags_in) if t.strip()][:50]
+        while tags and sum(len(t) for t in tags) > 500:
+            tags.pop()
         yt_body = YoutubePublishUploadBody(
             account_id=yt_id,
             asset_id=_asset_id_s,
-            title=body.title or "",
-            description=body.description or "",
+            title=title_in,
+            description=desc_in,
             privacy_status=privacy,
             material_origin=material,
             self_declared_made_for_kids=bool(opts.get("made_for_kids")),
