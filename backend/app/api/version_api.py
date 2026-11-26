@@ -23,6 +23,9 @@ router = APIRouter()
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 _BACKEND_STARTED_AT = time.time()
+# 进程启动时真正加载的包版本；磁盘上的 CLIENT_CODE_VERSION.json 可能已被 OTA 覆盖，
+# 两者不一致就说明当前后端仍是更新前的进程。
+_BACKEND_LOADED_BUILD = None
 
 # 关键接口清单：任何一条缺失，就说明后端代码不是当前包（半包/旧包）
 EXPECTED_ROUTES: tuple = (
@@ -46,6 +49,13 @@ def _read_json(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def _loaded_build() -> Any:
+    global _BACKEND_LOADED_BUILD
+    if _BACKEND_LOADED_BUILD is None:
+        _BACKEND_LOADED_BUILD = _read_json(ROOT_DIR / "CLIENT_CODE_VERSION.json").get("build")
+    return _BACKEND_LOADED_BUILD
+
+
 def _iso(value: Any) -> str:
     text = str(value or "").strip()
     return text
@@ -60,6 +70,7 @@ def version_payload(request: Request) -> Dict[str, Any]:
         "ok": not missing,
         "client_version": _iso(root_version.get("version")),
         "client_build": root_version.get("build"),
+        "backend_loaded_build": _loaded_build(),
         "applied_at": _iso(root_version.get("applied_at") or static_version.get("applied_at")),
         "bundle_sha256": _iso(root_version.get("bundle_sha256")),
         "static_version": _iso(static_version.get("version")),

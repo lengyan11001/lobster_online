@@ -1437,6 +1437,14 @@ def _restart_after_code_update(build_before: int, build_after: int) -> None:
         else:
             argv = [str(Path(sys.executable)), str(Path(__file__).resolve())] + list(sys.argv[1:])
         log(f"CodeUpdate: build {build_before} -> {build_after}, restarting launcher")
+        # 旧 launcher 在应用更新期间可能又把后端/能力服务拉起来了（仍是旧代码），
+        # 不先杀掉的话新 launcher 会直接复用，界面就会一直提示「后端还是更新前的」。
+        for port, name in ((int(os.environ.get("PORT") or 8000), "Backend"),
+                           (int(os.environ.get("MCP_PORT") or 8001), "MCP")):
+            try:
+                stop_port_processes(port, name)
+            except Exception as exc:
+                log(f"CodeUpdate: stop {name} before relaunch failed: {exc}")
         subprocess.Popen(argv, cwd=str(ROOT), env=build_env(), close_fds=True, creationflags=creation_flags())
     except Exception as exc:
         log(f"CodeUpdate: restart failed: {exc}")
@@ -1779,6 +1787,20 @@ def open_legacy_browser_mode(port: int, mcp_port: int, env: dict[str, str], wait
     return 0
 
 
+def running_backend_matches_package(port: int) -> bool:
+    """复用已有后端前确认它加载的是当前包；旧进程没有该字段一律视为过期。"""
+    try:
+        data = http_json(f"http://127.0.0.1:{port}/api/version", timeout=2.5)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    try:
+        return int(data.get("backend_loaded_build")) == int(_read_client_build())
+    except Exception:
+        return False
+
+
 def start_services_blocking(
     port: int,
     mcp_port: int,
@@ -1808,6 +1830,11 @@ def start_services_blocking(
     # 端口空闲就直接起后端；端口被占用时仍按原来的 2s 归属探测走（避免关机竞态）。
     if not port_open("127.0.0.1", port, timeout=0.4) or not wait_for_own_backend(port, 8):
         set_startup_status("backend", "正在启动本地服务", detail=f"端口 {port}", percent=58)
+        backend_proc = start_bat("Backend", "run_backend.bat", env)
+    elif not running_backend_matches_package(port):
+        log(f"Backend: port {port} is running stale code; restarting")
+        set_startup_status("backend", "检测到后端仍是旧代码，正在重启", detail=f"端口 {port}", percent=58)
+        stop_port_processes(port, "Backend")
         backend_proc = start_bat("Backend", "run_backend.bat", env)
     else:
         log(f"Backend: port {port} already ready")
