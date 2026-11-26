@@ -23,6 +23,8 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
+
+from ..services.tos_public import tos_url
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -50,15 +52,12 @@ WHISPER_MODEL_PATH = WHISPER_MODELS / "ggml-medium-q5_0.bin"
 FONTS_DIR = DEPS / "fonts"
 CUTOUT_DIR = DEPS / "cutout"
 CUTOUT_MODEL = CUTOUT_DIR / "selfie_segmenter.tflite"
-CUTOUT_MODEL_URL = "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/cutout/selfie_segmenter.tflite"
+CUTOUT_MODEL_URL = tos_url("assets/client-code/deps/cutout/selfie_segmenter.tflite")
 FONT_FILES = [
     ("NotoSansSC-400.woff2", "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/fonts/NotoSansSC-400.woff2"),
     ("NotoSansSC-700.woff2", "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/fonts/NotoSansSC-700.woff2"),
 ]
-WHISPER_MODEL_URL = (
-    "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
-    "/assets/client-code/deps/whisper/ggml-medium-q5_0.bin"
-)
+WHISPER_MODEL_URL = tos_url("assets/client-code/deps/whisper/ggml-medium-q5_0.bin")
 WHISPER_MODEL_FALLBACK = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin"
 NODE_EXE = ROOT / "nodejs" / "node.exe"
 PY_EXE = ROOT / "python" / "python.exe"

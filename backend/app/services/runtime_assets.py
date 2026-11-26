@@ -22,7 +22,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-TOS_ROOT = "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
+from .tos_public import tos_base
+
+TOS_ROOT = tos_base()
 _FONT_BASE = f"{TOS_ROOT}/assets/cutcli_templates/fonts"
 
 # rel = 安装根目录下的相对路径；sha256 必须与 TOS 上的对象一致。

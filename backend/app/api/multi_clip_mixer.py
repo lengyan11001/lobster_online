@@ -12,6 +12,8 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+from ..services.tos_public import tos_url
 from typing import Any, Dict, List, Optional
 import re
 from urllib.parse import urlparse
@@ -1713,6 +1715,7 @@ def ai_trim_video(job_id: str):
 # 可选增强组件 auto-editor（点击安装，不随包分发）
 _AE_DIR = Path(__file__).resolve().parents[3] / "deps" / "auto-editor"
 _AE_URLS = (
+    tos_url("assets/cutcli_templates/tools/auto-editor-windows-x86_64.exe"),
     "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/cutcli_templates/tools/auto-editor-windows-x86_64.exe",
     "https://github.com/WyattBlue/auto-editor/releases/download/31.8.0/auto-editor-windows-x86_64.exe",
 )

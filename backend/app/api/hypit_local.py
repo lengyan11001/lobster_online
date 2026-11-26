@@ -16,6 +16,8 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
+
+from ..services.tos_public import tos_url
 from typing import Any
 from urllib.parse import urljoin, urlparse
 import ipaddress
@@ -2655,6 +2657,7 @@ _HYPIT_DIST_SUBDIR = ("aihypit", "hypit")
 # 一键安装用的工具镜像（按顺序试）：CDN 优先（实测 3~4MB/s），我们自己的域名次之，
 # 再回退到 npmmirror / 官方。可用 LOBSTER_TOOLS_BASE 覆盖（逗号分隔多个）。
 _DEFAULT_TOOLS_BASES = (
+    tos_url("assets/client-code/tools"),
     "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/tools",
     "https://bhzn.top/client/client-code/tools",
 )

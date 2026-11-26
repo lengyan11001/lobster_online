@@ -24,10 +24,14 @@ TARGET_BINARIES: tuple[str, ...] = ("ffmpeg.exe", "ffprobe.exe")
 # 候选下载源（按顺序尝试）：env LOBSTER_FFMPEG_WIN64_ZIP 可覆盖（支持多个，空格/逗号/分号分隔）。
 # 第一优先：我们自己在 TOS 上的副本（只含 ffmpeg.exe + ffprobe.exe，约 128MB，国内直连快）。
 # 备选：BtbN 完整包（约 200MB）、gyan.dev essentials 包（约 115MB，另一个 CDN）。
-LOBSTER_FFMPEG_WIN64_URL = (
-    "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
-    "/assets/ffmpeg/lobster-ffmpeg-win64.zip"
-)
+def _tos_base() -> str:
+    flag = str(os.environ.get("LOBSTER_IS_OVERSEAS_USER") or "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
+    return "https://lobster-assets-jakarta-2103871705.tos-ap-southeast-3.volces.com"
+
+
+LOBSTER_FFMPEG_WIN64_URL = _tos_base() + "/assets/ffmpeg/lobster-ffmpeg-win64.zip"
 DEFAULT_ZIP_URLS: tuple[str, ...] = (
     LOBSTER_FFMPEG_WIN64_URL,
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
