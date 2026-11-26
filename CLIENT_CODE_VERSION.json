@@ -1,7 +1,7 @@
 {
-  "version": "2.0.361",
-  "build": 670,
-  "applied_at": "2026-11-26T17:10:58+08:00",
-  "note": "海外：YouTube 自动文案标签语种修复；代理池/评分/IP类型；AI 调度草稿修复",
-  "bundle_sha256": "133d99ae51f1b9d6af770e55e51cfac7c06c51c7e2c68377b8dde329dd16253e"
+  "version": "2.0.362",
+  "build": 671,
+  "applied_at": "2026-11-26T22:44:01+08:00",
+  "note": "海外：OTA下载断点续传+备用源；素材/BGM/模板走雅加达TOS；OTA后旧后端自愈重启",
+  "bundle_sha256": "42b1508d5085410cb86da5d7b3077fb191adc512f4c9ce3eb2ff242ee9455385"
 }
