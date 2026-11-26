@@ -1450,6 +1450,14 @@ def main() -> int:
         with zipfile.ZipFile(out, "a", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("OTA_PATHS.json", json.dumps(marker, ensure_ascii=False, indent=2))
 
+    edition_marker = {
+        "edition": "overseas" if args.overseas else "cn",
+        "version": str(bumped_version["version"]),
+        "build": int(bumped_version["build"]),
+    }
+    with zipfile.ZipFile(out, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("CLIENT_CODE_EDITION.json", json.dumps(edition_marker, ensure_ascii=False, indent=2))
+
     if encrypted_tmp is not None:
         try:
             encrypted_tmp.cleanup()
