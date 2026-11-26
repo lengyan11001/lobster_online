@@ -3450,8 +3450,12 @@ function _submitAssetPublishModal() {
     };
     if (autoCopy) {
       payload.ai_publish_copy = true;
-      payload.description = sourcePrompt.slice(0, 2000) || String(asset.title || asset.filename || '作品发布').slice(0, 240);
-      payload.tags = userTags || _assetContentTags(asset);
+      // 自动文案：标题/描述/标签全部交给 AI，避免把素材英文标签当成「用户指定标签」强制使用。
+      payload.title = '';
+      payload.description = '';
+      payload.tags = '';
+      var _copyLang = _publishContentLanguageSync();
+      if (_copyLang) payload.options.content_language = _copyLang;
     }
     if (labelOptions) payload.options.douyin_label = labelOptions;
     if (target.saved_from_url) payload.options._saved_from_url = String(target.source_url || '').slice(0, 300);

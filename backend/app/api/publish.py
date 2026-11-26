@@ -2512,31 +2512,54 @@ async def create_publish_task(
         title_in = (body.title or "").strip()
         desc_in = (body.description or "").strip()
         tags_in = (body.tags or "").strip()
+        tags_were_empty = not tags_in
         if not title_in or not desc_in or not tags_in:
             try:
                 from ..services.publish_copy_llm import generate_publish_copy
 
-                gen_title, gen_desc, gen_tags = await generate_publish_copy(
+                lang_in = str(opts.get("content_language") or "")
+                prompt_ctx = ((getattr(asset, "prompt", None) or "").strip() if asset is not None else "") or str(
+                    opts.get("_source_prompt") or ""
+                )
+                copy_kwargs = dict(
                     platform="youtube",
                     media_type=_infer_asset_media_type(asset) if asset is not None else "video",
-                    asset_prompt=((getattr(asset, "prompt", None) or "").strip() if asset is not None else "")
-                    or str(opts.get("_source_prompt") or ""),
+                    asset_prompt=prompt_ctx,
                     filename=(getattr(asset, "filename", None) or "video.mp4") if asset is not None else "video.mp4",
                     hint_title=title_in,
                     hint_desc=desc_in,
                     hint_tags=tags_in,
-                    language=str(opts.get("content_language") or ""),
+                    language=lang_in,
                     raw_token=_bearer_from_request(request) or None,
                     chat_model=_chat_model_from_request(request) or None,
                 )
+                gen_title, gen_desc, gen_tags = await generate_publish_copy(**copy_kwargs)
                 title_in = title_in or gen_title
                 desc_in = desc_in or gen_desc
                 tags_in = tags_in or gen_tags
+
+                # 中文内容却生成英文标签：重试一次，仍不符合就丢弃标签，避免发到 YouTube
+                try:
+                    import re as _re_lang
+
+                    want_zh = lang_in.lower().startswith("zh") or "中文" in lang_in or bool(
+                        _re_lang.search(r"[\u4e00-\u9fff]", prompt_ctx)
+                    )
+                    if tags_were_empty and tags_in and want_zh and not _re_lang.search(r"[\u4e00-\u9fff]", tags_in):
+                        copy_kwargs["hint_tags"] = ""
+                        copy_kwargs["language"] = lang_in or "zh-CN"
+                        _, _, retry_tags = await generate_publish_copy(**copy_kwargs)
+                        tags_in = retry_tags if (retry_tags and _re_lang.search(r"[\u4e00-\u9fff]", retry_tags)) else ""
+                        logger.info("[PUBLISH-API] YouTube 标签语种重试 tags=%r", tags_in)
+                except Exception as e:
+                    logger.warning("[PUBLISH-API] YouTube 标签语种重试失败: %s", e)
+
                 logger.info(
-                    "[PUBLISH-API] YouTube 文案自动生成 title=%r desc_len=%d tags_len=%d",
+                    "[PUBLISH-API] YouTube 文案自动生成 title=%r desc_len=%d tags_len=%d language=%r",
                     title_in[:100],
                     len(desc_in),
                     len(tags_in),
+                    lang_in,
                 )
             except Exception as e:
                 logger.warning("[PUBLISH-API] YouTube 文案自动生成失败，使用素材兜底: %s", e)
