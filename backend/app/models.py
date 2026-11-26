@@ -783,6 +783,38 @@ class YoutubePublishSchedule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class YoutubeUploadJob(Base):
+    """YouTube 上传任务：异步执行 + 处理状态轮询。"""
+
+    __tablename__ = "youtube_upload_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    job_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tags_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    category_id: Mapped[str] = mapped_column(String(8), default="22", nullable=False)
+    privacy_status: Mapped[str] = mapped_column(String(16), default="public", nullable=False)
+    material_origin: Mapped[str] = mapped_column(String(32), default="script_batch", nullable=False)
+    made_for_kids: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    contains_synthetic_media: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    thumbnail_asset_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    publish_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    video_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    watch_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    upload_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    processing_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class CreatorScheduleReviewSnapshot(Base):
     """审核发布：每次「智能生成提示词 / 生成发布内容 / 单条重生成」后的草稿快照，供历史查看与恢复。"""
 

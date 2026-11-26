@@ -1065,6 +1065,7 @@ SUPPORTED_PLATFORMS = {
     "toutiao": {"name": "今日头条", "login_url": "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg=="},
     "wechat_channels": {"name": "视频号", "login_url": "https://channels.weixin.qq.com/platform"},
     "tiktok": {"name": "TikTok", "login_url": "https://www.tiktok.com/login?redirect_url=https%3A%2F%2Fwww.tiktok.com%2Ftiktokstudio%2Fupload"},
+    "youtube": {"name": "YouTube", "login_url": ""},
     "douyin_shop": {"name": "抖店", "login_url": "https://fxg.jinritemai.com/"},
     "xiaohongshu_shop": {"name": "小红书店铺", "login_url": "https://ark.xiaohongshu.com/"},
     "alibaba1688": {"name": "1688", "login_url": "https://work.1688.com/"},
@@ -1134,6 +1135,8 @@ class AddAccountReq(BaseModel):
     proxy_username: Optional[str] = None
     proxy_password: Optional[str] = None
     user_agent: Optional[str] = None
+    oauth_client_id: Optional[str] = None
+    oauth_client_secret: Optional[str] = None
 
 
 class DouyinSearchCollectReq(BaseModel):
@@ -1435,6 +1438,11 @@ def _merge_douyin_high_intent_into_customers(
     return list(by_key.values())
 
 
+def _youtube_account_id_from_publish_acct(a: PublishAccount) -> str:
+    meta = a.meta if isinstance(a.meta, dict) else {}
+    return str(meta.get("youtube_account_id") or "").strip()
+
+
 def _serialize_publish_account(
     a: PublishAccount,
     last_sync_map: Dict[int, Any],
@@ -1452,6 +1460,7 @@ def _serialize_publish_account(
         "created_at": a.created_at.isoformat() if a.created_at else "",
         "last_creator_sync": last_sync_map.get(a.id),
         "creator_schedule": sched_map.get(a.id),
+        "youtube_account_id": _youtube_account_id_from_publish_acct(a) if a.platform == "youtube" else "",
     }
     if origin_id:
         row.update(
@@ -1542,6 +1551,20 @@ def list_accounts(
                 }
     except OperationalError as e:
         logger.warning("[PUBLISH-API] 创作者快照/定时表不可用，仅返回账号列表（请重启后端以建表）: %s", e)
+    try:
+        from .youtube_publish import get_youtube_account_entry
+
+        for a in display_rows:
+            if a.platform != "youtube":
+                continue
+            ent = get_youtube_account_entry(current_user.id, _youtube_account_id_from_publish_acct(a)) or {}
+            st = str(ent.get("status") or "").strip()
+            a.status = "active" if st == "ready" else ("error" if st == "error" else "pending")
+            if str(ent.get("label") or "").strip():
+                a.nickname = str(ent.get("label") or "").strip()
+    except Exception:
+        logger.warning("[PUBLISH-API] YouTube 账号状态同步失败 user_id=%s", current_user.id, exc_info=True)
+
     return {
         "accounts": [_serialize_publish_account(a, last_sync_map, sched_map) for a in display_rows],
         "platforms": [
@@ -1587,6 +1610,42 @@ def add_account(
         except ValueError as e:
             raise HTTPException(400, detail=str(e))
 
+    if body.platform == "youtube":
+        cid = (body.oauth_client_id or "").strip()
+        csec = (body.oauth_client_secret or "").strip()
+        if not cid or not csec:
+            raise HTTPException(400, detail="YouTube 账号需要 OAuth Client ID 与 Client Secret")
+        from .youtube_publish import create_youtube_account_record
+
+        yt_id, _ent = create_youtube_account_record(
+            user_id=current_user.id,
+            label=nick,
+            oauth_client_id=cid,
+            oauth_client_secret=csec,
+            proxy_server=ps,
+            proxy_username=(body.proxy_username or "").strip(),
+            proxy_password=body.proxy_password or "",
+        )
+        acct = PublishAccount(
+            user_id=current_user.id,
+            platform="youtube",
+            nickname=nick,
+            status="pending",
+            browser_profile="",
+            meta={"youtube_account_id": yt_id},
+        )
+        db.add(acct)
+        db.commit()
+        db.refresh(acct)
+        return {
+            "id": acct.id,
+            "platform": "youtube",
+            "nickname": acct.nickname,
+            "status": "pending",
+            "youtube_account_id": yt_id,
+            "message": "账号已添加，请完成浏览器授权",
+        }
+
     profile_dir = BROWSER_DATA_DIR / f"{body.platform}_{nick}"
     profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1619,6 +1678,20 @@ async def start_login(
     acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
+
+    if acct.platform == "youtube":
+        from .youtube_publish import start_oauth_for_account
+
+        yt_id = _youtube_account_id_from_publish_acct(acct)
+        if not yt_id:
+            raise HTTPException(400, detail="YouTube 账号未绑定，请删除后重新添加")
+        res = start_oauth_for_account(current_user.id, yt_id, open_chrome=True)
+        return {
+            "ok": bool(res.get("url")),
+            "status": "pending",
+            "auth_url": res.get("url"),
+            "message": res.get("message") or "已打开浏览器，请完成 Google 授权",
+        }
 
     platform_info = SUPPORTED_PLATFORMS.get(acct.platform, {})
     login_url = platform_info.get("login_url", "")
@@ -1653,6 +1726,23 @@ async def open_browser(
     acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
+
+    if acct.platform == "youtube":
+        from .youtube_publish import get_youtube_account_entry, start_oauth_for_account
+
+        yt_id = _youtube_account_id_from_publish_acct(acct)
+        if not yt_id:
+            raise HTTPException(400, detail="YouTube 账号未绑定，请删除后重新添加")
+        res = start_oauth_for_account(current_user.id, yt_id, open_chrome=True)
+        ent = get_youtube_account_entry(current_user.id, yt_id) or {}
+        logged_in = str(ent.get("status") or "") == "ready"
+        return {
+            "ok": bool(res.get("url")),
+            "logged_in": logged_in,
+            "probe_state": "online" if logged_in else "waiting",
+            "auth_url": res.get("url"),
+            "message": res.get("message") or "已打开浏览器，请完成 Google 授权",
+        }
 
     platform_info = SUPPORTED_PLATFORMS.get(acct.platform, {})
     login_url = platform_info.get("login_url", "")
@@ -1701,6 +1791,26 @@ async def check_login_status(
     acct = _resolve_publish_account_for_request(db, current_user.id, account_id, None)
     if not acct:
         raise HTTPException(404, detail="账号不存在")
+
+    if acct.platform == "youtube":
+        from .youtube_publish import get_youtube_account_entry
+
+        ent = get_youtube_account_entry(current_user.id, _youtube_account_id_from_publish_acct(acct)) or {}
+        st = str(ent.get("status") or "").strip()
+        logged_in = st == "ready"
+        if logged_in and acct.status != "active":
+            acct.status = "active"
+            acct.last_login = datetime.utcnow()
+            db.commit()
+        elif not logged_in and st == "error" and acct.status != "error":
+            acct.status = "error"
+            db.commit()
+        return {
+            "ok": True,
+            "logged_in": logged_in,
+            "status": "active" if logged_in else ("error" if st == "error" else "pending"),
+            "message": str(ent.get("last_error") or ""),
+        }
 
     try:
         if acct.platform == "douyin":
@@ -2362,6 +2472,55 @@ async def create_publish_task(
                 _asset_id_s,
             )
             raise HTTPException(404, detail=f"素材不存在: {_asset_id_s}")
+    if acct.platform == "youtube":
+        import re as _re
+
+        from .youtube_publish import YoutubePublishUploadBody, perform_youtube_upload
+
+        yt_id = _youtube_account_id_from_publish_acct(acct)
+        if not yt_id:
+            raise HTTPException(400, detail="YouTube 账号未绑定，请删除后重新添加")
+        opts = body.options if isinstance(body.options, dict) else {}
+        privacy = str(opts.get("privacy_status") or "public").strip().lower()
+        if privacy not in ("private", "unlisted", "public"):
+            privacy = "public"
+        material = str(opts.get("material_origin") or "script_batch").strip().lower()
+        if material not in ("ai_generated", "script_batch"):
+            material = "script_batch"
+        tags = [t for t in _re.split(r"[,，\s]+", str(body.tags or "")) if t.strip()][:50]
+        yt_body = YoutubePublishUploadBody(
+            account_id=yt_id,
+            asset_id=_asset_id_s,
+            title=body.title or "",
+            description=body.description or "",
+            privacy_status=privacy,
+            material_origin=material,
+            self_declared_made_for_kids=bool(opts.get("made_for_kids")),
+            contains_synthetic_media=opts.get("contains_synthetic_media"),
+            category_id=str(opts.get("category_id") or "22"),
+            tags=tags,
+            thumbnail_asset_id=(opts.get("thumbnail_asset_id") or body.cover_asset_id or "").strip() or None,
+            publish_at=(opts.get("publish_at") or "").strip() or None,
+        )
+        from .youtube_publish import YoutubeUploadUserError
+
+        try:
+            res = await perform_youtube_upload(db, current_user.id, yt_body, request=request)
+        except YoutubeUploadUserError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("[PUBLISH-API] YouTube 发布失败 user_id=%s: %s", current_user.id, e)
+            raise HTTPException(502, detail=f"YouTube 发布失败: {e}") from e
+        _record_asset_publish(db, asset, "youtube")
+        return {
+            "status": "success",
+            "task_id": None,
+            "video_id": res.get("video_id"),
+            "result_url": res.get("watch_url"),
+        }
+
     # Allow publishing even when status isn't active: run_publish_task will open browser and wait for login.
 
     body_title_s = (body.title or "").strip()

@@ -1,10 +1,13 @@
 """YouTube Data API：多账号（每账号独立 OAuth 客户端 + 代理 + Refresh Token），会话中按 account_id 指定上传。"""
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
+import os
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,11 +24,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
-from ..db import get_db
-from ..models import Asset, YoutubePublishSchedule
+from ..db import get_db, SessionLocal
+from ..models import Asset, YoutubePublishSchedule, YoutubeUploadJob
 from publisher.browser_pool import _find_chrome_executable
 
 from ..services.youtube_api_upload import (
+    build_httplib2_http_for_proxy,
     upload_local_video_file,
     youtube_httpx_client_kwargs,
 )
@@ -213,6 +217,42 @@ class YoutubePublishUploadBody(BaseModel):
     # 与 snippet.categoryId 一致，见 https://developers.google.com/youtube/v3/docs/videoCategories/list
     category_id: str = Field("22", description="视频分类 ID，默认 22（People & Blogs）")
     tags: Optional[list[str]] = Field(None, description="可选标签列表，须符合 YouTube 标签长度规则")
+    # P0：自定义封面（图片素材 ID）
+    thumbnail_asset_id: Optional[str] = Field(None, description="封面图素材 asset_id（可选）")
+    # P1：YouTube 原生定时发布（ISO 8601；设置时必须 private）
+    publish_at: Optional[str] = Field(None, description="定时发布时间，如 2026-12-01T10:00:00Z")
+
+
+def _validate_upload_fields(
+    body: "YoutubePublishUploadBody",
+    asset: Asset,
+) -> tuple[str, str, list[str], str]:
+    """按 YouTube 真实限制校验并归一化标题/描述/标签/分类。"""
+    title = (body.title or "").strip()
+    if not title:
+        title = (asset.filename or "Video")[:100]
+    if len(title) > 100:
+        raise HTTPException(400, detail="标题不能超过 100 个字符")
+    if "<" in title or ">" in title:
+        raise HTTPException(400, detail="标题不能包含 < 或 >")
+    description = body.description or ""
+    if len(description.encode("utf-8")) > 5000:
+        raise HTTPException(400, detail="描述不能超过 5000 字节")
+    tags: list[str] = []
+    for raw in body.tags or []:
+        t = str(raw).strip()
+        if t and t not in tags:
+            tags.append(t)
+    if len(tags) > 50:
+        raise HTTPException(400, detail="标签最多 50 个")
+    if sum(len(t) for t in tags) > 500:
+        raise HTTPException(400, detail="标签总长度不能超过 500 个字符")
+    category = (body.category_id or "22").strip() or "22"
+    if not category.isdigit():
+        raise HTTPException(400, detail="category_id 必须是数字")
+    if body.publish_at and (body.privacy_status or "").strip().lower() != "private":
+        raise HTTPException(400, detail="设置 publish_at 定时发布时，privacy_status 必须是 private")
+    return title, description, tags, category
 
 
 class YoutubeUploadUserError(Exception):
@@ -678,17 +718,114 @@ async def youtube_oauth_callback(
     )
 
 
+def _local_asset_copy_for_upload(asset: Asset) -> Optional[str]:
+    """素材缺公网 source_url 时，直接复制本机文件作为上传源（不改动原文件）。"""
+    try:
+        from .assets import ASSETS_DIR
+
+        fn = (getattr(asset, "filename", None) or "").strip()
+        if not fn or "/" in fn or "\\" in fn:
+            return None
+        src = ASSETS_DIR / fn
+        if not src.is_file():
+            return None
+        suf = Path(fn).suffix or ".mp4"
+        fd, path = tempfile.mkstemp(suffix=suf)
+        os.close(fd)
+        shutil.copy2(src, path)
+        logger.info(
+            "[youtube-publish] 素材无公网 URL，已使用本机文件直传 asset_id=%s",
+            getattr(asset, "asset_id", ""),
+        )
+        return path
+    except Exception as e:
+        logger.warning(
+            "[youtube-publish] 本机素材复制失败 asset_id=%s err=%s",
+            getattr(asset, "asset_id", ""),
+            e,
+        )
+        return None
+
+
+async def _ensure_asset_source_url(
+    asset: Asset,
+    *,
+    request: Optional[Any] = None,
+    db: Optional[Session] = None,
+    user_id: Optional[int] = None,
+) -> str:
+    """缺 source_url 时主动补传（云端/TOS），返回最新公网 URL。"""
+    if db is None:
+        return ""
+    try:
+        from .assets import (
+            _HeaderSnapshotRequest,
+            _refresh_asset_source_url_from_local_file,
+            get_asset_public_url,
+        )
+
+        if request is not None and user_id is not None:
+            refreshed = await asyncio.to_thread(
+                get_asset_public_url,
+                asset.asset_id,
+                int(user_id),
+                request,
+                db,
+            )
+        else:
+            # 定时任务等无请求上下文：空 header 会跳过认证中心，直接走 TOS 兜底补传
+            refreshed = await asyncio.to_thread(
+                _refresh_asset_source_url_from_local_file,
+                asset,
+                _HeaderSnapshotRequest({}),
+                db,
+                reason="youtube_upload_missing_source_url",
+            )
+        if refreshed:
+            logger.info(
+                "[youtube-publish] 已自动补传 source_url asset_id=%s url=%s",
+                getattr(asset, "asset_id", ""),
+                str(refreshed)[:120],
+            )
+            return str(refreshed).strip()
+    except Exception as e:
+        logger.warning(
+            "[youtube-publish] 自动补传 source_url 失败 asset_id=%s err=%s",
+            getattr(asset, "asset_id", ""),
+            e,
+        )
+    try:
+        db.refresh(asset)
+    except Exception:
+        pass
+    return (getattr(asset, "source_url", None) or "").strip()
+
+
 async def _resolve_asset_to_temp_path(
     asset: Asset,
     proxy_server: Optional[str] = None,
     proxy_username: Optional[str] = None,
     proxy_password: Optional[str] = None,
+    *,
+    request: Optional[Any] = None,
+    db: Optional[Session] = None,
+    user_id: Optional[int] = None,
 ) -> str:
-    url = getattr(asset, "source_url", None) or ""
+    url = (getattr(asset, "source_url", None) or "").strip()
     if not (url.startswith("http://") or url.startswith("https://")):
+        url = await _ensure_asset_source_url(
+            asset,
+            request=request,
+            db=db,
+            user_id=user_id,
+        )
+    if not (url.startswith("http://") or url.startswith("https://")):
+        local_copy = _local_asset_copy_for_upload(asset)
+        if local_copy:
+            return local_copy
         raise HTTPException(
             status_code=400,
-            detail="素材无公网 source_url，请先在素材管理中上传并同步后再试",
+            detail="素材无公网 source_url，且本机也找不到对应文件，请先在素材管理中重新上传",
         )
     try:
         client_kw, proxy_source = youtube_httpx_client_kwargs(
@@ -710,12 +847,12 @@ async def _resolve_asset_to_temp_path(
     r.raise_for_status()
     suf = Path(asset.filename or "").suffix or ".mp4"
     fd, path = tempfile.mkstemp(suffix=suf)
-    import os
+    import os as _os
 
     try:
-        os.write(fd, r.content)
+        _os.write(fd, r.content)
     finally:
-        os.close(fd)
+        _os.close(fd)
     return path
 
 
@@ -723,6 +860,7 @@ async def perform_youtube_upload(
     db: Session,
     user_id: int,
     body: YoutubePublishUploadBody,
+    request: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """供 HTTP 与定时任务共用；失败抛 YoutubeUploadUserError 或 RuntimeError。"""
     aid = body.account_id.strip()
@@ -767,21 +905,48 @@ async def perform_youtube_upload(
     if not is_video:
         raise YoutubeUploadUserError("当前素材不是视频类型，请选择视频素材")
 
+    try:
+        eff_title, eff_desc, eff_tags, eff_category = _validate_upload_fields(body, asset)
+    except HTTPException as e:
+        raise YoutubeUploadUserError(str(e.detail), status_code=int(e.status_code or 400)) from e
+
     temp_path: Optional[str] = None
+    thumb_temp_path: Optional[str] = None
     try:
         temp_path = await _resolve_asset_to_temp_path(
             asset,
             proxy_server=(ent.get("proxy_server") or "").strip() or None,
             proxy_username=(ent.get("proxy_username") or "").strip() or None,
             proxy_password=(ent.get("proxy_password") or "").strip() or None,
+            request=request,
+            db=db,
+            user_id=user_id,
         )
         effective_csm = body.contains_synthetic_media
         if effective_csm is None:
             effective_csm = body.material_origin == "ai_generated"
+        thumb_asset_id = (body.thumbnail_asset_id or "").strip()
+        if thumb_asset_id:
+            thumb_asset = (
+                db.query(Asset)
+                .filter(Asset.asset_id == thumb_asset_id, Asset.user_id == user_id)
+                .first()
+            )
+            if not thumb_asset:
+                raise YoutubeUploadUserError("封面素材不存在或无权访问", status_code=404)
+            thumb_temp_path = await _resolve_asset_to_temp_path(
+                thumb_asset,
+                proxy_server=(ent.get("proxy_server") or "").strip() or None,
+                proxy_username=(ent.get("proxy_username") or "").strip() or None,
+                proxy_password=(ent.get("proxy_password") or "").strip() or None,
+                request=request,
+                db=db,
+                user_id=user_id,
+            )
         result = upload_local_video_file(
             file_path=temp_path,
-            title=body.title or asset.filename or "Video",
-            description=body.description,
+            title=eff_title,
+            description=eff_desc,
             privacy_status=body.privacy_status,
             refresh_token=rt,
             client_id=cid,
@@ -791,8 +956,10 @@ async def perform_youtube_upload(
             proxy_password=(ent.get("proxy_password") or "").strip() or None,
             self_declared_made_for_kids=body.self_declared_made_for_kids,
             contains_synthetic_media=effective_csm,
-            category_id=body.category_id,
-            tags=body.tags,
+            category_id=eff_category,
+            tags=eff_tags,
+            thumbnail_path=thumb_temp_path,
+            publish_at=body.publish_at,
         )
         vid = result.get("video_id")
         return {
@@ -802,11 +969,12 @@ async def perform_youtube_upload(
             "youtube_account_id": aid,
         }
     finally:
-        if temp_path:
-            try:
-                Path(temp_path).unlink(missing_ok=True)
-            except OSError:
-                pass
+        for _p in (temp_path, thumb_temp_path):
+            if _p:
+                try:
+                    Path(_p).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def _get_or_create_youtube_publish_schedule(
@@ -875,11 +1043,12 @@ def _youtube_schedule_to_dict(row: YoutubePublishSchedule) -> Dict[str, Any]:
 @router.post("/api/youtube-publish/upload")
 async def youtube_publish_upload(
     body: YoutubePublishUploadBody,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
     try:
-        return await perform_youtube_upload(db, current_user.id, body)
+        return await perform_youtube_upload(db, current_user.id, body, request=request)
     except YoutubeUploadUserError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
     except FileNotFoundError as e:
@@ -1012,3 +1181,283 @@ async def youtube_sync_analytics(
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"status": "synced", "data": data}
+
+
+def get_youtube_account_entry(user_id: int, account_id: str) -> Optional[Dict[str, Any]]:
+    """读取单个 YouTube 账号记录（供发布中心复用）。"""
+    doc = _load_doc(int(user_id))
+    accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
+    ent = accounts.get((account_id or "").strip())
+    return ent if isinstance(ent, dict) else None
+
+
+def create_youtube_account_record(
+    *,
+    user_id: int,
+    label: str = "",
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    proxy_server: str = "",
+    proxy_username: str = "",
+    proxy_password: str = "",
+) -> tuple[str, Dict[str, Any]]:
+    ps = (proxy_server or "").strip()
+    _validate_proxy_url(ps)
+    pu = (proxy_username or "").strip()
+    pp = (proxy_password or "").strip()
+    if not ps:
+        pu = ""
+        pp = ""
+    if pu and not pp:
+        raise HTTPException(400, detail="填写了代理用户名时请同时填写代理密码")
+    doc = _load_doc(int(user_id))
+    accounts = doc.setdefault("accounts", {})
+    if not isinstance(accounts, dict):
+        accounts = {}
+        doc["accounts"] = accounts
+    aid = _new_account_id()
+    while aid in accounts:
+        aid = _new_account_id()
+    from datetime import datetime, timezone
+
+    accounts[aid] = {
+        "label": (label or "").strip(),
+        "oauth_client_id": (oauth_client_id or "").strip(),
+        "oauth_client_secret": (oauth_client_secret or "").strip(),
+        "proxy_server": ps,
+        "proxy_username": pu,
+        "proxy_password": pp,
+        "refresh_token": "",
+        "status": "pending",
+        "last_error": "",
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _save_doc(int(user_id), doc)
+    return aid, accounts[aid]
+
+
+def start_oauth_for_account(user_id: int, account_id: str, *, open_chrome: bool = True) -> Dict[str, Any]:
+    """生成 Google 授权链接，必要时打开系统 Chrome。发布中心与技能页共用。"""
+    _prune_oauth_states()
+    ent = get_youtube_account_entry(user_id, account_id)
+    if not ent:
+        raise HTTPException(404, detail="YouTube 账号不存在")
+    cid = (ent.get("oauth_client_id") or "").strip()
+    csec = (ent.get("oauth_client_secret") or "").strip()
+    if not cid or not csec:
+        raise HTTPException(400, detail="该账号缺少 OAuth Client ID 或 Secret")
+    redirect_uri = _oauth_callback_url()
+    st = secrets.token_urlsafe(32)
+    _oauth_states[st] = {
+        "user_id": int(user_id),
+        "account_id": account_id,
+        "client_id": cid,
+        "client_secret": csec,
+        "redirect_uri": redirect_uri,
+        "expires": time.time() + _OAUTH_STATE_TTL_SEC,
+    }
+    q = urlencode(
+        {
+            "client_id": cid,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": YOUTUBE_FULL_SCOPE,
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": st,
+        }
+    )
+    url = f"https://accounts.google.com/o/oauth2/v2/auth?{q}"
+    out: Dict[str, Any] = {
+        "url": url,
+        "redirect_uri": redirect_uri,
+        "chromium_opened": False,
+        "message": "",
+    }
+    if open_chrome:
+        res = _open_url_in_system_chrome(url)
+        out["chromium_opened"] = bool(res.get("ok"))
+        out["message"] = str(res.get("message") or "")
+    return out
+
+
+def fetch_video_status(
+    *,
+    video_id: str,
+    refresh_token: str,
+    client_id: str,
+    client_secret: str,
+    proxy_server: Optional[str] = None,
+    proxy_username: Optional[str] = None,
+    proxy_password: Optional[str] = None,
+) -> Dict[str, Any]:
+    """查询上传后处理状态（uploadStatus / processingStatus）。"""
+    from google.oauth2.credentials import Credentials
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+
+    creds = Credentials(
+        token=None,
+        refresh_token=(refresh_token or "").strip(),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=(client_id or "").strip(),
+        client_secret=(client_secret or "").strip(),
+        scopes=[YOUTUBE_READONLY_SCOPE],
+    )
+    http = build_httplib2_http_for_proxy(proxy_server, proxy_username, proxy_password)
+    youtube = build("youtube", "v3", http=AuthorizedHttp(creds, http=http))
+    resp = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
+    item = (resp.get("items") or [{}])[0] if isinstance(resp, dict) else {}
+    status = item.get("status") if isinstance(item.get("status"), dict) else {}
+    details = item.get("processingDetails") if isinstance(item.get("processingDetails"), dict) else {}
+    return {
+        "video_id": video_id,
+        "upload_status": str(status.get("uploadStatus") or ""),
+        "privacy_status": str(status.get("privacyStatus") or ""),
+        "failure_reason": str(status.get("failureReason") or ""),
+        "rejection_reason": str(status.get("rejectionReason") or ""),
+        "processing_status": str(details.get("processingStatus") or ""),
+    }
+
+
+async def _run_upload_job_async(job_id: str) -> None:
+    db = SessionLocal()
+    try:
+        job = db.query(YoutubeUploadJob).filter(YoutubeUploadJob.job_id == job_id).first()
+        if not job:
+            return
+        job.status = "uploading"
+        job.progress = 5
+        db.commit()
+        body = YoutubePublishUploadBody(
+            account_id=job.account_id,
+            asset_id=job.asset_id,
+            title=job.title or "",
+            description=job.description or "",
+            privacy_status=job.privacy_status or "public",
+            material_origin=job.material_origin or "script_batch",
+            self_declared_made_for_kids=bool(job.made_for_kids),
+            contains_synthetic_media=job.contains_synthetic_media,
+            category_id=job.category_id or "22",
+            tags=job.tags_json if isinstance(job.tags_json, list) else None,
+            thumbnail_asset_id=job.thumbnail_asset_id,
+            publish_at=job.publish_at,
+        )
+        res = await perform_youtube_upload(db, job.user_id, body)
+        job.video_id = str(res.get("video_id") or "") or None
+        job.watch_url = str(res.get("watch_url") or "") or None
+        job.status = "uploaded"
+        job.progress = 90
+        db.commit()
+
+        ent = get_youtube_account_entry(job.user_id, job.account_id) or {}
+        for _ in range(20):
+            try:
+                st = await asyncio.to_thread(
+                    fetch_video_status,
+                    video_id=job.video_id or "",
+                    refresh_token=(ent.get("refresh_token") or ""),
+                    client_id=(ent.get("oauth_client_id") or ""),
+                    client_secret=(ent.get("oauth_client_secret") or ""),
+                    proxy_server=(ent.get("proxy_server") or "").strip() or None,
+                    proxy_username=(ent.get("proxy_username") or "").strip() or None,
+                    proxy_password=(ent.get("proxy_password") or "").strip() or None,
+                )
+                job.upload_status = st.get("upload_status") or job.upload_status
+                job.processing_status = st.get("processing_status") or job.processing_status
+                db.commit()
+                if (job.upload_status or "") in ("processed", "failed", "rejected"):
+                    break
+                if (job.processing_status or "") in ("succeeded", "failed", "terminated"):
+                    break
+            except Exception as e:
+                logger.warning("[youtube-job] 状态查询失败 job=%s err=%s", job_id, e)
+            await asyncio.sleep(15)
+        if (job.upload_status or "") == "processed":
+            job.status = "published"
+        elif (job.upload_status or "") in ("failed", "rejected"):
+            job.status = "failed"
+            job.error_message = f"uploadStatus={job.upload_status}"
+        else:
+            job.status = "processing"
+        job.progress = 100
+        db.commit()
+    except Exception as e:
+        logger.exception("[youtube-job] 失败 job=%s", job_id)
+        try:
+            job = db.query(YoutubeUploadJob).filter(YoutubeUploadJob.job_id == job_id).first()
+            if job:
+                job.status = "failed"
+                job.error_message = str(e)[:1000]
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/api/youtube-publish/uploads", summary="创建 YouTube 异步上传任务")
+async def create_youtube_upload_job(
+    body: YoutubePublishUploadBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    ent = get_youtube_account_entry(current_user.id, body.account_id)
+    if not ent:
+        raise HTTPException(404, detail="YouTube 账号不存在")
+    if not (ent.get("refresh_token") or "").strip() or (ent.get("status") or "") != "ready":
+        raise HTTPException(400, detail="该账号尚未授权或不可用")
+    job = YoutubeUploadJob(
+        job_id="up_" + uuid.uuid4().hex[:16],
+        user_id=current_user.id,
+        account_id=body.account_id.strip(),
+        asset_id=body.asset_id.strip(),
+        title=(body.title or "")[:100],
+        description=body.description or "",
+        tags_json=list(body.tags or []),
+        category_id=(body.category_id or "22").strip() or "22",
+        privacy_status=body.privacy_status,
+        material_origin=body.material_origin,
+        made_for_kids=bool(body.self_declared_made_for_kids),
+        contains_synthetic_media=body.contains_synthetic_media,
+        thumbnail_asset_id=(body.thumbnail_asset_id or "").strip() or None,
+        publish_at=(body.publish_at or "").strip() or None,
+        status="queued",
+        progress=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    asyncio.create_task(_run_upload_job_async(job.job_id))
+    return {"job_id": job.job_id, "status": "queued"}
+
+
+@router.get("/api/youtube-publish/uploads/{job_id}", summary="查询 YouTube 上传任务")
+def get_youtube_upload_job(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(YoutubeUploadJob)
+        .filter(
+            YoutubeUploadJob.job_id == job_id.strip(),
+            YoutubeUploadJob.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, detail="任务不存在")
+    return {
+        "job_id": row.job_id,
+        "status": row.status,
+        "progress": row.progress,
+        "video_id": row.video_id,
+        "watch_url": row.watch_url,
+        "upload_status": row.upload_status,
+        "processing_status": row.processing_status,
+        "error_code": row.error_code,
+        "error_message": row.error_message,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+        "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+    }

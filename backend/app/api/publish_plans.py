@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 _PLAN_CREATE_LOCK = threading.Lock()
 router = APIRouter()
 
-_PLATFORMS = {"douyin", "wechat_channels", "tiktok"}
-_PLATFORM_LABELS = {"douyin": "抖音", "wechat_channels": "视频号", "tiktok": "TikTok"}
+_PLATFORMS = {"douyin", "wechat_channels", "tiktok", "youtube"}
+_PLATFORM_LABELS = {"douyin": "抖音", "wechat_channels": "视频号", "tiktok": "TikTok", "youtube": "YouTube"}
 _MAX_TIMES = 24
 
 

@@ -258,6 +258,8 @@ def upload_local_video_file(
     contains_synthetic_media: Optional[bool] = None,
     category_id: str = "22",
     tags: Optional[List[str]] = None,
+    thumbnail_path: Optional[str] = None,
+    publish_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """同步上传；大文件使用可恢复上传。
 
@@ -306,6 +308,8 @@ def upload_local_video_file(
     }
     if contains_synthetic_media is not None:
         status["containsSyntheticMedia"] = bool(contains_synthetic_media)
+    if publish_at:
+        status["publishAt"] = str(publish_at).strip()
 
     body: Dict[str, Any] = {"snippet": snippet, "status": status}
 
@@ -344,4 +348,13 @@ def upload_local_video_file(
 
     vid = response["id"]
     logger.info("[youtube-upload] ok video_id=%s", vid)
+
+    if thumbnail_path:
+        try:
+            thumb = MediaFileUpload(thumbnail_path, mimetype="image/*", resumable=False)
+            youtube.thumbnails().set(videoId=vid, media_body=thumb).execute()
+            logger.info("[youtube-upload] thumbnail set video_id=%s", vid)
+        except Exception as e:  # 封面失败不影响主视频
+            logger.warning("[youtube-upload] thumbnail set failed video_id=%s err=%s", vid, e)
+
     return {"video_id": vid, "response": response}

@@ -2769,6 +2769,7 @@
         <select id="modalAddAcctPlatform" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
           <option value="douyin">抖音</option>
           <option value="tiktok">TikTok</option>
+          <option value="youtube">YouTube</option>
           <option value="bilibili">B站</option>
           <option value="xiaohongshu">小红书</option>
           <option value="kuaishou">快手</option>
@@ -2778,6 +2779,13 @@
       <div class="modal-field" style="margin-bottom:0.65rem;">
         <label>账号昵称</label>
         <input type="text" id="modalAddAcctNickname" placeholder="用于区分本机浏览器目录" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+      </div>
+      <div class="modal-field" id="modalAddAcctYtFields" style="display:none;margin-bottom:0.65rem;">
+        <label>OAuth Client ID</label>
+        <input type="text" id="modalAddAcctYtClientId" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+        <label style="display:block;margin-top:0.55rem;">OAuth Client Secret</label>
+        <input type="password" id="modalAddAcctYtClientSecret" placeholder="GOCSPX-..." autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+        <p class="meta" style="font-size:0.75rem;margin:0.45rem 0 0 0;">重定向 URI：http://127.0.0.1:8000/api/youtube-publish/oauth/callback</p>
       </div>
       <div class="modal-field" style="margin-bottom:0.65rem;">
         <label>代理 server（可选）</label>

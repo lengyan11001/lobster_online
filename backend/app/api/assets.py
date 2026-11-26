@@ -3225,7 +3225,8 @@ async def upload_asset(
         str(request_headers.get("X-Asset-Purpose") or "").strip().lower() == "profile_photo"
         or str(request_headers.get("X-Profile-Photo") or "").strip() == "1"
     )
-    upload_headers = _snapshot_auth_server_upload_headers(request) if mtype == "image" else {}
+    # 视频/音频等素材也立即排队补传，上传后尽快生成公网 source_url（此前仅图片处理）。
+    upload_headers = _snapshot_auth_server_upload_headers(request)
     public_url_status = "preparing" if upload_headers else "deferred_until_use"
     upload_group = _clean_creative_group_name_optional(creative_candidate_group)
     upload_tags = _clean_upload_tags(tags)

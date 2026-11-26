@@ -29,12 +29,12 @@ function bindPublishTabs() {
   });
 }
 
-var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', zhihu: '知乎', wechat_channels: '视频号', tiktok: 'TikTok', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
-var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'tiktok', 'wechat_channels', 'bilibili', 'xiaohongshu', 'kuaishou', 'zhihu', 'toutiao'];
+var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', zhihu: '知乎', wechat_channels: '视频号', tiktok: 'TikTok', youtube: 'YouTube', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
+var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'tiktok', 'youtube', 'wechat_channels', 'bilibili', 'xiaohongshu', 'kuaishou', 'zhihu', 'toutiao'];
 var ECOMMERCE_ACCOUNT_PLATFORMS = ['douyin_shop', 'xiaohongshu_shop', 'alibaba1688', 'taobao', 'pinduoduo'];
 var ECOMMERCE_PLATFORMS = { douyin_shop: true, xiaohongshu_shop: true, alibaba1688: true, taobao: true, pinduoduo: true };
 var _currentAccountType = 'publish';
-var STATUS_LABELS = { active: '已登录', online: '已登录', pending: '待登录', waiting: '待登录', offline: '未登录', error: '异常' };
+var STATUS_LABELS = { active: '已登录', online: '已登录', ready: '已授权', pending: '待登录', waiting: '待登录', offline: '未登录', error: '异常' };
 var STATUS_COLORS = { active: '#34d399', online: '#34d399', pending: '#fb923c', waiting: '#fb923c', offline: '#94a3b8', error: '#f87171' };
 
 /** 发布/素材/创作者同步须走本机 lobster_online（LOCAL_API_BASE），勿用公网 API_BASE */
@@ -113,6 +113,33 @@ function _syncAddAccountModalPlatformOptions() {
   if (label) label.textContent = text.platformLabel;
   _renderPlatformOptions(document.getElementById('modalAddAcctPlatform'), _currentAccountType, false, selected);
 }
+
+function _syncYoutubeAccountFields() {
+  var sel = document.getElementById('modalAddAcctPlatform');
+  var box = document.getElementById('modalAddAcctYtFields');
+  if (!sel || !box) return;
+  box.style.display = sel.value === 'youtube' ? '' : 'none';
+}
+
+function _startYoutubeAccountOauth(accountId) {
+  var id = String(accountId || '').trim();
+  if (!id) return;
+  fetch(publishLocalBase() + '/api/accounts/' + encodeURIComponent(id) + '/login', {
+    method: 'POST', headers: authHeaders()
+  }).then(function(r) { return r.json(); }).then(function() {
+    var tries = 0;
+    var timer = setInterval(function() {
+      fetch(publishLocalBase() + '/api/accounts/' + encodeURIComponent(id) + '/login-status', {
+        headers: authHeaders()
+      }).then(function(r) { return r.json(); }).then(function(st) {
+        if (st && st.logged_in) { clearInterval(timer); loadAccounts(); }
+        else if (++tries >= 60) { clearInterval(timer); loadAccounts(); }
+      }).catch(function() { if (++tries >= 60) clearInterval(timer); });
+    }, 3000);
+  }).catch(function() {});
+}
+
+_syncYoutubeAccountFields();
 
 /** 解析 fetch 响应：静态服返回 HTML 时给出可操作的报错 */
 function _publishParseResponse(r) {
@@ -1338,9 +1365,10 @@ function _renderAccountList(accounts, emptyMessage) {
     var statusLabel = STATUS_LABELS[a.status] || a.status;
     var isEcom = !!ECOMMERCE_PLATFORMS[a.platform];
     var isOriginSlot = !!a.is_origin_slot || a.managed_by === 'douyin_origin';
-    var detailBtn = isEcom ? '' : '<button type="button" class="btn btn-primary btn-sm" data-open-account-detail="' + a.id + '" title="进入账号详情（数据与定时任务）">进入详情</button>';
-    var openBtn = '<button type="button" class="btn btn-primary btn-sm" data-open-browser="' + a.id + '">打开浏览器</button>';
-    var runsBtn = isEcom ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-schedule-runs-acct="' + a.id + '" title="间隔定时任务的执行记录">执行记录</button>';
+    var isYt = a.platform === 'youtube';
+    var detailBtn = (isEcom || isYt) ? '' : '<button type="button" class="btn btn-primary btn-sm" data-open-account-detail="' + a.id + '" title="进入账号详情（数据与定时任务）">进入详情</button>';
+    var openBtn = '<button type="button" class="btn btn-primary btn-sm" data-open-browser="' + a.id + '">' + (isYt ? '授权' : '打开浏览器') + '</button>';
+    var runsBtn = (isEcom || isYt) ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-schedule-runs-acct="' + a.id + '" title="间隔定时任务的执行记录">执行记录</button>';
     var defaultBtn = (!isEcom && _publishAccountCanSetDefault(a))
       ? (a.is_default
         ? '<button type="button" class="btn btn-ghost btn-sm" disabled>默认账号</button>'
@@ -1468,6 +1496,19 @@ function _bindAccountButtons(el) {
       })
         .then(function(r) { return r.json(); })
         .then(function(d) {
+          if (d && d.auth_url) {
+            btn.textContent = '等待授权…';
+            var tries = 0;
+            var timer = setInterval(function() {
+              fetch(publishLocalBase() + '/api/accounts/' + id + '/login-status', {
+                headers: authHeaders()
+              }).then(function(rr) { return rr.json(); }).then(function(st) {
+                if (st && st.logged_in) { clearInterval(timer); loadAccounts(); }
+                else if (++tries >= 60) { clearInterval(timer); loadAccounts(); }
+              }).catch(function() { if (++tries >= 60) clearInterval(timer); });
+            }, 3000);
+            return;
+          }
           var status = d.logged_in ? '已登录' : '未登录，请在浏览器中扫码';
           btn.textContent = status;
           setTimeout(function() { loadAccounts(); }, 2000);
@@ -1942,6 +1983,7 @@ function openAddPublishAccountModal() {
   var msg = document.getElementById('addPublishAccountModalMsg');
   if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
   _syncAddAccountModalPlatformOptions();
+  _syncYoutubeAccountFields();
   mask.style.display = 'flex';
 }
 
@@ -1980,6 +2022,12 @@ if (addPubAcctMask && !addPubAcctMask._publishAddAccountBound) {
   });
 }
 
+var addPubAcctPlatform = document.getElementById('modalAddAcctPlatform');
+if (addPubAcctPlatform && !addPubAcctPlatform._publishAddAccountBound) {
+  addPubAcctPlatform._publishAddAccountBound = true;
+  addPubAcctPlatform.addEventListener('change', _syncYoutubeAccountFields);
+}
+
 var addPubAcctSubmit = document.getElementById('addPublishAccountModalSubmit');
 if (addPubAcctSubmit && !addPubAcctSubmit._publishAddAccountBound) {
   addPubAcctSubmit._publishAddAccountBound = true;
@@ -2005,6 +2053,20 @@ if (addPubAcctSubmit && !addPubAcctSubmit._publishAddAccountBound) {
     var ppEl = document.getElementById('modalAddAcctProxyPass');
     var pp = ppEl ? (ppEl.value || '') : '';
     var ua = (document.getElementById('modalAddAcctUa').value || '').trim();
+    if (platform === 'youtube') {
+      var ytCid = ((document.getElementById('modalAddAcctYtClientId') || {}).value || '').trim();
+      var ytCsec = ((document.getElementById('modalAddAcctYtClientSecret') || {}).value || '').trim();
+      if (!ytCid || !ytCsec) {
+        if (msgEl) {
+          msgEl.textContent = 'YouTube 账号需要填写 OAuth Client ID 与 Client Secret';
+          msgEl.className = 'msg err';
+          msgEl.style.display = 'block';
+        }
+        return;
+      }
+      body.oauth_client_id = ytCid;
+      body.oauth_client_secret = ytCsec;
+    }
     if (ps) body.proxy_server = ps;
     if (pu) body.proxy_username = pu;
     if (pp) body.proxy_password = pp;
@@ -2028,6 +2090,9 @@ if (addPubAcctSubmit && !addPubAcctSubmit._publishAddAccountBound) {
           if (ppEl) ppEl.value = '';
           document.getElementById('modalAddAcctUa').value = '';
           loadAccounts();
+          if (platform === 'youtube' && x.data && x.data.id) {
+            _startYoutubeAccountOauth(x.data.id);
+          }
           setTimeout(closeAddPublishAccountModal, 500);
         } else {
           var det = x.data && x.data.detail;
