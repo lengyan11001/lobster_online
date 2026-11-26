@@ -93,7 +93,11 @@ def reveal_text(values, key: int) -> str:
 
 # The remote-support relay is intentionally isolated from the Online main
 # domain. Older configs are normalized to this endpoint on startup.
-DEFAULT_SERVER = "https://todesk.bhzn.top"
+_OVERSEAS_FLAG = os.environ.get("LOBSTER_IS_OVERSEAS_USER", "").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_SERVER = (
+    os.environ.get("LOBSTER_TODESK_SERVER_URL", "").strip().rstrip("/")
+    or ("https://todesk.bhos.online" if _OVERSEAS_FLAG else "https://todesk.bhzn.top")
+)
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0

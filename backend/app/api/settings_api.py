@@ -127,7 +127,22 @@ _TODSK_AGENT_VENV = _CLIENT_ROOT / "desktop" / "todesk_agent" / ".venv"
 _TODSK_AGENT_READY = _TODSK_AGENT_VENV / ".ready"
 # ToDesk uses its isolated relay domain. Keep this separate from the Online
 # main domain so the optional agent never tries the application websocket.
-_TODSK_SERVER_URL = "https://todesk.bhzn.top"
+def _todesk_default_server() -> str:
+    """海外客户端连雅加达/圣克拉拉中继，国内仍走 todesk.bhzn.top。"""
+    override = str(os.environ.get("LOBSTER_TODESK_SERVER_URL") or "").strip().rstrip("/")
+    if override:
+        return override
+    try:
+        from ..services.tos_public import is_overseas
+
+        if is_overseas():
+            return "https://todesk.bhos.online"
+    except Exception:
+        pass
+    return "https://todesk.bhzn.top"
+
+
+_TODSK_SERVER_URL = _todesk_default_server()
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
 _TODSK_START_LOCK = threading.Lock()
