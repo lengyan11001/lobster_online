@@ -24,6 +24,7 @@ from .api.settings_api import router as settings_router
 from .api.mcp_gateway import router as mcp_gateway_router
 from .api.openclaw_memory import router as openclaw_memory_router
 from .api.personal_settings import router as personal_settings_router
+from .api.proxies import router as proxies_router
 from .api.h5_chat_channel import router as h5_chat_channel_router
 from .api.audio_transcription_local import router as audio_transcription_local_router
 from .api.hypit_local import router as hypit_local_router
@@ -1204,6 +1205,7 @@ def create_app() -> FastAPI:
     app.include_router(native_telegram_router, prefix="")
     app.include_router(twilio_whatsapp_router, prefix="")
     app.include_router(youtube_publish_router, prefix="")
+    app.include_router(proxies_router, prefix="")
     app.include_router(wechat_article_router, prefix="")
     app.include_router(wechat_channels_transcript_local_router, prefix="")
     if wecom_router is not None:

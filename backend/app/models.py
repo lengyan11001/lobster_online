@@ -753,6 +753,24 @@ class PublishAccountCreatorSchedule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class ProxyEndpoint(Base):
+    """代理池：单条代理，供发布账号选择与检测。"""
+
+    __tablename__ = "proxy_endpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    server: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    password: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False, index=True)
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class YoutubePublishSchedule(Base):
     """YouTube：按账号定时上传（素材队列 FIFO），对齐创作者定时任务的 enabled + interval + next_run_at；不含审核后发布。"""
 

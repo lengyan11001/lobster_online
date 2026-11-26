@@ -138,6 +138,7 @@
             <button type="button" class="header-menu-view" data-view="account-security">账号安全</button>
             <button type="button" class="header-menu-view" data-view="billing" data-feature-gate="billing_entry">消费记录</button>
             <button type="button" class="header-menu-view" data-view="sys-config" data-feature-gate="sys_config_entry">系统配置</button>
+            <button type="button" class="header-menu-view" id="proxyConfigEntry">代理配置</button>
             <button type="button" class="header-menu-view" data-view="logs" data-feature-gate="logs_entry">日志</button>
             <button type="button" class="header-menu-view" id="shopPlazaEntry">选品广场</button>
             <button type="button" class="header-menu-view" data-view="shop-submit">赚钱</button>
@@ -2796,6 +2797,16 @@
         </select>
       </div>
       <div class="modal-field" style="margin-bottom:0.65rem;">
+        <label>从代理池选择（只显示检测通畅）</label>
+        <div style="display:flex;gap:0.4rem;align-items:center;margin-top:0.35rem;">
+          <select id="modalAddAcctProxyPool" style="flex:1;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+            <option value="">不使用代理</option>
+          </select>
+          <button type="button" class="btn btn-ghost btn-sm" id="modalAddAcctProxyTest">测试</button>
+        </div>
+        <div id="modalAddAcctProxyStatus" class="meta" style="font-size:0.75rem;margin-top:0.3rem;"></div>
+      </div>
+      <div class="modal-field" style="margin-bottom:0.65rem;">
         <label>账号昵称</label>
         <input type="text" id="modalAddAcctNickname" placeholder="用于区分本机浏览器目录" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.45rem;font-size:0.85rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
       </div>
@@ -3019,6 +3030,38 @@
     </div>
   </div>
 
+  <!-- 代理配置 -->
+  <div id="proxyConfigModal" class="modal-mask" style="display:none;">
+    <div class="modal" style="max-width:680px;max-height:84vh;overflow:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+        <h4 style="margin:0;font-size:1.05rem;">代理配置</h4>
+        <button type="button" class="btn btn-ghost btn-sm" id="proxyConfigClose">关闭</button>
+      </div>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+        <button type="button" class="btn btn-primary btn-sm" id="proxyAddToggle">+ 添加代理</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="proxyImportToggle">批量导入</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="proxyRefreshBtn">刷新</button>
+      </div>
+      <div id="proxyAddBox" style="display:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.65rem;margin-bottom:0.75rem;">
+        <input id="proxyAddLabel" placeholder="备注名（可选）" style="width:100%;margin-bottom:0.4rem;padding:0.4rem;">
+        <input id="proxyAddServer" placeholder="http://host:port 或 https://host:port" style="width:100%;margin-bottom:0.4rem;padding:0.4rem;">
+        <div style="display:flex;gap:0.4rem;margin-bottom:0.5rem;">
+          <input id="proxyAddUser" placeholder="用户名（可选）" style="flex:1;padding:0.4rem;">
+          <input id="proxyAddPass" type="password" placeholder="密码（可选）" style="flex:1;padding:0.4rem;">
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="proxyAddSave">保存</button>
+        <span id="proxyAddMsg" class="meta" style="font-size:0.78rem;margin-left:0.4rem;"></span>
+      </div>
+      <div id="proxyImportBox" style="display:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.65rem;margin-bottom:0.75rem;">
+        <p class="meta" style="font-size:0.75rem;margin:0 0 0.4rem 0;">每行一个，支持：<br>http://user:pass@host:port<br>host:port:user:pass<br>host:port<br>备注|host:port:user:pass</p>
+        <textarea id="proxyImportText" rows="6" style="width:100%;padding:0.45rem;font-size:0.8rem;" placeholder="代理1|1.2.3.4:8080:user:pass"></textarea>
+        <button type="button" class="btn btn-primary btn-sm" id="proxyImportSave" style="margin-top:0.4rem;">导入</button>
+        <span id="proxyImportMsg" class="meta" style="font-size:0.78rem;margin-left:0.4rem;"></span>
+      </div>
+      <div id="proxyList"><p class="meta">加载中…</p></div>
+    </div>
+  </div>
+
   <!-- YouTube 定时发布（每账号独立队列） -->
   <div id="youtubeScheduleModal" class="modal-mask">
     <div class="modal" style="max-width:480px;">
@@ -3194,6 +3237,7 @@
   <script defer src="/static/js/shanjian-smart-clip.js?v=20261015-drop-body-filter-v2"></script>
   <script defer src="/static/js/cutcli-template-studio.js?v=20261107-demo-preview-2"></script>
   <script defer src="/static/js/wecom-contacts.js?v=20260416i"></script>
+  <script defer src="/static/js/proxy-config.js?v=20261126-proxy-pool-v1"></script>
   <script defer src="/static/js/publish.js?v=20261031-device-source-v1"></script>
   <script defer src="/static/js/scheduled-tasks.js?v=20260905-ip-content-split-v1"></script>
   <link rel="stylesheet" href="/static/css/task-center.css?v=20260821-task-center-round-v3">

@@ -114,6 +114,97 @@ function _syncAddAccountModalPlatformOptions() {
   _renderPlatformOptions(document.getElementById('modalAddAcctPlatform'), _currentAccountType, false, selected);
 }
 
+var _proxyPoolCache = [];
+
+function _proxyPoolSelectEl() { return document.getElementById('modalAddAcctProxyPool'); }
+
+function _fillProxyFields(server, user, pass) {
+  var ps = document.getElementById('modalAddAcctProxyServer');
+  var pu = document.getElementById('modalAddAcctProxyUser');
+  var pp = document.getElementById('modalAddAcctProxyPass');
+  if (ps) ps.value = server || '';
+  if (pu) pu.value = user || '';
+  if (pp) pp.value = pass || '';
+}
+
+function _loadProxyPoolSelect() {
+  var sel = _proxyPoolSelectEl();
+  if (!sel) return;
+  fetch(publishLocalBase() + '/api/proxies?healthy=1', { headers: authHeaders() })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      _proxyPoolCache = (d && d.items) || [];
+      var html = '<option value="">不使用代理</option><option value="__system__">系统代理（自动检测）</option>';
+      _proxyPoolCache.forEach(function(p) {
+        html += '<option value="' + escapeAttr(String(p.id)) + '">' + escapeHtml(p.label || p.server) +
+          ' · 已用 ' + (p.used_by_count || 0) + ' 个账号</option>';
+      });
+      sel.innerHTML = html;
+    }).catch(function() {});
+}
+
+function _onProxyPoolChange() {
+  var sel = _proxyPoolSelectEl();
+  var st = document.getElementById('modalAddAcctProxyStatus');
+  if (!sel) return;
+  if (sel.value === '__system__') {
+    if (st) st.textContent = '检测系统代理…';
+    fetch(publishLocalBase() + '/api/proxies/system', { headers: authHeaders() })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d && d.server) {
+          _fillProxyFields(d.server, '', '');
+          if (st) st.textContent = '系统代理：' + d.server;
+        } else if (st) st.textContent = '未检测到 Windows 系统代理/PAC';
+      }).catch(function() { if (st) st.textContent = '系统代理检测失败'; });
+    return;
+  }
+  if (!sel.value) { if (st) st.textContent = ''; return; }
+  var p = _proxyPoolCache.filter(function(x) { return String(x.id) === String(sel.value); })[0];
+  if (p) {
+    _fillProxyFields(p.server, p.username, p.password);
+    if (st) st.textContent = '上次检测：' + (p.status === 'ok' ? '通畅' : (p.status === 'fail' ? '不通' : '未检测')) +
+      ' · ' + (p.latency_ms != null ? p.latency_ms + 'ms' : '—') +
+      ' · 已用 ' + (p.used_by_count || 0) + ' 个账号';
+  }
+}
+
+function _testProxyFromModal() {
+  var sel = _proxyPoolSelectEl();
+  var st = document.getElementById('modalAddAcctProxyStatus');
+  var btn = document.getElementById('modalAddAcctProxyTest');
+  if (!sel) return;
+  if (st) st.textContent = '测试中…';
+  if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+  var task;
+  if (sel.value === '__system__') {
+    task = fetch(publishLocalBase() + '/api/proxies/test', {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ use_system: true })
+    }).then(function(r) { return r.json(); });
+  } else if (sel.value) {
+    task = fetch(publishLocalBase() + '/api/proxies/' + encodeURIComponent(sel.value) + '/test', {
+      method: 'POST', headers: authHeaders()
+    }).then(function(r) { return r.json(); });
+  } else {
+    task = fetch(publishLocalBase() + '/api/proxies/test', {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({
+        server: (document.getElementById('modalAddAcctProxyServer') || {}).value || '',
+        username: (document.getElementById('modalAddAcctProxyUser') || {}).value || '',
+        password: (document.getElementById('modalAddAcctProxyPass') || {}).value || ''
+      })
+    }).then(function(r) { return r.json(); });
+  }
+  task.then(function(d) {
+    if (st) {
+      st.textContent = d && d.ok
+        ? ('通畅 · ' + (d.latency_ms != null ? d.latency_ms + 'ms' : '') + (d.server ? (' · ' + d.server) : ''))
+        : ('不通 · ' + ((d && d.error) || '检测失败'));
+    }
+    if (d && d.ok && d.server) _fillProxyFields(d.server, (document.getElementById('modalAddAcctProxyUser') || {}).value || '', (document.getElementById('modalAddAcctProxyPass') || {}).value || '');
+  }).catch(function(e) { if (st) st.textContent = '检测失败：' + (e.message || e); })
+    .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '测试'; } });
+}
+
 function _syncYoutubeAccountFields() {
   var sel = document.getElementById('modalAddAcctPlatform');
   var box = document.getElementById('modalAddAcctYtFields');
@@ -1999,6 +2090,7 @@ function openAddPublishAccountModal() {
   if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
   _syncAddAccountModalPlatformOptions();
   _syncYoutubeAccountFields();
+  _loadProxyPoolSelect();
   mask.style.display = 'flex';
 }
 
@@ -2035,6 +2127,17 @@ if (addPubAcctMask && !addPubAcctMask._publishAddAccountBound) {
   addPubAcctMask.addEventListener('click', function(e) {
     if (e.target === addPubAcctMask) closeAddPublishAccountModal();
   });
+}
+
+var proxyPoolSel = document.getElementById('modalAddAcctProxyPool');
+if (proxyPoolSel && !proxyPoolSel._proxyPoolBound) {
+  proxyPoolSel._proxyPoolBound = true;
+  proxyPoolSel.addEventListener('change', _onProxyPoolChange);
+}
+var proxyTestBtn = document.getElementById('modalAddAcctProxyTest');
+if (proxyTestBtn && !proxyTestBtn._proxyPoolBound) {
+  proxyTestBtn._proxyPoolBound = true;
+  proxyTestBtn.addEventListener('click', _testProxyFromModal);
 }
 
 var addPubAcctPlatform = document.getElementById('modalAddAcctPlatform');
