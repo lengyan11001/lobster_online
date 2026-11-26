@@ -16,7 +16,9 @@
     requestSeq: 0,
     viewObserver: null,
     composing: false,
-    running: { messageId: '', sessionId: '' }
+    running: { messageId: '', sessionId: '' },
+    drafts: {},
+    lastRenderedSessionId: ''
   };
 
   function el(id) {
@@ -298,6 +300,51 @@
     if (input && initialValue !== undefined) input.value = text(initialValue);
     resizeInput();
     if (focusInput && input) setTimeout(function () { input.focus(); }, 0);
+  }
+
+  var _draftSaveTimer = null;
+
+  function _draftKey(id) {
+    return 'lobster_mastra_draft:' + text(id || state.activeSessionId);
+  }
+
+  function saveDraftForCurrentSession() {
+    var id = text(state.activeSessionId);
+    var input = el('onlineMastraInput');
+    if (!id || !input) return;
+    var value = String(input.value || '');
+    if (value.trim()) {
+      state.drafts[id] = value;
+      try { localStorage.setItem(_draftKey(id), value); } catch (e) {}
+    } else {
+      delete state.drafts[id];
+      try { localStorage.removeItem(_draftKey(id)); } catch (e) {}
+    }
+  }
+
+  function scheduleDraftSave() {
+    if (_draftSaveTimer) clearTimeout(_draftSaveTimer);
+    _draftSaveTimer = setTimeout(saveDraftForCurrentSession, 300);
+  }
+
+  function clearDraftForSession(id) {
+    var sid = text(id || state.activeSessionId);
+    if (!sid) return;
+    delete state.drafts[sid];
+    try { localStorage.removeItem(_draftKey(sid)); } catch (e) {}
+  }
+
+  function restoreDraftForSession(id, force) {
+    var sid = text(id || state.activeSessionId);
+    var input = el('onlineMastraInput');
+    if (!sid || !input) return;
+    if (!force && String(input.value || '').trim()) return;
+    var value = state.drafts[sid];
+    if (value === undefined) {
+      try { value = localStorage.getItem(_draftKey(sid)) || ''; } catch (e) { value = ''; }
+    }
+    input.value = value || '';
+    resizeInput();
   }
 
   function resetToHome() {
@@ -1252,6 +1299,10 @@
   }
 
   function renderHistory(items) {
+    var box = el('onlineMastraMessages');
+    var prevTop = box ? box.scrollTop : 0;
+    var prevNearBottom = box ? ((box.scrollHeight - box.scrollTop - box.clientHeight) < 80) : true;
+    var sameSession = text(state.lastRenderedSessionId) === text(state.activeSessionId);
     closeAllStreams();
     state.live = {};
     state.lastEventIds = {};
@@ -1260,11 +1311,19 @@
     renderPermissionControl();
     if (!state.historyItems.length) {
       renderWelcome();
+      state.lastRenderedSessionId = text(state.activeSessionId);
       return;
     }
     state.historyItems.forEach(renderHistoryItem);
-    // 打开历史会话：直接定位到底部（不要平滑滚动，否则会先看到顶部再滚下去）
-    scrollToBottom(true);
+    state.lastRenderedSessionId = text(state.activeSessionId);
+    if (sameSession && !prevNearBottom && box) {
+      box.style.scrollBehavior = 'auto';
+      box.scrollTop = Math.min(prevTop, box.scrollHeight);
+      box.style.scrollBehavior = '';
+    } else {
+      // 打开历史会话：直接定位到底部（不要平滑滚动，否则会先看到顶部再滚下去）
+      scrollToBottom(true);
+    }
   }
 
   function loadHistory() {
@@ -1383,14 +1442,15 @@
     if (!id) return Promise.resolve();
     var apply = function () {
       if (id === text(state.activeSessionId) && state.historyItems.length) {
-        if (options.compose !== false) enterCompose('', false);
+        if (options.compose !== false) restoreDraftForSession(id, false);
         return Promise.resolve();
       }
+      saveDraftForCurrentSession();
       closeAllStreams();
       state.activeSessionId = id;
       syncRunningUi();
       storeSessionId(id);
-      if (options.compose !== false) enterCompose('', false);
+      if (options.compose !== false) restoreDraftForSession(id, true);
       renderSessionHeader();
       return loadHistory();
     };
@@ -1406,7 +1466,7 @@
       renderSessionHeader();
       if (!chosen) return createSession({ compose: false });
       if (chosen !== text(state.activeSessionId) || !state.historyItems.length) return switchSession(chosen, { compose: true });
-      if (!state.composing) enterCompose('', false);
+      if (!state.composing) restoreDraftForSession(state.activeSessionId, false);
       return state.sessions;
     });
   }
@@ -1562,6 +1622,7 @@
     renderPermissionControl();
     setComposerEnabled(false);
     if (input) input.value = '';
+    clearDraftForSession(state.activeSessionId);
     resizeInput();
     var wireContent = applyDutyModeToContent(content);
     var dutyModeValue = dutyMode();
@@ -1753,7 +1814,7 @@
     if (homeAttach) homeAttach.addEventListener('click', function (event) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      enterCompose('', true);
+      enterCompose(undefined, true);
       var picker = el('onlineMastraFileInput');
       if (picker) picker.click();
     }, true);
@@ -1806,7 +1867,7 @@
       if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submitMessage(event); }
     });
-    el('onlineMastraInput').addEventListener('input', resizeInput);
+    el('onlineMastraInput').addEventListener('input', function () { resizeInput(); scheduleDraftSave(); });
     resizeInput();
     bindHomeEntry();
   }
