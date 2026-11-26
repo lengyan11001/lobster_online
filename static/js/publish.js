@@ -137,7 +137,7 @@ function _loadProxyPoolSelect() {
       var html = '<option value="">不使用代理</option><option value="__system__">系统代理（自动检测）</option>';
       _proxyPoolCache.forEach(function(p) {
         html += '<option value="' + escapeAttr(String(p.id)) + '">' + escapeHtml(p.label || p.server) +
-          ' · 已用 ' + (p.used_by_count || 0) + ' 个账号</option>';
+          ' · 评分 ' + Number(p.score || 0) + ' · 已用 ' + (p.used_by_count || 0) + ' 个账号</option>';
       });
       sel.innerHTML = html;
     }).catch(function() {});

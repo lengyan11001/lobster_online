@@ -103,8 +103,98 @@ def _usage_counts(db: Session, user_id: int) -> Dict[str, int]:
     return counts
 
 
-def _to_out(row: ProxyEndpoint, counts: Dict[str, int]) -> Dict[str, Any]:
+def _score_proxy(row: ProxyEndpoint, used_by_count: int) -> Dict[str, Any]:
+    """代理评分：状态 + 延迟 + 检测新鲜度 + 账号集中度。"""
+    status = str(row.status or "unknown")
+    used = max(0, int(used_by_count or 0))
+    if status == "fail":
+        return {
+            "score": 0,
+            "grade": "D",
+            "risk_level": "high",
+            "recommendation": "停用",
+            "score_reasons": ["最近一次检测不通"],
+        }
+    if status != "ok":
+        return {
+            "score": 40,
+            "grade": "D",
+            "risk_level": "medium",
+            "recommendation": "待检测",
+            "score_reasons": ["尚未检测"],
+        }
+    else:
+        base = 100
+        reasons = []
+        ms = row.latency_ms
+        if ms is None:
+            base -= 15
+            reasons.append("缺少延迟数据")
+        elif ms <= 600:
+            pass
+        elif ms <= 1200:
+            base -= 5
+            reasons.append("延迟略高")
+        elif ms <= 2000:
+            base -= 10
+            reasons.append("延迟偏高")
+        elif ms <= 3000:
+            base -= 18
+            reasons.append("延迟高")
+        else:
+            base -= 28
+            reasons.append("延迟很高")
+
+        checked = row.last_checked_at
+        if not checked:
+            base -= 25
+            reasons.append("从未检测")
+        else:
+            age_h = (datetime.utcnow() - checked).total_seconds() / 3600.0
+            if age_h > 24 * 7:
+                base -= 20
+                reasons.append("超过 7 天未检测")
+            elif age_h > 24:
+                base -= 10
+                reasons.append("超过 24 小时未检测")
+            elif age_h > 6:
+                base -= 4
+                reasons.append("超过 6 小时未检测")
+
+    if used <= 1:
+        pass
+    elif used <= 3:
+        base -= 5
+        reasons.append(f"已有 {used} 个账号共用")
+    elif used <= 6:
+        base -= 15
+        reasons.append(f"已有 {used} 个账号共用，集中度偏高")
+    else:
+        base -= 30
+        reasons.append(f"已有 {used} 个账号共用，风险高")
+
+    score = max(0, min(100, base))
+    if score >= 85:
+        grade, risk, rec = "A", "low", "推荐"
+    elif score >= 70:
+        grade, risk, rec = "B", "low", "可用"
+    elif score >= 50:
+        grade, risk, rec = "C", "medium", "慎用"
+    else:
+        grade, risk, rec = "D", "high", "停用"
     return {
+        "score": score,
+        "grade": grade,
+        "risk_level": risk,
+        "recommendation": rec,
+        "score_reasons": reasons,
+    }
+
+
+def _to_out(row: ProxyEndpoint, counts: Dict[str, int]) -> Dict[str, Any]:
+    used = counts.get(_norm(row.server), 0)
+    scored = _score_proxy(row, used)
+    out = {
         "id": row.id,
         "label": row.label,
         "server": row.server,
@@ -114,9 +204,11 @@ def _to_out(row: ProxyEndpoint, counts: Dict[str, int]) -> Dict[str, Any]:
         "latency_ms": row.latency_ms,
         "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else "",
         "last_error": row.last_error or "",
-        "used_by_count": counts.get(_norm(row.server), 0),
+        "used_by_count": used,
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
+    out.update(scored)
+    return out
 
 
 @router.get("/api/proxies", summary="代理池列表")
@@ -125,12 +217,18 @@ def list_proxies(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    q = db.query(ProxyEndpoint).filter(ProxyEndpoint.user_id == current_user.id)
-    if healthy:
-        q = q.filter(ProxyEndpoint.status == "ok")
-    rows = q.order_by(ProxyEndpoint.id.desc()).all()
+    rows = (
+        db.query(ProxyEndpoint)
+        .filter(ProxyEndpoint.user_id == current_user.id)
+        .order_by(ProxyEndpoint.id.desc())
+        .all()
+    )
     counts = _usage_counts(db, current_user.id)
-    return {"items": [_to_out(r, counts) for r in rows]}
+    items = [_to_out(r, counts) for r in rows]
+    if healthy:
+        items = [x for x in items if x.get("status") == "ok" and int(x.get("score") or 0) >= 60]
+    items.sort(key=lambda x: (int(x.get("score") or 0), -(x.get("latency_ms") or 99999)), reverse=True)
+    return {"items": items}
 
 
 @router.post("/api/proxies", summary="新增代理")
@@ -319,7 +417,9 @@ async def test_all_proxies(
         await asyncio.gather(*(run_one(r) for r in rows))
         db.commit()
     counts = _usage_counts(db, current_user.id)
-    return {"items": [_to_out(r, counts) for r in rows]}
+    items = [_to_out(r, counts) for r in rows]
+    items.sort(key=lambda x: (int(x.get("score") or 0), -(x.get("latency_ms") or 99999)), reverse=True)
+    return {"items": items}
 
 
 @router.delete("/api/proxies/{proxy_id}", summary="删除代理")
