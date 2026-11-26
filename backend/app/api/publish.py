@@ -1484,6 +1484,34 @@ def list_accounts(
     rows = db.query(PublishAccount).filter(
         PublishAccount.user_id == current_user.id,
     ).order_by(PublishAccount.created_at.desc()).all()
+    # 技能页已有的 YouTube 账号自动登记到发布中心，避免重复添加
+    try:
+        from .youtube_publish import list_youtube_account_entries
+
+        linked = {_youtube_account_id_from_publish_acct(a) for a in rows if a.platform == "youtube"}
+        created = 0
+        for yid, ent in list_youtube_account_entries(current_user.id).items():
+            if not yid or yid in linked:
+                continue
+            db.add(
+                PublishAccount(
+                    user_id=current_user.id,
+                    platform="youtube",
+                    nickname=str(ent.get("label") or yid)[:128] or yid,
+                    status="pending",
+                    browser_profile="",
+                    meta={"youtube_account_id": yid},
+                )
+            )
+            created += 1
+        if created:
+            db.commit()
+            rows = db.query(PublishAccount).filter(
+                PublishAccount.user_id == current_user.id,
+            ).order_by(PublishAccount.created_at.desc()).all()
+    except Exception:
+        logger.warning("[PUBLISH-API] YouTube 账号自动登记失败 user_id=%s", current_user.id, exc_info=True)
+
     display_rows = _douyin_origin_publish_accounts(current_user.id)
     display_rows.extend([a for a in rows if not _is_douyin_origin_publish_account(a)])
     acct_ids = [a.id for a in display_rows if a.id and a.id > 0]

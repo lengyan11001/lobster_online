@@ -1191,6 +1191,12 @@ def get_youtube_account_entry(user_id: int, account_id: str) -> Optional[Dict[st
     return ent if isinstance(ent, dict) else None
 
 
+def list_youtube_account_entries(user_id: int) -> Dict[str, Dict[str, Any]]:
+    doc = _load_doc(int(user_id))
+    accounts = doc.get("accounts") if isinstance(doc.get("accounts"), dict) else {}
+    return {k: v for k, v in accounts.items() if isinstance(v, dict)}
+
+
 def create_youtube_account_record(
     *,
     user_id: int,
