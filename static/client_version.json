@@ -1,7 +1,7 @@
 {
-  "version": "2.0.358",
-  "build": 666,
-  "applied_at": "2026-11-26T12:25:37+08:00",
-  "note": "YouTube 上传页改版：状态卡片/三步授权/概览数据；发布中心接入 YouTube 账号与批量发布；source_url 自动补传",
-  "bundle_sha256": "7f95b297c160d2842772e978ca5168826bd06602dc1c942afd3bee1326415b6d"
+  "version": "2.0.359",
+  "build": 667,
+  "applied_at": "2026-11-26T12:42:12+08:00",
+  "note": "YouTube 上传：AI 文案兜底（标题/描述/标签未填自动生成）、发布记录写入、批量定时发布校验",
+  "bundle_sha256": "a1a0b083a82e6a93864273b887127764511b60a6a0bc44f07ffd8d0d976715dd"
 }
