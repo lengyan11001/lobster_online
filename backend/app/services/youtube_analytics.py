@@ -37,7 +37,10 @@ async def _refresh_access_token(
             },
         )
     if r.status_code >= 400:
-        raise RuntimeError(f"刷新 YouTube token 失败: {r.text[:500]}")
+        body = r.text[:500]
+        if "invalid_grant" in body:
+            raise RuntimeError("YouTube 授权已失效（invalid_grant），请在账号卡片点「重新授权」")
+        raise RuntimeError(f"刷新 YouTube token 失败: {body}")
     data = r.json()
     token = data.get("access_token", "")
     if not token:

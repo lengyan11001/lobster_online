@@ -160,7 +160,15 @@
       headers: typeof authHeaders === 'function' ? authHeaders() : {}
     }).then(function(r) { return r.json(); }).then(function(d) {
       var box = document.getElementById('yt-metrics-' + aid);
-      if (!box || !d || !d.ok) return;
+      if (!box || !d) return;
+      if (d.reauth_required) {
+        var card = box.closest('[data-yt-card]');
+        var sp = card ? card.querySelector('.yt-status') : null;
+        if (sp) { sp.textContent = '● 授权失效'; sp.style.color = '#fb923c'; }
+        box.innerHTML = '<span style="color:#fb923c;">授权已失效，请点「重新授权」</span>';
+        return;
+      }
+      if (!d.ok) return;
       var av = document.getElementById('yt-avatar-' + aid);
       if (av && d.thumbnail) {
         av.innerHTML = '<img src="' + escapeAttr(d.thumbnail) + '" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">';
@@ -289,7 +297,7 @@
             '<div id="yt-avatar-' + aid + '" style="width:40px;height:40px;border-radius:50%;flex:0 0 40px;background:rgba(255,0,0,0.12);display:flex;align-items:center;justify-content:center;font-weight:700;">' + escapeHtml(_ytAvatarText(a)) + '</div>' +
             '<div style="flex:1;min-width:0;"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(a.label || a.account_id || '') + '</div>' +
             '<div class="meta" style="font-size:0.72rem;">' + escapeHtml(a.account_id || '') + '</div></div>' +
-            '<span style="color:' + st.color + ';font-size:0.78rem;white-space:nowrap;">' + st.dot + ' ' + st.label + '</span></div>' +
+            '<span class="yt-status" style="color:' + st.color + ';font-size:0.78rem;white-space:nowrap;">' + st.dot + ' ' + st.label + '</span></div>' +
             '<div id="yt-metrics-' + aid + '" class="meta" style="display:flex;gap:0.9rem;flex-wrap:wrap;font-size:0.76rem;margin-top:0.65rem;"><span>订阅 —</span><span>总播放 —</span><span>视频 —</span></div>' +
             err +
             '<div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.7rem;">' +

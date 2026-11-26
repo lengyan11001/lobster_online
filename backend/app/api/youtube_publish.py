@@ -1159,12 +1159,19 @@ async def youtube_account_overview(
     from ..services.youtube_analytics import _refresh_access_token
 
     proxy_url, _src = _youtube_account_proxy_url(ent)
-    token = await _refresh_access_token(
-        (ent.get("oauth_client_id") or "").strip(),
-        (ent.get("oauth_client_secret") or "").strip(),
-        (ent.get("refresh_token") or "").strip(),
-        proxy_url,
-    )
+    try:
+        token = await _refresh_access_token(
+            (ent.get("oauth_client_id") or "").strip(),
+            (ent.get("oauth_client_secret") or "").strip(),
+            (ent.get("refresh_token") or "").strip(),
+            proxy_url,
+        )
+    except RuntimeError as e:
+        msg = str(e)
+        if "invalid_grant" in msg or "授权已失效" in msg:
+            _mark_account_error(current_user.id, account_id, "授权已失效，请重新授权")
+            return {"ok": False, "reauth_required": True, "error": "授权已失效，请重新授权"}
+        return {"ok": False, "error": msg}
     kwargs, _ = youtube_httpx_client_kwargs(
         (ent.get("proxy_server") or "").strip() or None,
         (ent.get("proxy_username") or "").strip() or None,
@@ -1217,7 +1224,14 @@ async def youtube_account_analytics(
     try:
         data = await sync_youtube_account_data(ent, proxy_url=proxy_url)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        msg = str(e)
+        if "invalid_grant" in msg or "授权已失效" in msg:
+            _mark_account_error(current_user.id, account_id, "授权已失效，请重新授权")
+            raise HTTPException(
+                status_code=401,
+                detail="YouTube 授权已失效（invalid_grant），请在账号卡片点「重新授权」",
+            ) from e
+        raise HTTPException(status_code=502, detail=msg) from e
     return data
 
 
@@ -1239,7 +1253,14 @@ async def youtube_sync_analytics(
     try:
         data = await sync_youtube_account_data(ent, proxy_url=proxy_url)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        msg = str(e)
+        if "invalid_grant" in msg or "授权已失效" in msg:
+            _mark_account_error(current_user.id, account_id, "授权已失效，请重新授权")
+            raise HTTPException(
+                status_code=401,
+                detail="YouTube 授权已失效（invalid_grant），请在账号卡片点「重新授权」",
+            ) from e
+        raise HTTPException(status_code=502, detail=msg) from e
     return {"status": "synced", "data": data}
 
 
