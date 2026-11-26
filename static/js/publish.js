@@ -1526,6 +1526,12 @@ function _bindAccountButtons(el) {
       var assetId = prompt('请输入要发布的素材 ID（可在「素材库」tab 查看）：');
       if (!assetId || !assetId.trim()) return;
       var title = prompt('发布标题（可留空）：', '') || '';
+      var ytDesc = '';
+      var ytTags = '';
+      if (platform === 'youtube') {
+        ytDesc = prompt('YouTube 描述（可留空，默认用素材提示词）：', '') || '';
+        ytTags = prompt('YouTube 标签（逗号分隔，可留空）：', '') || '';
+      }
       var options = {};
       var _copyLang = _publishContentLanguageSync();
       if (_copyLang) options.content_language = _copyLang;
@@ -1578,6 +1584,8 @@ function _bindAccountButtons(el) {
         title: title,
         options: Object.keys(options).length ? options : undefined
       };
+      if (ytDesc.trim()) payload.description = ytDesc.trim();
+      if (ytTags.trim()) payload.tags = ytTags.trim();
       if (coverAssetId && coverAssetId.trim()) payload.cover_asset_id = coverAssetId.trim();
       fetch(publishLocalBase() + '/api/publish', {
         method: 'POST', headers: authHeaders(),

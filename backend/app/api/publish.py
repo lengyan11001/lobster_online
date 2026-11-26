@@ -2542,6 +2542,44 @@ async def create_publish_task(
             logger.warning("[PUBLISH-API] YouTube 发布失败 user_id=%s: %s", current_user.id, e)
             raise HTTPException(502, detail=f"YouTube 发布失败: {e}") from e
         _record_asset_publish(db, asset, "youtube")
+        try:
+            import uuid as _uuid
+
+            from ..models import YoutubeUploadJob
+
+            effective_title = (yt_body.title or getattr(asset, "filename", "") or "Video")[:100]
+            record = YoutubeUploadJob(
+                job_id="up_" + _uuid.uuid4().hex[:16],
+                user_id=current_user.id,
+                account_id=yt_id,
+                asset_id=_asset_id_s,
+                title=effective_title,
+                description=yt_body.description or "",
+                tags_json=list(yt_body.tags or []),
+                category_id=yt_body.category_id or "22",
+                privacy_status=yt_body.privacy_status or "public",
+                material_origin=yt_body.material_origin or "script_batch",
+                made_for_kids=bool(yt_body.self_declared_made_for_kids),
+                contains_synthetic_media=yt_body.contains_synthetic_media,
+                thumbnail_asset_id=yt_body.thumbnail_asset_id,
+                publish_at=yt_body.publish_at,
+                status="published",
+                progress=100,
+                video_id=str(res.get("video_id") or "") or None,
+                watch_url=str(res.get("watch_url") or "") or None,
+                upload_status="uploaded",
+            )
+            db.add(record)
+            db.commit()
+        except Exception:
+            logger.warning("[PUBLISH-API] 写入 YouTube 上传记录失败", exc_info=True)
+        logger.info(
+            "[PUBLISH-API] YouTube 发布完成 video_id=%s title=%r desc_len=%d tags=%s",
+            res.get("video_id"),
+            (yt_body.title or getattr(asset, "filename", "") or "")[:100],
+            len(yt_body.description or ""),
+            list(yt_body.tags or []),
+        )
         return {
             "status": "success",
             "task_id": None,
