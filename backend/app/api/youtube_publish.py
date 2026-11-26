@@ -18,7 +18,7 @@ from typing import Any, Dict, Literal, Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
