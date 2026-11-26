@@ -771,6 +771,22 @@ class ProxyEndpoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class ProxyIpProfile(Base):
+    """代理 IP 情报：ASN、类型（机房/住宅/移动）。"""
+
+    __tablename__ = "proxy_ip_profiles"
+
+    server: Mapped[str] = mapped_column(String(255), primary_key=True)
+    ip: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    ip_type: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
+    asn: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    org: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    country: Mapped[str] = mapped_column(String(8), default="", nullable=False)
+    is_proxy: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_vpn: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class YoutubePublishSchedule(Base):
     """YouTube：按账号定时上传（素材队列 FIFO），对齐创作者定时任务的 enabled + interval + next_run_at；不含审核后发布。"""
 

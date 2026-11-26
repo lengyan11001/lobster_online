@@ -9,8 +9,8 @@
   });
 
   window.registerLobsterView('proxy-config', {
-    html: '/static/views/proxy-config.html?v=20261126-proxy-page-v2',
-    scripts: '/static/js/proxy-config.js?v=20261126-proxy-page-v2',
+    html: '/static/views/proxy-config.html?v=20261126-proxy-page-v3',
+    scripts: '/static/js/proxy-config.js?v=20261126-proxy-page-v3',
     init: 'initProxyConfigView',
     cache: 'reload'
   });

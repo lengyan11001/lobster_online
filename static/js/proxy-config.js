@@ -33,15 +33,25 @@
     return '#f87171';
   }
 
+  function ipTypeMeta(t) {
+    if (t === 'datacenter') return { label: '机房 IP', color: '#fb923c' };
+    if (t === 'residential') return { label: '住宅 IP', color: '#34d399' };
+    if (t === 'mobile') return { label: '移动 IP', color: '#34d399' };
+    if (t === 'proxy') return { label: '代理/VPN', color: '#fb923c' };
+    return { label: 'IP 类型未知', color: '#94a3b8' };
+  }
+
   function updateSummary(items) {
     var el = byId('proxyPageSummary');
     if (!el) return;
     var ok = items.filter(function(x) { return x.status === 'ok'; }).length;
     var high = items.filter(function(x) { return x.risk_level === 'high'; }).length;
+    var dc = items.filter(function(x) { return x.ip_type === 'datacenter'; }).length;
     var avg = items.length ? Math.round(items.reduce(function(s, x) { return s + Number(x.score || 0); }, 0) / items.length) : 0;
     el.innerHTML = '<span>共 <strong>' + items.length + '</strong></span>' +
       '<span style="color:#34d399;">通畅 <strong>' + ok + '</strong></span>' +
       '<span style="color:#f87171;">高风险 <strong>' + high + '</strong></span>' +
+      '<span style="color:#fb923c;">机房 IP <strong>' + dc + '</strong></span>' +
       '<span>平均分 <strong>' + avg + '</strong></span>';
   }
 
@@ -61,6 +71,8 @@
       var reasons = (p.score_reasons || []).join('；');
       var err = p.last_error ? ('<div class="meta" style="font-size:0.72rem;color:#f87171;word-break:break-all;">' + escapeHtml(p.last_error) + '</div>') : '';
       var risk = p.risk_level === 'high' ? '<span style="color:#f87171;">高风险</span>' : (p.risk_level === 'medium' ? '<span style="color:#fb923c;">中风险</span>' : '<span style="color:#34d399;">低风险</span>');
+      var tm = ipTypeMeta(p.ip_type);
+      var ipLine = '<span style="color:' + tm.color + ';">' + tm.label + '</span>' + (p.org ? (' · ' + escapeHtml(p.org)) : '') + (p.asn ? (' · ' + escapeHtml(p.asn)) : '');
       return '<div style="display:flex;gap:0.7rem;align-items:center;padding:0.65rem 0.2rem;border-bottom:1px solid var(--border);">' +
         '<span style="width:8px;height:8px;border-radius:50%;background:' + st.color + ';flex:0 0 8px;"></span>' +
         '<div style="flex:1;min-width:0;">' +
@@ -69,6 +81,7 @@
         ' · ' + escapeHtml(maskUser(p.username)) +
         ' · ' + st.text + ' · ' + latency +
         ' · 已用 ' + (p.used_by_count || 0) + ' 个账号</div>' +
+        '<div style="font-size:0.75rem;margin-top:0.15rem;">' + ipLine + '</div>' +
         '<div style="font-size:0.75rem;margin-top:0.2rem;color:' + gc + ';" title="' + escapeHtml(reasons) + '">' +
         '<strong>' + escapeHtml(p.grade || '-') + ' · ' + Number(p.score || 0) + ' 分</strong>' +
         ' · 建议：' + escapeHtml(p.recommendation || '-') + ' · ' + risk + '</div>' + err + '</div>' +
@@ -109,9 +122,17 @@
     btn.textContent = '测试中…';
     msg('正在批量测试 ' + cache.length + ' 条代理…');
     api('/api/proxies/test-all', { method: 'POST' })
-      .then(function(r) { return r.json(); })
+      .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error('HTTP ' + r.status + ' ' + String(t || '').slice(0, 120)); });
+        return r.json();
+      })
       .then(function(d) {
         var items = (d && d.items) || [];
+        if (!items.length && cache.length) {
+          msg('批量测试返回为空，请确认后端已升级并重启');
+          load();
+          return;
+        }
         render(items);
         var ok = items.filter(function(x) { return x.status === 'ok'; }).length;
         var avg = items.length ? Math.round(items.reduce(function(s, x) { return s + Number(x.score || 0); }, 0) / items.length) : 0;

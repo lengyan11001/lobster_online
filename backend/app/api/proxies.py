@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_for_local
 from ..db import get_db
-from ..models import ProxyEndpoint, PublishAccount
+from ..models import ProxyEndpoint, ProxyIpProfile, PublishAccount
 
 router = APIRouter()
 _TEST_URL = "https://www.google.com/generate_204"
@@ -103,7 +104,113 @@ def _usage_counts(db: Session, user_id: int) -> Dict[str, int]:
     return counts
 
 
-def _score_proxy(row: ProxyEndpoint, used_by_count: int) -> Dict[str, Any]:
+_HOSTING_KEYWORDS = (
+    "leaseweb", "m247", "ntt", "ovh", "hetzner", "contabo", "vultr", "linode",
+    "digitalocean", "amazon", "aws", "azure", "google cloud", "alibaba", "tencent",
+    "web2objects", "b2 net", "zenlayer", "cogent", "gtt", "hosting", "datacenter",
+    "data center", "server", "cloud",
+)
+_MOBILE_KEYWORDS = ("mobile", "cellular", "wireless", "4g", "5g", "lte")
+_ISP_KEYWORDS = ("broadband", "telecom", "communications", "isp", "cable", "fiber", "dsl")
+
+
+def _host_ip(server: str) -> str:
+    host = (urlparse(_norm(server)).hostname or "").strip()
+    if not host:
+        return ""
+    try:
+        socket.inet_aton(host)
+        return host
+    except OSError:
+        pass
+    try:
+        return socket.gethostbyname(host)
+    except Exception:
+        return ""
+
+
+def _classify_ip(org: str, is_datacenter: bool, is_proxy: bool, is_vpn: bool) -> str:
+    low = (org or "").lower()
+    if is_datacenter or any(k in low for k in _HOSTING_KEYWORDS):
+        return "datacenter"
+    if any(k in low for k in _MOBILE_KEYWORDS):
+        return "mobile"
+    if is_proxy or is_vpn:
+        return "proxy"
+    if any(k in low for k in _ISP_KEYWORDS):
+        return "residential"
+    return "unknown"
+
+
+async def _lookup_ip_profile(server: str) -> Dict[str, Any]:
+    ip = _host_ip(server)
+    out = {
+        "ip": ip,
+        "ip_type": "unknown",
+        "asn": "",
+        "org": "",
+        "country": "",
+        "is_proxy": False,
+        "is_vpn": False,
+    }
+    if not ip:
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=8.0, trust_env=False) as c:
+            r = await c.get("https://api.ipapi.is/", params={"q": ip})
+        if r.status_code < 400:
+            d = r.json() or {}
+            asn = d.get("asn") or {}
+            org = str((d.get("company") or {}).get("name") or asn.get("org") or "")
+            out.update({
+                "asn": str(asn.get("asn") or ""),
+                "org": org[:255],
+                "country": str((d.get("location") or {}).get("country") or ""),
+                "is_proxy": bool(d.get("is_proxy")),
+                "is_vpn": bool(d.get("is_vpn")),
+            })
+            out["ip_type"] = _classify_ip(
+                org, bool(d.get("is_datacenter")), out["is_proxy"], out["is_vpn"]
+            )
+            return out
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=8.0, trust_env=False) as c:
+            r = await c.get(f"https://ipinfo.io/{ip}/json")
+        if r.status_code < 400:
+            d = r.json() or {}
+            org = str(d.get("org") or "")
+            out.update({"asn": org.split()[0] if org else "", "org": org[:255], "country": str(d.get("country") or "")})
+            out["ip_type"] = _classify_ip(org, False, False, False)
+    except Exception:
+        pass
+    return out
+
+
+def _save_ip_profile(db: Session, server: str, prof: Dict[str, Any]) -> None:
+    row = db.get(ProxyIpProfile, server)
+    if row is None:
+        row = ProxyIpProfile(server=server)
+        db.add(row)
+    row.ip = str(prof.get("ip") or "")
+    row.ip_type = str(prof.get("ip_type") or "unknown")
+    row.asn = str(prof.get("asn") or "")[:32]
+    row.org = str(prof.get("org") or "")[:255]
+    row.country = str(prof.get("country") or "")[:8]
+    row.is_proxy = bool(prof.get("is_proxy"))
+    row.is_vpn = bool(prof.get("is_vpn"))
+    row.checked_at = datetime.utcnow()
+
+
+def _profile_map(db: Session, servers: List[str]) -> Dict[str, ProxyIpProfile]:
+    if not servers:
+        return {}
+    rows = db.query(ProxyIpProfile).filter(ProxyIpProfile.server.in_(servers)).all()
+    return {r.server: r for r in rows}
+
+
+def _score_proxy(row: ProxyEndpoint, used_by_count: int, ip_type: str = "unknown") -> Dict[str, Any]:
     """代理评分：状态 + 延迟 + 检测新鲜度 + 账号集中度。"""
     status = str(row.status or "unknown")
     used = max(0, int(used_by_count or 0))
@@ -172,6 +279,17 @@ def _score_proxy(row: ProxyEndpoint, used_by_count: int) -> Dict[str, Any]:
     else:
         base -= 30
         reasons.append(f"已有 {used} 个账号共用，风险高")
+    if ip_type == "datacenter":
+        base -= 20
+        reasons.append("机房 IP")
+    elif ip_type in ("proxy", "vpn"):
+        base -= 10
+        reasons.append("代理/VPN IP")
+    elif ip_type in ("residential", "mobile"):
+        pass
+    else:
+        base -= 5
+        reasons.append("IP 类型未知")
 
     score = max(0, min(100, base))
     if score >= 85:
@@ -191,9 +309,10 @@ def _score_proxy(row: ProxyEndpoint, used_by_count: int) -> Dict[str, Any]:
     }
 
 
-def _to_out(row: ProxyEndpoint, counts: Dict[str, int]) -> Dict[str, Any]:
+def _to_out(row: ProxyEndpoint, counts: Dict[str, int], profile: Optional[ProxyIpProfile] = None) -> Dict[str, Any]:
     used = counts.get(_norm(row.server), 0)
-    scored = _score_proxy(row, used)
+    ip_type = str(getattr(profile, "ip_type", "") or "unknown") if profile is not None else "unknown"
+    scored = _score_proxy(row, used, ip_type)
     out = {
         "id": row.id,
         "label": row.label,
@@ -205,6 +324,12 @@ def _to_out(row: ProxyEndpoint, counts: Dict[str, int]) -> Dict[str, Any]:
         "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else "",
         "last_error": row.last_error or "",
         "used_by_count": used,
+        "ip_type": ip_type,
+        "asn": str(getattr(profile, "asn", "") or "") if profile is not None else "",
+        "org": str(getattr(profile, "org", "") or "") if profile is not None else "",
+        "country": str(getattr(profile, "country", "") or "") if profile is not None else "",
+        "is_proxy": bool(getattr(profile, "is_proxy", False)) if profile is not None else False,
+        "is_vpn": bool(getattr(profile, "is_vpn", False)) if profile is not None else False,
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
     out.update(scored)
@@ -224,7 +349,8 @@ def list_proxies(
         .all()
     )
     counts = _usage_counts(db, current_user.id)
-    items = [_to_out(r, counts) for r in rows]
+    profiles = _profile_map(db, [r.server for r in rows])
+    items = [_to_out(r, counts, profiles.get(r.server)) for r in rows]
     if healthy:
         items = [x for x in items if x.get("status") == "ok" and int(x.get("score") or 0) >= 60]
     items.sort(key=lambda x: (int(x.get("score") or 0), -(x.get("latency_ms") or 99999)), reverse=True)
@@ -384,9 +510,11 @@ async def test_proxy(
     row.latency_ms = res.get("latency_ms")
     row.last_checked_at = datetime.utcnow()
     row.last_error = (res.get("error") or "")[:500] or None
+    prof = await _lookup_ip_profile(row.server)
+    _save_ip_profile(db, row.server, prof)
     db.commit()
     db.refresh(row)
-    return _to_out(row, _usage_counts(db, current_user.id))
+    return _to_out(row, _usage_counts(db, current_user.id), db.get(ProxyIpProfile, row.server))
 
 
 @router.get("/api/proxies/system", summary="检测系统代理")
@@ -404,20 +532,28 @@ async def test_all_proxies(
 ):
     rows = db.query(ProxyEndpoint).filter(ProxyEndpoint.user_id == current_user.id).all()
     sem = asyncio.Semaphore(8)
+    results: Dict[int, tuple] = {}
 
     async def run_one(row: ProxyEndpoint) -> None:
         async with sem:
             res = await _probe(_proxy_url(row.server, row.username, row.password))
-        row.status = "ok" if res.get("ok") else "fail"
-        row.latency_ms = res.get("latency_ms")
-        row.last_checked_at = datetime.utcnow()
-        row.last_error = (res.get("error") or "")[:500] or None
+            prof = await _lookup_ip_profile(row.server)
+        results[row.id] = (res, prof)
 
     if rows:
         await asyncio.gather(*(run_one(r) for r in rows))
+        for row in rows:
+            res, prof = results.get(row.id, ({}, {}))
+            row.status = "ok" if res.get("ok") else "fail"
+            row.latency_ms = res.get("latency_ms")
+            row.last_checked_at = datetime.utcnow()
+            row.last_error = (res.get("error") or "")[:500] or None
+            if prof:
+                _save_ip_profile(db, row.server, prof)
         db.commit()
     counts = _usage_counts(db, current_user.id)
-    items = [_to_out(r, counts) for r in rows]
+    profiles = _profile_map(db, [r.server for r in rows])
+    items = [_to_out(r, counts, profiles.get(r.server)) for r in rows]
     items.sort(key=lambda x: (int(x.get("score") or 0), -(x.get("latency_ms") or 99999)), reverse=True)
     return {"items": items}
 
