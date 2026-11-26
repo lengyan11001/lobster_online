@@ -1,6 +1,7 @@
 """代理池：单条/批量导入、连通性检测、被账号使用计数。"""
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -296,6 +297,29 @@ def system_proxy(current_user: _ServerUser = Depends(get_current_user_for_local)
 
     server = resolve_windows_system_proxy_url(_TEST_URL) or ""
     return {"server": server, "detected": bool(server)}
+
+
+@router.post("/api/proxies/test-all", summary="批量测试全部代理")
+async def test_all_proxies(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    rows = db.query(ProxyEndpoint).filter(ProxyEndpoint.user_id == current_user.id).all()
+    sem = asyncio.Semaphore(8)
+
+    async def run_one(row: ProxyEndpoint) -> None:
+        async with sem:
+            res = await _probe(_proxy_url(row.server, row.username, row.password))
+        row.status = "ok" if res.get("ok") else "fail"
+        row.latency_ms = res.get("latency_ms")
+        row.last_checked_at = datetime.utcnow()
+        row.last_error = (res.get("error") or "")[:500] or None
+
+    if rows:
+        await asyncio.gather(*(run_one(r) for r in rows))
+        db.commit()
+    counts = _usage_counts(db, current_user.id)
+    return {"items": [_to_out(r, counts) for r in rows]}
 
 
 @router.delete("/api/proxies/{proxy_id}", summary="删除代理")

@@ -8,6 +8,13 @@
     init: 'initAudioTranscriptionView'
   });
 
+  window.registerLobsterView('proxy-config', {
+    html: '/static/views/proxy-config.html?v=20261126-proxy-page-v1',
+    scripts: '/static/js/proxy-config.js?v=20261126-proxy-page-v1',
+    init: 'initProxyConfigView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('logs', {
     html: '/static/views/logs.html',
     scripts: '/static/js/views/logs.js?v=20260528-view-split'
