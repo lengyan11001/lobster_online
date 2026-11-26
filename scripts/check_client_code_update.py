@@ -2,7 +2,8 @@
 """
 启动前在线客户端代码热更新（纯代码 zip，不含 python/nodejs/deps 等大依赖）。
 
-- 仅在 .env 配置 CLIENT_CODE_MANIFEST_URL（HTTPS）时拉取 manifest。
+- manifest 地址默认由 LOBSTER_IS_OVERSEAS_USER 推导（bhzn.top / bhos.online）；
+  CLIENT_CODE_MANIFEST_URL 可显式覆盖，但若它与当前版本域名冲突则仍按版本推导。
 - 本地版本：CLIENT_CODE_VERSION.json 的 build（整数）与 version（语义版本，默认 1.0.0）。
 - 满足任一即更新：① 服务端 build 更大；② build 相同且 manifest.version 高于本地；
   ③ build/version 相同但服务端 OTA SHA256 已变化（支持同版本覆盖发布）。
@@ -1730,13 +1731,51 @@ def _apply_update_artifact(artifact: dict[str, Any], tdir: Path, *, label: str) 
     return applied
 
 
+_PROCESS_ENV_KEYS = (
+    "LOBSTER_IS_OVERSEAS_USER",
+    "LOBSTER_DOMESTIC_SERVER_BASE",
+    "LOBSTER_OVERSEAS_SERVER_BASE",
+    "LOBSTER_DISABLE_CLIENT_CODE_UPDATE",
+)
+
+
+def _load_update_env() -> dict[str, str]:
+    env = _load_dotenv_simple(ROOT / ".env")
+    env.update(
+        {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith("CLIENT_CODE_") or k in _PROCESS_ENV_KEYS
+        }
+    )
+    return env
+
+
+def _resolve_manifest_url(env: dict[str, str]) -> str:
+    """以 LOBSTER_IS_OVERSEAS_USER 为准推导 manifest；显式自定义域名仍可覆盖。"""
+    raw = (env.get("CLIENT_CODE_MANIFEST_URL") or "").strip()
+    overseas = str(env.get("LOBSTER_IS_OVERSEAS_USER") or "").strip().lower() in {"1", "true", "yes", "on"}
+    domestic_base = (env.get("LOBSTER_DOMESTIC_SERVER_BASE") or "https://bhzn.top").strip().rstrip("/")
+    overseas_base = (env.get("LOBSTER_OVERSEAS_SERVER_BASE") or "https://bhos.online").strip().rstrip("/")
+    derived = f"{overseas_base if overseas else domestic_base}/client/client-code/manifest.json"
+    if not raw:
+        return derived
+    low = raw.lower()
+    domestic_markers = ("bhzn.top", "42.194.209.150")
+    overseas_markers = ("bhos.online", "43.162.111.36")
+    if overseas and any(m in low for m in domestic_markers):
+        return derived
+    if not overseas and any(m in low for m in overseas_markers):
+        return derived
+    return raw
+
+
 def _main_locked() -> int:
     _apply_pending_update_recovery()
     _apply_pending_exe_replace()
-    env = _load_dotenv_simple(ROOT / ".env")
-    env.update({k: v for k, v in os.environ.items() if k.startswith("CLIENT_CODE_")})
+    env = _load_update_env()
 
-    manifest_url = (env.get("CLIENT_CODE_MANIFEST_URL") or "").strip()
+    manifest_url = _resolve_manifest_url(env)
     if not manifest_url:
         return 0
 
@@ -1842,9 +1881,8 @@ def _sync_version_marker_locked() -> int:
     look like another update.  Only copy the remote SHA after build/version
     already match, so this cannot mark an unapplied newer release as installed.
     """
-    env = _load_dotenv_simple(ROOT / ".env")
-    env.update({k: v for k, v in os.environ.items() if k.startswith("CLIENT_CODE_")})
-    manifest_url = (env.get("CLIENT_CODE_MANIFEST_URL") or "").strip()
+    env = _load_update_env()
+    manifest_url = _resolve_manifest_url(env)
     if not manifest_url or not manifest_url.lower().startswith(("https://", "http://")):
         return 0
     try:
@@ -1880,15 +1918,8 @@ def _sync_version_marker_locked() -> int:
 
 def _check_only_locked() -> int:
     """Check the manifest without downloading or mutating the client."""
-    env = _load_dotenv_simple(ROOT / ".env")
-    env.update(
-        {
-            k: v
-            for k, v in os.environ.items()
-            if k.startswith("CLIENT_CODE_") or k == "LOBSTER_DISABLE_CLIENT_CODE_UPDATE"
-        }
-    )
-    manifest_url = (env.get("CLIENT_CODE_MANIFEST_URL") or "").strip()
+    env = _load_update_env()
+    manifest_url = _resolve_manifest_url(env)
     local_build = _local_build()
     local_version = _local_semver()
     local_sha = _local_bundle_sha256()
