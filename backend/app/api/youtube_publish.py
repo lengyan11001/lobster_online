@@ -211,7 +211,7 @@ class YoutubePublishUploadBody(BaseModel):
         description="ai_generated=AI 生成视频；script_batch=脚本/模板批量产出（非整段 AI 成片时可仍传 script_batch 并显式改 contains_synthetic_media）",
     )
     # 与 YouTube Data API status.selfDeclaredMadeForKids 一致；未填时默认 False
-    self_declared_made_for_kids: bool = False
+    self_declared_made_for_kids: Optional[bool] = Field(None, description="必填：内容是否面向儿童")
     # 与 status.containsSyntheticMedia 一致；省略时：ai_generated→true，script_batch→false
     contains_synthetic_media: Optional[bool] = None
     # 与 snippet.categoryId 一致，见 https://developers.google.com/youtube/v3/docs/videoCategories/list
@@ -221,6 +221,24 @@ class YoutubePublishUploadBody(BaseModel):
     thumbnail_asset_id: Optional[str] = Field(None, description="封面图素材 asset_id（可选）")
     # P1：YouTube 原生定时发布（ISO 8601；设置时必须 private）
     publish_at: Optional[str] = Field(None, description="定时发布时间，如 2026-12-01T10:00:00Z")
+
+
+def _asset_looks_ai_generated(asset: Asset) -> bool:
+    """素材是否大概率由 AI 生成（用于默认合成内容披露）。"""
+    try:
+        model = (getattr(asset, "model", None) or "").strip()
+        meta = getattr(asset, "meta", None)
+        meta = meta if isinstance(meta, dict) else {}
+        tags = (getattr(asset, "tags", None) or "").strip().lower()
+        if model:
+            return True
+        if meta.get("generation_task_id") or meta.get("generated") or meta.get("ai_generated"):
+            return True
+        if meta.get("asset_origin") == "generated":
+            return True
+        return any(n in tags for n in ("image.generate", "video.generate", "ai_generated", "synthetic"))
+    except Exception:
+        return False
 
 
 def _validate_upload_fields(
@@ -904,6 +922,8 @@ async def perform_youtube_upload(
     )
     if not is_video:
         raise YoutubeUploadUserError("当前素材不是视频类型，请选择视频素材")
+    if body.self_declared_made_for_kids is None:
+        raise YoutubeUploadUserError("必须选择内容是否面向儿童（self_declared_made_for_kids）", status_code=400)
 
     try:
         eff_title, eff_desc, eff_tags, eff_category = _validate_upload_fields(body, asset)
@@ -924,7 +944,14 @@ async def perform_youtube_upload(
         )
         effective_csm = body.contains_synthetic_media
         if effective_csm is None:
-            effective_csm = body.material_origin == "ai_generated"
+            effective_csm = body.material_origin == "ai_generated" or _asset_looks_ai_generated(asset)
+        logger.info(
+            "[youtube-publish] 风控 made_for_kids=%s synthetic=%s origin=%s asset=%s",
+            bool(body.self_declared_made_for_kids),
+            bool(effective_csm),
+            body.material_origin,
+            getattr(asset, "asset_id", ""),
+        )
         thumb_asset_id = (body.thumbnail_asset_id or "").strip()
         if thumb_asset_id:
             thumb_asset = (
@@ -1597,6 +1624,8 @@ async def create_youtube_upload_job(
         raise HTTPException(404, detail="YouTube 账号不存在")
     if not (ent.get("refresh_token") or "").strip() or (ent.get("status") or "") != "ready":
         raise HTTPException(400, detail="该账号尚未授权或不可用")
+    if body.self_declared_made_for_kids is None:
+        raise HTTPException(400, detail="必须选择内容是否面向儿童（self_declared_made_for_kids）")
     job = YoutubeUploadJob(
         job_id="up_" + uuid.uuid4().hex[:16],
         user_id=current_user.id,

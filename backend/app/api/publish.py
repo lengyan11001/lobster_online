@@ -2547,9 +2547,9 @@ async def create_publish_task(
         privacy = str(opts.get("privacy_status") or "public").strip().lower()
         if privacy not in ("private", "unlisted", "public"):
             privacy = "public"
-        material = str(opts.get("material_origin") or "script_batch").strip().lower()
+        material = str(opts.get("material_origin") or "").strip().lower()
         if material not in ("ai_generated", "script_batch"):
-            material = "script_batch"
+            material = "ai_generated" if _asset_likely_ai_generated(asset) else "script_batch"
         tags = [t for t in _re.split(r"[,，\s]+", tags_in) if t.strip()][:50]
         while tags and sum(len(t) for t in tags) > 500:
             tags.pop()
@@ -2560,7 +2560,7 @@ async def create_publish_task(
             description=desc_in,
             privacy_status=privacy,
             material_origin=material,
-            self_declared_made_for_kids=bool(opts.get("made_for_kids")),
+            self_declared_made_for_kids=bool(opts.get("made_for_kids")) if opts.get("made_for_kids") is not None else False,
             contains_synthetic_media=opts.get("contains_synthetic_media"),
             category_id=str(opts.get("category_id") or "22"),
             tags=tags,

@@ -854,6 +854,8 @@
       var titleIn = document.getElementById('youtubeAccountsTestTitle');
       var moSel = document.getElementById('youtubeAccountsTestMaterialOrigin');
       var mo = (moSel && moSel.value) ? moSel.value : 'script_batch';
+      var kidsSel = document.getElementById('youtubeAccountsTestMadeForKids');
+      var madeForKids = kidsSel ? kidsSel.value === '1' : false;
       var vid = aidIn ? aidIn.value.trim() : '';
       var acc = sel ? sel.value.trim() : '';
       if (!vid) { showMsg(testMsg, '请填写素材 asset_id', true); return; }
@@ -869,7 +871,8 @@
           asset_id: vid,
           title: (titleIn && titleIn.value.trim()) ? titleIn.value.trim() : 'Test upload',
           description: 'Uploaded from Lobster',
-          material_origin: mo
+          material_origin: mo,
+          self_declared_made_for_kids: madeForKids
         })
       })
         .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d, status: r.status }; }); })

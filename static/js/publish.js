@@ -1531,6 +1531,13 @@ function _bindAccountButtons(el) {
       if (platform === 'youtube') {
         ytDesc = prompt('YouTube 描述（可留空，默认用素材提示词）：', '') || '';
         ytTags = prompt('YouTube 标签（逗号分隔，可留空）：', '') || '';
+        var kidsAns = prompt('内容是否面向儿童？输入 是 / 否（必填）：', '否');
+        kidsAns = (kidsAns || '').trim();
+        if (kidsAns !== '是' && kidsAns !== '否') {
+          alert('必须选择内容是否面向儿童');
+          return;
+        }
+        options.made_for_kids = kidsAns === '是';
       }
       var options = {};
       var _copyLang = _publishContentLanguageSync();
