@@ -211,6 +211,50 @@
     box.innerHTML = html;
   }
 
+  function _ytLoadDrawerTab(aid, tab) {
+    var box = document.getElementById('yt-drawer-data');
+    if (!box) return;
+    box.innerHTML = '<p class="meta" style="font-size:0.78rem;">加载中…</p>';
+    if (tab === 'videos') {
+      fetch(apiUrl('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/videos?max_results=25'), {
+        headers: typeof authHeaders === 'function' ? authHeaders() : {}
+      }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); }).then(function(x) {
+        if (!x.ok) { box.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml((x.d && x.d.detail) || '加载失败') + '</p>'; return; }
+        var items = (x.d && x.d.items) || [];
+        if (!items.length) { box.innerHTML = '<p class="meta" style="font-size:0.78rem;">暂无视频。</p>'; return; }
+        var html = '<div style="max-height:20rem;overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.78rem;"><thead><tr style="text-align:left;border-bottom:1px solid var(--border);"><th style="padding:0.25rem;">标题</th><th style="padding:0.25rem;">发布</th><th style="padding:0.25rem;">播放</th><th style="padding:0.25rem;">赞</th></tr></thead><tbody>';
+        items.forEach(function(v) {
+          html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);"><td style="padding:0.25rem;max-width:18rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(v.title || '') + '</td><td style="padding:0.25rem;">' + escapeHtml((v.published_at || '').slice(0, 10)) + '</td><td style="padding:0.25rem;">' + _ytFmt(v.views) + '</td><td style="padding:0.25rem;">' + _ytFmt(v.likes) + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+        box.innerHTML = html;
+      }).catch(function(e) { box.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml(e.message || '加载失败') + '</p>'; });
+    } else if (tab === 'jobs') {
+      fetch(apiUrl('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/jobs?limit=20'), {
+        headers: typeof authHeaders === 'function' ? authHeaders() : {}
+      }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); }).then(function(x) {
+        if (!x.ok) { box.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml((x.d && x.d.detail) || '加载失败') + '</p>'; return; }
+        var items = (x.d && x.d.items) || [];
+        if (!items.length) { box.innerHTML = '<p class="meta" style="font-size:0.78rem;">暂无上传记录。</p>'; return; }
+        box.innerHTML = items.map(function(j) {
+          var st = j.status === 'published' ? '已发布' : (j.status === 'failed' ? '失败' : (j.status === 'processing' ? '处理中' : '上传中'));
+          return '<div style="padding:0.4rem 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:0.78rem;">' +
+            escapeHtml((j.created_at || '').replace('T', ' ').slice(0, 16)) + ' · ' + st +
+            (j.progress ? ' · ' + j.progress + '%' : '') +
+            (j.watch_url ? ' · <a href="' + escapeAttr(j.watch_url) + '" target="_blank">打开</a>' : '') +
+            (j.error_message ? '<div class="msg err" style="font-size:0.72rem;">' + escapeHtml(j.error_message) + '</div>' : '') + '</div>';
+        }).join('');
+      }).catch(function(e) { box.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml(e.message || '加载失败') + '</p>'; });
+    } else {
+      fetchLocalJson('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/analytics', { headers: hdrs() })
+        .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+        .then(function(x) {
+          if (!x.ok) { box.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml((x.d && x.d.detail) || '加载失败') + '</p>'; return; }
+          _ytRenderAnalytics(box, x.d);
+        }).catch(function(e) { box.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml(e.message || '加载失败') + '</p>'; });
+    }
+  }
+
   function openDrawer(aid) {
     var a = (_lastAccounts || []).filter(function(x) { return x.account_id === aid; })[0];
     if (!a) return;
@@ -230,6 +274,10 @@
       '<button type="button" class="btn btn-ghost btn-sm" data-drawer-act="reauth">重新授权</button>' +
       '<button type="button" class="btn btn-ghost btn-sm" data-drawer-act="edit">编辑</button>' +
       '<button type="button" class="btn btn-ghost btn-sm" data-drawer-act="del">删除</button></div>' +
+      '<div style="display:flex;gap:0.35rem;margin-top:0.7rem;border-bottom:1px solid var(--border);padding-bottom:0.4rem;">' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-yt-tab="overview">概览</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-yt-tab="videos">视频</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-yt-tab="jobs">记录</button></div>' +
       '<div id="yt-drawer-data" style="margin-top:0.8rem;"></div>';
     mask.style.display = 'flex';
     fetch(apiUrl('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/overview'), {
@@ -238,14 +286,15 @@
       var box = document.getElementById('yt-drawer-metrics');
       if (box && d && d.ok) box.innerHTML = '订阅 ' + _ytFmt(d.subscriber_count) + ' · 总播放 ' + _ytFmt(d.view_count) + ' · 视频 ' + _ytFmt(d.video_count);
     }).catch(function() {});
-    var dataBox = document.getElementById('yt-drawer-data');
-    if (dataBox) dataBox.innerHTML = '<p class="meta" style="font-size:0.78rem;">加载频道数据…</p>';
-    fetchLocalJson('/api/youtube-publish/accounts/' + encodeURIComponent(aid) + '/analytics', { headers: hdrs() })
-      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
-      .then(function(x) {
-        if (!x.ok) { if (dataBox) dataBox.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml((x.d && x.d.detail) || '加载失败') + '</p>'; return; }
-        _ytRenderAnalytics(dataBox, x.d);
-      }).catch(function(e) { if (dataBox) dataBox.innerHTML = '<p class="msg err" style="font-size:0.78rem;">' + escapeHtml(e.message || '加载失败') + '</p>'; });
+    _ytLoadDrawerTab(aid, 'overview');
+    body.querySelectorAll('[data-yt-tab]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        body.querySelectorAll('[data-yt-tab]').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        _ytLoadDrawerTab(aid, btn.getAttribute('data-yt-tab'));
+      });
+    });
+
     body.querySelectorAll('[data-drawer-act]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var act = btn.getAttribute('data-drawer-act');

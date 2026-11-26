@@ -1206,6 +1206,109 @@ async def youtube_account_overview(
     return out
 
 
+@router.get("/api/youtube-publish/accounts/{account_id}/videos", summary="频道视频列表（分页）")
+async def youtube_account_videos(
+    account_id: str,
+    max_results: int = 25,
+    page_token: Optional[str] = None,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    ent = get_youtube_account_entry(current_user.id, account_id)
+    if not ent:
+        raise HTTPException(404, detail="YouTube 账号不存在")
+    if str(ent.get("status") or "") != "ready":
+        raise HTTPException(400, detail="账号未完成授权")
+    from ..services.youtube_analytics import _refresh_access_token, get_channel_uploads_playlist
+
+    proxy_url, _src = _youtube_account_proxy_url(ent)
+    token = await _refresh_access_token(
+        (ent.get("oauth_client_id") or "").strip(),
+        (ent.get("oauth_client_secret") or "").strip(),
+        (ent.get("refresh_token") or "").strip(),
+        proxy_url,
+    )
+    playlist_id = await get_channel_uploads_playlist(token, proxy_url)
+    kwargs, _ = youtube_httpx_client_kwargs(
+        (ent.get("proxy_server") or "").strip() or None,
+        (ent.get("proxy_username") or "").strip() or None,
+        (ent.get("proxy_password") or "").strip() or None,
+        timeout=20.0,
+    )
+    params = {"part": "contentDetails", "playlistId": playlist_id, "maxResults": str(max(1, min(int(max_results or 25), 50)))}
+    if page_token:
+        params["pageToken"] = page_token
+    async with httpx.AsyncClient(**kwargs) as c:
+        r = await c.get(
+            "https://www.googleapis.com/youtube/v3/playlistItems",
+            params=params,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if r.status_code >= 400:
+        raise HTTPException(502, detail=f"YouTube API {r.status_code}: {r.text[:200]}")
+    data = r.json() or {}
+    ids = [str((it.get("contentDetails") or {}).get("videoId") or "") for it in (data.get("items") or [])]
+    ids = [x for x in ids if x]
+    items = []
+    if ids:
+        async with httpx.AsyncClient(**kwargs) as c:
+            r2 = await c.get(
+                "https://www.googleapis.com/youtube/v3/videos",
+                params={"part": "snippet,statistics,contentDetails", "id": ",".join(ids)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        if r2.status_code < 400:
+            for it in (r2.json() or {}).get("items") or []:
+                sn = it.get("snippet") or {}
+                st = it.get("statistics") or {}
+                items.append({
+                    "id": it.get("id"),
+                    "title": str(sn.get("title") or ""),
+                    "published_at": str(sn.get("publishedAt") or ""),
+                    "thumbnail": str(((sn.get("thumbnails") or {}).get("default") or {}).get("url") or ""),
+                    "views": int(st.get("viewCount") or 0),
+                    "likes": int(st.get("likeCount") or 0),
+                    "comments": int(st.get("commentCount") or 0),
+                    "duration": str((it.get("contentDetails") or {}).get("duration") or ""),
+                })
+    return {"items": items, "next_page_token": str(data.get("nextPageToken") or "")}
+
+
+@router.get("/api/youtube-publish/accounts/{account_id}/jobs", summary="YouTube 上传记录")
+def youtube_account_jobs(
+    account_id: str,
+    limit: int = 20,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    n = max(1, min(int(limit or 20), 100))
+    rows = (
+        db.query(YoutubeUploadJob)
+        .filter(
+            YoutubeUploadJob.user_id == current_user.id,
+            YoutubeUploadJob.account_id == account_id.strip(),
+        )
+        .order_by(YoutubeUploadJob.id.desc())
+        .limit(n)
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "job_id": r.job_id,
+                "status": r.status,
+                "progress": r.progress,
+                "video_id": r.video_id,
+                "watch_url": r.watch_url,
+                "upload_status": r.upload_status,
+                "processing_status": r.processing_status,
+                "error_message": r.error_message,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.get("/api/youtube-publish/accounts/{account_id}/analytics")
 async def youtube_account_analytics(
     account_id: str,
