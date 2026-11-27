@@ -949,6 +949,59 @@ SOFTWARE_RENDER_ENV = "LOBSTER_DESKTOP_SOFTWARE_RENDER"
 SOFTWARE_RENDER_ARGS = "--disable-gpu --disable-gpu-compositing --disable-direct-composition"
 
 
+def wait_for_boot_settle(min_uptime: float = 150.0, max_wait: float = 120.0) -> None:
+    """开机自启时等系统稳定后再建窗口。
+
+    2026-11-27 客户现场：开机拉起的客户端整窗白屏，杀掉 python 进程后手动启动即正常。
+    说明问题出在“登录后过早启动”这一环境，而不是页面本身。这里在开机 150 秒内启动时
+    先等系统稳定，避免 WebView2 首帧永远不合成。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes as _ctypes
+
+        uptime = float(_ctypes.windll.kernel32.GetTickCount64()) / 1000.0
+        if uptime >= min_uptime:
+            return
+        delay = min(max_wait, min_uptime - uptime)
+        log("boot settle: uptime=%.0fs, waiting %.0fs before creating window" % (uptime, delay))
+        time.sleep(delay)
+    except Exception as exc:
+        log("boot settle skipped: %s" % exc)
+
+
+def wait_for_desktop_composition(timeout: float = 45.0) -> None:
+    """开机自启时等桌面合成(DWM)就绪再建 WebView。
+
+    2026-11-27 客户现场：开机拉起的客户端整窗白屏，杀掉 python 进程手动再启动就正常。
+    属于登录后自启过早——DWM 还没开始合成，WebView2 的首帧永远不会提交。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes as _ctypes
+
+        enabled = _ctypes.c_int(0)
+        dwmapi = _ctypes.windll.dwmapi
+        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        while time.monotonic() < deadline:
+            try:
+                hr = dwmapi.DwmIsCompositionEnabled(_ctypes.byref(enabled))
+            except Exception:
+                return
+            if hr == 0 and enabled.value:
+                waited = time.monotonic() - started
+                if waited > 1.0:
+                    log("desktop composition ready after %.1fs" % waited)
+                return
+            time.sleep(0.4)
+        log("desktop composition not ready after %.0fs; continue anyway" % timeout)
+    except Exception as exc:
+        log("desktop composition wait skipped: %s" % exc)
+
+
 def apply_software_render_args() -> None:
     """默认走软件渲染。
 
@@ -964,6 +1017,41 @@ def apply_software_render_args() -> None:
     if "--disable-gpu" not in current:
         os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (current + " " + SOFTWARE_RENDER_ARGS).strip()
     log("desktop webview software rendering enabled")
+
+
+def cleanup_stale_webview_processes() -> None:
+    """杀掉上一轮客户端遗留的 WebView2 进程。
+
+    2026-11-27 客户现场：页面接口全部 200、JS 正常执行，但窗口整片白。
+    原因是旧的 msedgewebview2.exe 还挂着同一个 user-data-dir，新进程复用了它，
+    启动参数（含软件渲染）根本没生效。这里只清理父进程已退出的残留进程。
+    """
+    if os.name != "nt":
+        return
+    ps = (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -like '*desktop_webview*' } | ForEach-Object {"
+        "  $ppid = $_.ParentProcessId; $pname = '';"
+        "  try { $pname = (Get-Process -Id $ppid -ErrorAction Stop).ProcessName } catch { $pname = '' }"
+        "  if ($pname -ne 'pythonw' -and $pname -ne 'python') {"
+        "    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue;"
+        "    Write-Output ('killed ' + $_.ProcessId)"
+        "  }"
+        "}"
+    )
+    try:
+        out = subprocess.check_output(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            text=True,
+            errors="ignore",
+            creationflags=creation_flags(),
+            timeout=10,
+        )
+        killed = [line for line in out.splitlines() if line.strip().startswith("killed")]
+        if killed:
+            log("stale webview cleanup killed=%s" % killed)
+    except Exception as exc:
+        log("stale webview cleanup skipped: %s" % exc)
 
 
 def purge_webview_cache_if_build_changed() -> None:
@@ -3221,8 +3309,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
             except Exception:
                 pass
+        wait_for_boot_settle()
+        wait_for_desktop_composition()
         window_x, window_y, width, height = restore_window_geometry(width, height)
         purge_webview_cache_if_build_changed()
+        cleanup_stale_webview_processes()
         apply_software_render_args()
         window = webview.create_window(
             title,
