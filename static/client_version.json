@@ -1,7 +1,7 @@
 {
-  "version": "2.0.370",
-  "build": 681,
-  "applied_at": "2026-11-27T17:42:05+08:00",
-  "note": "白屏修复：WebView 默认软件渲染（本机复现验证）",
-  "bundle_sha256": "8cb485a4f679eef343440637b0210cc4acee479a976815db955ab48365059a20"
+  "version": "2.0.372",
+  "build": 683,
+  "applied_at": "2026-11-27T17:53:32+08:00",
+  "note": "开机自启白屏：系统稳定后再建 WebView",
+  "bundle_sha256": "c1143be6f59df8acc4e5a9bac09bb2985955de486032cd85aea4014df98cfe5d"
 }
