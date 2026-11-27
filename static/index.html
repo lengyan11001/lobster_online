@@ -11,6 +11,37 @@
   </script>
   <script src="/static/js/ui-jump-trace.js?v=20261013-ui-jump-trace-v1"></script>
   <script>
+    /* 2026-11-27：白屏兜底。页面 8 秒内没有渲染出任何可见文字时，显示可重载的提示层，
+       避免客户开机只看到纯白窗口。 */
+    (function () {
+      function showBootFallback() {
+        try {
+          if (document.getElementById('lobsterBootFallback')) return;
+          var text = ((document.body && document.body.innerText) || '').replace(/\s+/g, '');
+          if (text.length > 20) return;
+          var layer = document.createElement('div');
+          layer.id = 'lobsterBootFallback';
+          layer.style.cssText = 'position:fixed;inset:0;z-index:2147483600;display:flex;align-items:center;justify-content:center;background:#f7f9fc;font-family:"Microsoft YaHei","Segoe UI",Arial,sans-serif;color:#102033;';
+          layer.innerHTML = '<div style="width:520px;max-width:calc(100vw - 40px);padding:28px 30px;border:1px solid #dbe4f2;border-radius:14px;background:#fff;box-shadow:0 18px 45px rgba(22,40,70,.12);text-align:center">'
+            + '<div style="font-size:20px;font-weight:700;margin-bottom:10px">页面加载异常</div>'
+            + '<div style="color:#526173;line-height:1.75;margin-bottom:16px">界面没有正常渲染出来。点下面按钮重新加载；如果一直这样，请把客户端日志（desktop_launcher.log）发给技术支持。</div>'
+            + '<div style="color:#94a3b8;font-size:12px;margin-bottom:14px" id="lobsterBootFallbackInfo"></div>'
+            + '<button type="button" id="lobsterBootReload" style="padding:9px 20px;border:0;border-radius:9px;background:#2f6df6;color:#fff;font-size:14px;font-weight:600;cursor:pointer">重新加载</button>'
+            + '</div>';
+          document.body.appendChild(layer);
+          var info = document.getElementById('lobsterBootFallbackInfo');
+          if (info) info.textContent = '视口 ' + window.innerWidth + '×' + window.innerHeight + ' / DPR ' + (window.devicePixelRatio || 1);
+          var btn = document.getElementById('lobsterBootReload');
+          if (btn) btn.onclick = function () { location.reload(); };
+        } catch (e) {}
+      }
+      window.addEventListener('error', function () { setTimeout(showBootFallback, 1500); });
+      function arm() { setTimeout(showBootFallback, 8000); }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arm);
+      else arm();
+    })();
+  </script>
+  <script>
     /* 自定义标题栏：用 8 个透明把手把鼠标事件转成系统缩放 */
     (function () {
       function installResizeHandles() {

@@ -2848,11 +2848,31 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 while time.time() < deadline:
                     info = _page_probe(window)
                     if int(info.get("nodes") or 0) > 3 and info.get("ready") in ("interactive", "complete"):
+                        # 2026-11-27 客户现场：DOM 有节点但窗口还是白屏。
+                        # 这里把页面可见文本一起记下来，空文本直接当作白屏重新加载。
+                        text_len = -1
+                        text_sample = ""
+                        try:
+                            probe = window.evaluate_js(
+                                "(function(){var b=document.body;var t=(b&&b.innerText||'').replace(/[\u0000-\u0020]+/g,' ').trim();"
+                                "return JSON.stringify({len:t.length,text:t.slice(0,80),bg:getComputedStyle(b).backgroundColor});})()"
+                            )
+                            parsed = json.loads(probe) if isinstance(probe, str) else (probe or {})
+                            text_len = int(parsed.get("len", -1))
+                            text_sample = str(parsed.get("text") or "")
+                        except Exception as exc:
+                            log("webview text probe failed reason=%s attempt=%s error=%s" % (reason, attempt, exc))
                         log(
-                            "webview page ok reason=%s attempt=%s nodes=%s url=%s"
-                            % (reason, attempt, info.get("nodes"), info.get("href"))
+                            "webview page ok reason=%s attempt=%s nodes=%s text_len=%s text=%r url=%s"
+                            % (reason, attempt, info.get("nodes"), text_len, text_sample, info.get("href"))
                         )
-                        return True
+                        if text_len >= 0 and text_len < 3:
+                            log(
+                                "webview page blank(no text) reason=%s attempt=%s nodes=%s; reloading"
+                                % (reason, attempt, info.get("nodes"))
+                            )
+                        else:
+                            return True
                     time.sleep(0.8)
                 log(
                     "webview page blank reason=%s attempt=%s info=%s reload_url=%s"
