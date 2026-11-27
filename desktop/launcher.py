@@ -950,8 +950,15 @@ SOFTWARE_RENDER_ARGS = "--disable-gpu --disable-gpu-compositing --disable-direct
 
 
 def apply_software_render_args() -> None:
-    """GPU 合成是 WebView 白屏(有 DOM 不绘制)最常见的原因；仅在兜底重启时启用。"""
-    if os.environ.get(SOFTWARE_RENDER_ENV) != "1":
+    """默认走软件渲染。
+
+    2026-11-27 客户现场：页面 DOM/文本都正常（探测 text_len=116），窗口整片白，
+    属于 WebView2 GPU 合成在部分显卡驱动上不出画面。这里默认关闭 GPU 合成；
+    需要硬件加速时可设 LOBSTER_DESKTOP_SOFTWARE_RENDER=0 显式打开。
+    """
+    mode = str(os.environ.get(SOFTWARE_RENDER_ENV, "1")).strip().lower()
+    if mode in ("0", "false", "off", "no"):
+        log("desktop webview hardware rendering enabled by env")
         return
     current = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
     if "--disable-gpu" not in current:
@@ -3202,7 +3209,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
         # 只有必火品牌用无边框标题栏（其他 OEM 品牌保持系统原生标题栏）
         _brand_mark = str((_ACTIVE_DESKTOP_BRANDING or {}).get("mark") or "").strip().lower()
-        _use_frameless = _brand_mark == "bihuo"
+        _use_frameless = _brand_mark == "bihuo" and str(os.environ.get("LOBSTER_DESKTOP_FRAMELESS", "1")).strip() != "0"
         # 无边框窗口的上下边缘会露出窗口底色；必火登录页顶部是浅青蓝，
         # 用暖白色 #fbfaf8 会形成一条明显白边，这里跟登录页顶部同色。
         _window_background = "#eaf6fb" if _use_frameless else SHELL_BACKGROUND_COLOR
