@@ -394,6 +394,12 @@ def _click(node: Any, *, label: str = "") -> None:
         if rect:
             eng._uia_click_screen_point((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
             return
+        # CEF 节点有时拿不到坐标：直接聚焦，后续用键盘输入
+        try:
+            node.SetFocus()
+            return
+        except Exception:
+            pass
         raise ChannelsUiError(f"点击失败：{label} {exc}") from exc
 
 
@@ -424,9 +430,18 @@ def _wheel(x: int, y: int, notches: int = 6) -> None:
 
 
 def _search_icon(root: Any) -> Optional[Any]:
-    for node in _find_all(root, name="搜索", type_contains="Button", max_depth=30, max_nodes=12000):
+    # 4.2 的视频号是一个可移动的浏览器窗口，不能用屏幕绝对坐标 <120 判断，
+    # 必须按“窗口顶部往下 130px”来算。
+    try:
+        import win32gui  # type: ignore
+
+        hwnd = int(getattr(root, "NativeWindowHandle", 0) or 0)
+        win_top = int(win32gui.GetWindowRect(hwnd)[1]) if hwnd else 0
+    except Exception:
+        win_top = 0
+    for node in _find_all(root, name="搜索", type_contains="Button", max_depth=32, max_nodes=12000):
         rect = _rect(node)
-        if rect and rect[1] < 120:
+        if rect and (rect[1] - win_top) < 130:
             return node
     return None
 
@@ -517,6 +532,12 @@ def search_videos(keyword: str, *, max_results: int = 20, max_scroll_rounds: int
     keyword = str(keyword or "").strip()
     if not keyword:
         raise ChannelsUiError("搜索关键词不能为空")
+    # UIA/CEF 节点必须在线程里初始化 COM，否则 SetFocus/SetValue 会抛
+    # COMError(-2147220991, '事件无法调用任何客户')
+    try:
+        eng._prepare_local_automation_thread()
+    except Exception:
+        pass
     open_channels()
     hwnd = channels_hwnd()
     _foreground_channels(hwnd)
