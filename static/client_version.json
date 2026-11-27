@@ -1,7 +1,7 @@
 {
-  "version": "2.0.367",
-  "build": 676,
-  "applied_at": "2026-11-27T16:57:03+08:00",
-  "note": "国内 OTA：remote-support agent 0.2.20 + RTC 直连/点击修复",
-  "bundle_sha256": "7a41ff5b3203e1b61a0258ad3b441ac5dfecd899c12b3683963c6cf35ce4729f"
+  "version": "2.0.369",
+  "build": 680,
+  "applied_at": "2026-11-27T17:31:56+08:00",
+  "note": "修复启动白屏：换版清 WebView 缓存 + 白屏自动切软件渲染",
+  "bundle_sha256": "d1e80bc8577e107cb51754a5229f73135d8189ec3d1d431be0875565bd7c02bf"
 }
