@@ -2854,8 +2854,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         text_sample = ""
                         try:
                             probe = window.evaluate_js(
-                                "(function(){var b=document.body;var t=(b&&b.innerText||'').replace(/[\u0000-\u0020]+/g,' ').trim();"
-                                "return JSON.stringify({len:t.length,text:t.slice(0,80),bg:getComputedStyle(b).backgroundColor});})()"
+                                "(function(){try{var b=document.body||document.documentElement;"
+                                "var t=((b&&b.innerText)||'').trim();var bg='';"
+                                "try{bg=getComputedStyle(b).backgroundColor}catch(e2){}"
+                                "return JSON.stringify({len:t.length,text:t.slice(0,80),bg:bg});}"
+                                "catch(e){return JSON.stringify({len:-2,err:String(e)});}})()"
                             )
                             parsed = json.loads(probe) if isinstance(probe, str) else (probe or {})
                             text_len = int(parsed.get("len", -1))
@@ -2866,7 +2869,12 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                             "webview page ok reason=%s attempt=%s nodes=%s text_len=%s text=%r url=%s"
                             % (reason, attempt, info.get("nodes"), text_len, text_sample, info.get("href"))
                         )
-                        if text_len >= 0 and text_len < 3:
+                        if text_len < 0:
+                            log(
+                                "webview text probe unreadable reason=%s attempt=%s nodes=%s; will reload"
+                                % (reason, attempt, info.get("nodes"))
+                            )
+                        elif text_len < 3:
                             log(
                                 "webview page blank(no text) reason=%s attempt=%s nodes=%s; reloading"
                                 % (reason, attempt, info.get("nodes"))

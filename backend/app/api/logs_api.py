@@ -294,6 +294,28 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
             zf.writestr(arcname, _redact_text(text))
             summary["files"].append({"path": rel, "size": size, "truncated": truncated})
 
+        # 启动崩溃现场的完整 traceback（launcher 每次启动会把上一轮 backend.log 里的
+        # 异常另存到 logs/crashes/backend_*.log，诊断包必须带上，否则只剩一句"crash log preserved"）。
+        try:
+            crash_dir = (_BASE / "logs" / "crashes").resolve()
+            if crash_dir.is_dir():
+                for pattern in ("backend_*.log", "app_*.log"):
+                    files = sorted(crash_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)[:2]
+                    for path in files:
+                        if budget_left <= 0:
+                            break
+                        try:
+                            text, size, truncated = _read_tail_text(path, _DIAGNOSTIC_TAIL_BYTES)
+                        except OSError as e:
+                            summary["files"].append({"path": str(path), "error": str(e)[:120]})
+                            continue
+                        budget_left -= len(text.encode("utf-8", "ignore"))
+                        rel = f"crashes/{path.name}"
+                        zf.writestr(_safe_arcname(rel), _redact_text(text))
+                        summary["files"].append({"path": rel, "size": size, "truncated": truncated})
+        except Exception as e:
+            summary["files"].append({"path": "crashes", "error": str(e)[:120]})
+
         # 微信读消息失败现场截图（二进制，不能走上面的文本流程）
         try:
             shot = (_BASE / "logs" / "wechat_read_fail.png").resolve()
