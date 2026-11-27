@@ -949,7 +949,7 @@ SOFTWARE_RENDER_ENV = "LOBSTER_DESKTOP_SOFTWARE_RENDER"
 SOFTWARE_RENDER_ARGS = "--disable-gpu --disable-gpu-compositing --disable-direct-composition"
 
 
-def wait_for_boot_settle(min_uptime: float = 150.0, max_wait: float = 120.0) -> None:
+def wait_for_boot_settle(min_uptime: float = 0.0, max_wait: float = 0.0) -> None:
     """开机自启时等系统稳定后再建窗口。
 
     2026-11-27 客户现场：开机拉起的客户端整窗白屏，杀掉 python 进程后手动启动即正常。
@@ -969,6 +969,90 @@ def wait_for_boot_settle(min_uptime: float = 150.0, max_wait: float = 120.0) -> 
         time.sleep(delay)
     except Exception as exc:
         log("boot settle skipped: %s" % exc)
+
+
+_SPLASH = {"state": None}
+
+
+def start_native_splash(title: str) -> None:
+    """立刻拉起一个原生启动窗口，绝不出现“什么都没出来”的空窗期。"""
+    state = {"closed": False, "root": None}
+    _SPLASH["state"] = state
+
+    def run() -> None:
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+            root.overrideredirect(True)
+            width, height = 460, 300
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            root.geometry("%dx%d+%d+%d" % (width, height, (sw - width) // 2, (sh - height) // 2))
+            root.configure(bg="#eaf6fb")
+            tk.Label(root, text=title or "必火AI员工", font=("Microsoft YaHei", 20, "bold"),
+                     bg="#eaf6fb", fg="#102033").pack(pady=(78, 8))
+            tk.Label(root, text="正在启动，请稍候…", font=("Microsoft YaHei", 11),
+                     bg="#eaf6fb", fg="#526173").pack()
+            root.attributes("-topmost", True)
+            state["root"] = root
+
+            def poll() -> None:
+                if state.get("closed"):
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
+                    return
+                root.after(200, poll)
+
+            root.after(200, poll)
+            root.mainloop()
+        except Exception as exc:
+            log("native splash failed: %s" % exc)
+
+    threading.Thread(target=run, daemon=True, name="lobster-splash").start()
+
+
+def close_native_splash() -> None:
+    state = _SPLASH.get("state")
+    if isinstance(state, dict):
+        state["closed"] = True
+
+
+def _window_is_blank(hwnd: int) -> bool:
+    try:
+        import ctypes as _ctypes
+        from PIL import ImageGrab
+
+        rect = _ctypes.wintypes.RECT()
+        _ctypes.windll.user32.GetWindowRect(hwnd, _ctypes.byref(rect))
+        left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+        if right - left < 200 or bottom - top < 200:
+            return False
+        img = ImageGrab.grab(bbox=(left + 40, top + 80, right - 40, bottom - 60))
+        colors = img.convert("RGB").getcolors(maxcolors=32)
+        return bool(colors) and len(colors) <= 2
+    except Exception as exc:
+        log("blank check skipped: %s" % exc)
+        return False
+
+
+def _restart_once_if_blank(title: str) -> None:
+    if os.environ.get("LOBSTER_DESKTOP_AUTO_RESTARTED") == "1":
+        return
+    time.sleep(4.0)
+    try:
+        import ctypes as _ctypes
+
+        hwnd = _ctypes.windll.user32.FindWindowW(None, title)
+        if hwnd and _window_is_blank(hwnd):
+            log("window looks blank after load; restarting once")
+            os.environ["LOBSTER_DESKTOP_AUTO_RESTARTED"] = "1"
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], close_fds=True)
+            os._exit(0)
+    except Exception as exc:
+        log("blank auto-restart skipped: %s" % exc)
 
 
 def wait_for_desktop_composition(timeout: float = 45.0) -> None:
@@ -3020,6 +3104,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                                 % (reason, attempt, info.get("nodes"))
                             )
                         else:
+                            close_native_splash()
+                            threading.Thread(target=_restart_once_if_blank, args=(title,), daemon=True).start()
                             return True
                     time.sleep(0.8)
                 log(
@@ -3310,7 +3396,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             except Exception:
                 pass
         wait_for_boot_settle()
-        wait_for_desktop_composition()
+        start_native_splash(title)
+        wait_for_desktop_composition(timeout=8.0)
         window_x, window_y, width, height = restore_window_geometry(width, height)
         purge_webview_cache_if_build_changed()
         cleanup_stale_webview_processes()
