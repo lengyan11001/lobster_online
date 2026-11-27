@@ -283,6 +283,38 @@ def _root_window(hwnd: int) -> int:
         return h
 
 
+def covered_by(hwnd: int, x: int, y: int) -> Optional[str]:
+    """(x, y) 上盖着的窗口如果不是微信，返回它的描述。
+
+    自动化必须先过这一关：桌面上有透明/置顶窗口时，SetCursorPos+mouse_event
+    会把点击打到那层窗口上——对用户桌面来说就是"乱点"，宁可报错也不能盲点。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    try:
+        w = int(ctypes.windll.user32.WindowFromPoint(POINT(int(x), int(y))) or 0)
+        if not w:
+            return "none"
+        root = int(win32gui.GetAncestor(w, 2) or w)
+        if root == _root_window(hwnd):
+            return None
+        return f"{win32gui.GetClassName(root)} {win32gui.GetWindowText(root)[:24]!r}"
+    except Exception as e:
+        return f"probe-error {e}"
+
+
+def click_checked(hwnd: int, x: int, y: int) -> None:
+    """带遮挡校验的点击：被别的窗口盖住就报错，不盲点。"""
+    who = covered_by(hwnd, x, y)
+    if who:
+        raise RuntimeError(f"目标位置被其他窗口遮挡（{who}），已停止点击；请把微信切到最前")
+    click_point(x, y)
+
+
 def is_foreground(hwnd: int) -> bool:
     """前台是不是这个窗口（或其顶层宿主窗口 / 子窗口）。"""
     try:
@@ -297,22 +329,56 @@ def is_foreground(hwnd: int) -> bool:
         return False
 
 
-def bring_to_front(hwnd: int) -> bool:
-    """把窗口切到前台（滚动前必须，否则滚轮落在别的窗口上）。"""
+def ensure_visible(hwnd: int) -> bool:
+    """窗口被收进托盘/最小化时拉回来（微信 Esc 会直接隐藏主窗口）。"""
     import win32con
 
+    h = int(hwnd)
     try:
-        if is_foreground(hwnd):
-            return True
-        root = _root_window(hwnd)
-        if win32gui.IsIconic(root):
-            win32gui.ShowWindow(root, win32con.SW_RESTORE)
-            time.sleep(0.4)
-        win32gui.SetForegroundWindow(root)
-        time.sleep(0.3)
+        if not win32gui.IsWindow(h):
+            return False
+        if not win32gui.IsWindowVisible(h) or win32gui.IsIconic(h):
+            win32gui.ShowWindow(h, win32con.SW_RESTORE)
+            time.sleep(0.35)
+            if not win32gui.IsWindowVisible(h):
+                win32gui.ShowWindow(h, win32con.SW_SHOW)
+                time.sleep(0.35)
+        return bool(win32gui.IsWindowVisible(h))
+    except Exception:
+        return False
+
+
+def bring_to_front(hwnd: int) -> bool:
+    """把窗口切到前台（滚动前必须，否则滚轮落在别的窗口上）。
+
+    后台进程直接 SetForegroundWindow 常被前台锁拦下，这里用
+    最小化→还原 + SwitchToThisWindow 解锁，再补一次 SetForegroundWindow。
+    """
+    import ctypes
+    import win32con
+
+    h = int(hwnd)
+    ensure_visible(h)
+    try:
+        root = _root_window(h)
+        if win32gui.GetForegroundWindow() != root:
+            # 不做最小化→还原：4.2 的内嵌视频号 webview 会因此变成空白页
+            if win32gui.IsIconic(root):
+                win32gui.ShowWindow(root, win32con.SW_RESTORE)
+                time.sleep(0.35)
+            try:
+                ctypes.windll.user32.SwitchToThisWindow(ctypes.c_void_p(root), True)
+            except Exception:
+                pass
+            time.sleep(0.3)
+            try:
+                win32gui.SetForegroundWindow(root)
+            except Exception:
+                pass
+            time.sleep(0.3)
     except Exception:
         pass
-    return is_foreground(hwnd)
+    return is_foreground(h)
 
 
 def wheel_at(x: int, y: int, notches: int = 6, *, hwnd: Optional[int] = None, interval: float = 0.03) -> None:
@@ -322,6 +388,10 @@ def wheel_at(x: int, y: int, notches: int = 6, *, hwnd: Optional[int] = None, in
 
     if hwnd is not None and not is_foreground(hwnd):
         raise RuntimeError("前台不是微信窗口，已停止滚动")
+    if hwnd is not None:
+        who = covered_by(hwnd, x, y)
+        if who:
+            raise RuntimeError(f"滚动位置被其他窗口遮挡（{who}），已停止")
     win32api.SetCursorPos((int(x), int(y)))
     time.sleep(0.08)
     delta = -120 if notches > 0 else 120  # 正数=向下滚
@@ -340,13 +410,13 @@ def region_fingerprint(img: Image.Image, box: Optional[Tuple[int, int, int, int]
     try:
         if box:
             img = img.crop(tuple(int(v) for v in box))
-        crop = img.convert("L").resize((9, 8), Image.BILINEAR)
-        px = list(crop.getdata())
+        import numpy as np
+
+        crop = np.asarray(img.convert("L").resize((9, 8), Image.BILINEAR), dtype=np.int16)
         bits = 0
         for y in range(8):
-            row = y * 9
             for x in range(8):
-                bits = (bits << 1) | (1 if px[row + x] > px[row + x + 1] else 0)
+                bits = (bits << 1) | (1 if crop[y, x] > crop[y, x + 1] else 0)
         return bits
     except Exception:
         return None
@@ -391,7 +461,7 @@ def avatar_tops(
     band: Optional[Tuple[int, int]] = None,
     min_h: int = 16,
     max_h: int = 60,
-    min_peak: int = 12,
+    min_peak: int = 10,
     seg_gap: int = 6,
 ) -> List[int]:
     """评论区左侧头像的顶部 y 列表（图像局部坐标）。
@@ -414,7 +484,8 @@ def avatar_tops(
         return []
     bg = np.median(arr[:, x1 - 3:x1, :].reshape(-1, 3), axis=0)
     dist = np.abs(arr[:, x0:x1, :] - bg.astype(np.int16)).sum(axis=2)
-    counts = (dist > 70).sum(axis=1)
+    # 阈值 28：白底/浅色头像与面板白的差值只有 ~30-60，70 会整列漏检
+    counts = (dist > 28).sum(axis=1)
 
     tops: List[int] = []
     start = -1
@@ -469,8 +540,8 @@ def _meta_filtered(lines: Sequence[Dict[str, Any]], region: Tuple[int, int, int,
             text = text.replace("作者", "").strip(" ·|/")
             if not text:
                 continue
-        m = _REPLY_RE.match(text)
-        if m:
+        m = re.search(r"(\d+)\s*条回复", text)
+        if m and len(text) <= 12:
             meta["reply_count"] = m.group(1)
             continue
         mt = _TIME_RE.search(text)
@@ -551,18 +622,40 @@ def parse_block(
         rest.remove(head)
         nickname, head_meta = _split_head(head["text"])
         meta.update({k: v for k, v in head_meta.items() if v})
-    body, body_meta = _meta_filtered(rest, region)
+    # 点赞数：与"回复"按钮同一行、位于左列的数字行（微信评论区布局），
+    # 整行只有一个数字且在"回复"行上下 10px 内即判点赞
+    reply_ys = [it["cy"] for it in rest if it["text"].strip() == "回复"]
+    like_line: Optional[Dict[str, Any]] = None
+    kept: List[Dict[str, Any]] = []
+    for it in rest:
+        text = it["text"].strip()
+        if _NUM_RE.match(text.replace(" ", "")) and any(abs(it["cy"] - ry) <= 12 for ry in reply_ys):
+            like_line = like_line or it
+            continue
+        kept.append(it)
+    body, body_meta = _meta_filtered(kept, region)
+    if like_line is not None and not body_meta.get("like"):
+        body_meta["like"] = like_line["text"].replace(" ", "")
     for k, v in body_meta.items():
         if v and not meta.get(k):
             meta[k] = v
     content = norm_cjk(" ".join(ln["text"] for ln in body))
     content = re.sub(r"\s+", " ", content).strip()
+    # 点赞图标被 OCR 读成"凸"并与数字连在正文尾（'…过分了凸1'）
+    m2 = re.search(r"凸\s*(\d{1,6})\s*$", content)
+    if m2:
+        content = content[: m2.start()].strip()
+        meta["like"] = meta["like"] or m2.group(1)
+    content = re.sub(r"\s*\d{1,6}\s*回复\s*$", "", content).strip()
+    content = re.sub(r"^[凸\(\[]\s*|\s*[凸\)\]]$", "", content).strip()
     like = meta["like"]
     if content and not like and body:
         m = re.search(r"^(.*[\u4e00-\u9fffA-Za-z，。！？、）】])\s*(\d{1,6})$", content)
         if m and body[-1]["right"] >= region[2] - 78:
             content, like = m.group(1).strip(), m.group(2)
     if not content and not nickname:
+        return None
+    if not nickname and _NUM_RE.match(content.replace(" ", "")) and len(content) <= 8:
         return None
     if not content:
         content = "[图片/表情]"
@@ -678,6 +771,17 @@ def dedupe_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ---------------------------------------------------------------- 评论区采集
 
+def comment_total(hwnd: int, region: Optional[Tuple[int, int, int, int]] = None) -> Optional[int]:
+    """评论区面板头部的总条数（"评论 826"）。读不到返回 None。"""
+    l, t, r, b = region or default_comment_region(hwnd)
+    head = (int(l), int(t), int(r), int(t) + 46)
+    for it in read_window(hwnd, region=head):
+        m = re.search(r"(\d{1,6})", it["text"])
+        if m and ("评论" in it["text"]):
+            return int(m.group(1))
+    return None
+
+
 def default_comment_region(hwnd: int) -> Tuple[int, int, int, int]:
     """视频号评论区默认区域：优先按像素找面板白底左沿，找不到退回 62% 窗口宽。"""
     l, t, r, b = window_rect(hwnd)
@@ -751,6 +855,168 @@ def _add_rows(
     return added, overlap
 
 
+_FEED_MARKS = ("推荐", "朋友", "直播", "关注", "搜索")
+_PANEL_MARKS = ("发表评论", "回复")
+
+
+def _texts(items: Sequence[Dict[str, Any]]) -> List[str]:
+    return [it["text"] for it in items]
+
+
+def _panel_open(items: Sequence[Dict[str, Any]]) -> bool:
+    texts = _texts(items)
+    if any("发表评论" in t for t in texts):
+        return True
+    return any(t.startswith("评论") and any(c.isdigit() for c in t) for t in texts)
+
+
+def _pane_blank(hwnd: int, *, secs: int = 3) -> bool:
+    """右侧内容区是否空白（4.2 内嵌 webview 挂掉时的典型状态）。"""
+    l, t, r, b = window_rect(hwnd)
+    box = (int(l + (r - l) * 0.30), int(t + (b - t) * 0.10), int(r - 4), int(b - 4))
+    items = read_window(hwnd, region=box)
+    return len(items) < 2
+
+
+def _feed_open(items: Sequence[Dict[str, Any]]) -> bool:
+    texts = _texts(items)
+    return sum(1 for t in texts if t in _FEED_MARKS) >= 2
+
+
+def _hover_probe_flyout(hwnd: int, rel_y: int) -> List[Dict[str, Any]]:
+    """鼠标悬停在左侧栏图标上（不点击，点击会 toggle 掉已开的浮层），
+    只 OCR 图标右侧的浮层窄条。"""
+    import win32api
+
+    l, t, r, b = window_rect(hwnd)
+    win32api.SetCursorPos((int(l + 27), int(t + rel_y)))
+    time.sleep(0.55)
+    box = (int(l), int(t + max(0, rel_y - 30)), int(min(r, l + 235)), int(min(b, t + rel_y + 300)))
+    return read_window(hwnd, region=box)
+
+
+_FLYOUT_MARKS = ("朋友圈", "搜一搜", "小程序", "游戏", "视频号")
+
+
+def _flyout_visible(hwnd: int, rel_y: int) -> List[Dict[str, Any]]:
+    """左侧栏浮层（发现 → 朋友圈/视频号/搜一搜/…）是否可见，返回该窄条的 OCR 行。"""
+    l, t, r, b = window_rect(hwnd)
+    box = (int(l), int(t + max(0, rel_y - 40)), int(min(r, l + 240)), int(min(b, t + rel_y + 320)))
+    items = read_window(hwnd, region=box)
+    marks = {it["text"].replace("W", "").strip() for it in items}
+    return items if len(marks & set(_FLYOUT_MARKS)) >= 2 else []
+
+
+def _open_channels_feed(hwnd: int, *, notes: List[str], timeout: float = 20.0) -> bool:
+    """发现 → 视频号。浮层靠点击弹出（悬停不弹），所以先探后点、点完再探。"""
+    l, t, r, b = window_rect(hwnd)
+    for rel in range(150, 341, 35):
+        probe = _flyout_visible(hwnd, rel)
+        if not probe:
+            click_checked(hwnd, l + 27, t + rel)
+            time.sleep(0.65)
+            probe = _flyout_visible(hwnd, rel)
+        if not probe:
+            continue
+        hit = next((it for it in probe
+                    if it["text"].replace("W", "").strip().endswith("视频号")), None)
+        if not hit:
+            continue
+        notes.append(f"click: 左侧栏发现 @rel_y={rel}")
+        click_checked(hwnd, hit["cx"], hit["cy"])
+        notes.append("click: 浮层里的「视频号」")
+        deadline = time.time() + timeout
+        blank = 0
+        while time.time() < deadline:
+            time.sleep(0.9)
+            items = read_window(hwnd)
+            if _panel_open(items):
+                notes.append("panel: 视频号直接落在评论区")
+                return True
+            if _feed_open(items):
+                notes.append("feed: 推荐流已出现")
+                return True
+            blank = blank + 1 if _pane_blank(hwnd) else 0
+            if blank >= 2:
+                notes.append("fail: 视频号内容区空白（4.2 内嵌 webview 挂了）——"
+                             "重开微信后重试，不要再点，点了也不会渲染")
+                return False
+        return False
+    notes.append("fail: 左侧栏没找到「视频号」浮层项")
+    return False
+
+
+def open_comment_panel(hwnd: int, *, log: Optional[List[str]] = None, timeout: float = 20.0) -> Dict[str, Any]:
+    """无人值守打开视频号评论区：发现 → 视频号 → 底部评论图标。
+
+    全流程只用像素/OCR（4.2 的 UIA 树失效）：
+    1. 面板已开（"发表评论"/"评论 N"）→ 直接返回；
+    2. 推荐流已开 → 只差评论图标；
+    3. 都不是 → 左侧栏悬停（不点击，点击会 toggle 浮层）找到「视频号」再点；
+    4. 底部动作条四个图标无文字，从右往左逐个试，每点一次验一次面板标记，
+       点到为止，不连击。
+    """
+    notes: List[str] = log if log is not None else []
+    ensure_visible(hwnd)
+    if not is_foreground(hwnd):
+        bring_to_front(hwnd)
+    l, t, r, b = window_rect(hwnd)
+    items = read_window(hwnd)
+    if _panel_open(items):
+        notes.append("panel: 已打开")
+        return {"ok": True, "opened": False, "notes": notes}
+
+    if not _feed_open(items):
+        if not _open_channels_feed(hwnd, notes=notes, timeout=timeout):
+            return {"ok": False, "opened": False, "notes": notes}
+        items = read_window(hwnd)
+        if _panel_open(items):
+            return {"ok": True, "opened": False, "notes": notes}
+
+    for attempt in range(5):
+        items = read_window(hwnd)
+        if _panel_open(items):
+            return {"ok": True, "opened": True, "notes": notes}
+        cands = [
+            it for it in items
+            if it["top"] > t + (b - t) * 0.55 and it["left"] > l + (r - l) * 0.5
+            and len(it["text"]) <= 8
+        ]
+        cands.sort(key=lambda it: it["left"])
+        if not cands:
+            time.sleep(0.9)
+            continue
+        target = cands[-1 - attempt] if len(cands) > attempt else cands[0]
+        click_checked(hwnd, target["cx"], max(t + 30, target["top"] - 12))
+        notes.append(f"click: 动作条候选 {target['text']!r}")
+        time.sleep(1.5)
+        if _panel_open(read_window(hwnd)):
+            return {"ok": True, "opened": True, "notes": notes}
+    notes.append("fail: 点了候选图标但评论区没出现")
+    return {"ok": False, "opened": False, "notes": notes}
+
+
+def collect_auto(
+    hwnd: Optional[int] = None,
+    *,
+    max_comments: int = 100,
+    max_scroll_rounds: int = 12,
+    **kw: Any,
+) -> Dict[str, Any]:
+    """无人值守采集：自己打开视频号评论区，再滚动采集。"""
+    h = int(hwnd or find_wechat_hwnd() or 0)
+    if not h:
+        raise RuntimeError("没找到微信窗口")
+    log: List[str] = []
+    panel = open_comment_panel(h, log=log)
+    if not panel.get("ok"):
+        return {"ok": False, "count": 0, "items": [], "notes": log, "panel": panel}
+    res = collect_comments(h, max_comments=max_comments, max_scroll_rounds=max_scroll_rounds, **kw)
+    res["panel"] = panel
+    res["notes"] = log + list(res.get("notes") or [])
+    return res
+
+
 def collect_comments(
     hwnd: int,
     *,
@@ -759,7 +1025,7 @@ def collect_comments(
     max_scroll_rounds: int = 8,
     notches: int = 6,
     settle: float = 1.2,
-    incremental: bool = True,
+    incremental: bool = False,
     strip_ratio: float = 0.55,
     log: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -770,6 +1036,7 @@ def collect_comments(
     空白，立即整区补读（不滚），宁可多花一次 OCR 也不漏行。
     停轮：连续 2 轮 0 新增，或帧指纹连续 2 轮 hamming<=2（到底），或到条数上限。
     """
+    ensure_visible(hwnd)
     if not is_foreground(hwnd):
         bring_to_front(hwnd)
     region = tuple(int(v) for v in (region or default_comment_region(hwnd)))  # type: ignore[assignment]
@@ -853,6 +1120,7 @@ def collect_comments(
         "frame_ms": frames,
         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
         "bottom": reached_bottom,
+        "total": comment_total(hwnd, region),
         "region": list(region),
         "engine": engine_kind(),
         "notes": notes,
@@ -870,21 +1138,48 @@ _WECHAT_CLASSES = {
 }
 
 
+def _weixin_pids() -> set:
+    try:
+        import psutil
+
+        return {
+            p.pid for p in psutil.process_iter(["name"])
+            if (p.info.get("name") or "").lower() in ("weixin.exe", "wechat.exe")
+        }
+    except Exception:
+        return set()
+
+
 def find_wechat_hwnd() -> int:
-    """找面积最大的可见微信窗口（排除最小化）。"""
+    """微信主窗口：按进程名（Weixin.exe）认，隐藏/最小化也返回，供 ensure_visible 拉回。"""
+    import win32process
+
+    pids = _weixin_pids()
     cands: List[Tuple[int, int]] = []
 
     def _cb(hwnd, _):
         try:
-            if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+            if win32gui.IsIconic(hwnd):
+                return True
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pids and pid not in pids:
                 return True
             cls = win32gui.GetClassName(hwnd)
             title = win32gui.GetWindowText(hwnd)
-            if cls in _WECHAT_CLASSES or "微信" in (title or "") or "WeChat" in (title or ""):
-                l, t, r, b = win32gui.GetWindowRect(hwnd)
-                area = max(0, r - l) * max(0, b - t)
-                if area > 200 * 200:
-                    cands.append((area, hwnd))
+            if not (cls in _WECHAT_CLASSES or "微信" in (title or "") or "WeChat" in (title or "")):
+                return True
+            l, t, r, b = win32gui.GetWindowRect(hwnd)
+            area = max(0, r - l) * max(0, b - t)
+            if area <= 200 * 200:
+                return True
+            score = area
+            if cls == "Qt51514QWindowIcon":
+                score += 10 ** 8
+            if title == "微信":
+                score += 10 ** 9
+            if win32gui.IsWindowVisible(hwnd):
+                score += 10 ** 7
+            cands.append((score, hwnd))
         except Exception:
             pass
         return True
@@ -915,14 +1210,15 @@ def _dump(img: Image.Image, prefix: str) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="微信 OCR 驱动（UIA 失效时的读屏通道）")
-    ap.add_argument("cmd", choices=["probe", "collect", "windows"])
+    ap.add_argument("cmd", choices=["probe", "collect", "auto", "windows"])
     ap.add_argument("--hwnd", type=lambda s: int(s, 0), default=0)
     ap.add_argument("--region", default=None, help="left,top,right,bottom（屏幕坐标）")
     ap.add_argument("--max", type=int, default=60, dest="max_comments")
     ap.add_argument("--rounds", type=int, default=8)
     ap.add_argument("--notches", type=int, default=6)
     ap.add_argument("--settle", type=float, default=1.2)
-    ap.add_argument("--no-incremental", action="store_true")
+    ap.add_argument("--incremental", action="store_true",
+                    help="只 OCR 底部条带（高面板才划算；矮面板整区更快）")
     ap.add_argument("--dump", action="store_true")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
@@ -956,10 +1252,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
+    if args.cmd == "auto":
+        res = collect_auto(
+            hwnd, max_comments=args.max_comments,
+            max_scroll_rounds=args.rounds, notches=args.notches, settle=args.settle,
+        )
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+
     res = collect_comments(
         hwnd, region=region, max_comments=args.max_comments,
         max_scroll_rounds=args.rounds, notches=args.notches, settle=args.settle,
-        incremental=not args.no_incremental,
+        incremental=args.incremental,
     )
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0
