@@ -307,11 +307,31 @@ def covered_by(hwnd: int, x: int, y: int) -> Optional[str]:
         return f"probe-error {e}"
 
 
+def unset_topmost(hwnd: int) -> None:
+    import win32con
+
+    try:
+        win32gui.SetWindowPos(int(hwnd), win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+    except Exception:
+        pass
+
+
 def click_checked(hwnd: int, x: int, y: int) -> None:
-    """带遮挡校验的点击：被别的窗口盖住就报错，不盲点。"""
+    """带遮挡校验的点击：被别的窗口盖住先临时置顶，仍不行就报错，绝不盲点。"""
+    import win32con
+
     who = covered_by(hwnd, x, y)
     if who:
-        raise RuntimeError(f"目标位置被其他窗口遮挡（{who}），已停止点击；请把微信切到最前")
+        try:
+            win32gui.SetWindowPos(int(hwnd), win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+            time.sleep(0.35)
+        except Exception:
+            pass
+        who = covered_by(hwnd, x, y)
+        if who:
+            raise RuntimeError(f"目标位置被其他窗口遮挡（{who}），已停止点击；请把微信切到最前")
     click_point(x, y)
 
 
@@ -913,14 +933,40 @@ def _flyout_visible(hwnd: int, rel_y: int) -> List[Dict[str, Any]]:
     return items if hits >= 2 else []
 
 
+_DISCOVER_REL: Optional[int] = None   # 上次成功打开「发现」的侧栏 y（记住省一次全扫）
+
+
+def _discover_candidates() -> List[int]:
+    rels = list(range(150, 341, 35))
+    if _DISCOVER_REL in rels:
+        rels.remove(_DISCOVER_REL)
+        rels.insert(0, _DISCOVER_REL)
+    return rels
+
+
 def _open_channels_feed(hwnd: int, *, notes: List[str], timeout: float = 20.0) -> bool:
-    """发现 → 视频号。浮层靠点击弹出（悬停不弹），所以先探后点、点完再探。"""
+    """发现 → 视频号。
+
+    两种情况都要认：
+    - 「发现」浮层展开（第一次用）：OCR 到 朋友圈/视频号… 再点「视频号」；
+    - 「发现」记住上次的 视频号（常见）：点一下侧栏图标就直接进推荐流，没有浮层。
+    """
+    global _DISCOVER_REL
     l, t, r, b = window_rect(hwnd)
-    for rel in range(150, 341, 35):
+    for rel in _discover_candidates():
         probe = _flyout_visible(hwnd, rel)
         if not probe:
             click_checked(hwnd, l + 27, t + rel)
-            time.sleep(0.65)
+            time.sleep(0.75)
+            items = read_window(hwnd)
+            if _panel_open(items):
+                _DISCOVER_REL = rel
+                notes.append(f"click: 侧栏发现 @rel_y={rel} → 视频号评论区直接出现")
+                return True
+            if _feed_open(items):
+                _DISCOVER_REL = rel
+                notes.append(f"click: 侧栏发现 @rel_y={rel} → 推荐流已出现")
+                return True
             probe = _flyout_visible(hwnd, rel)
         if not probe:
             continue
@@ -928,7 +974,8 @@ def _open_channels_feed(hwnd: int, *, notes: List[str], timeout: float = 20.0) -
                     if it["text"].rstrip().endswith("视频号") and "文案" not in it["text"]), None)
         if not hit:
             continue
-        notes.append(f"click: 左侧栏发现 @rel_y={rel}")
+        _DISCOVER_REL = rel
+        notes.append(f"click: 侧栏发现 @rel_y={rel}")
         click_checked(hwnd, hit["cx"], hit["cy"])
         notes.append("click: 浮层里的「视频号」")
         deadline = time.time() + timeout
@@ -948,7 +995,7 @@ def _open_channels_feed(hwnd: int, *, notes: List[str], timeout: float = 20.0) -
                              "重开微信后重试，不要再点，点了也不会渲染")
                 return False
         return False
-    notes.append("fail: 左侧栏没找到「视频号」浮层项")
+    notes.append("fail: 左侧栏没找到「视频号」（浮层和直达都没成）")
     return False
 
 
@@ -1014,13 +1061,16 @@ def collect_auto(
     if not h:
         raise RuntimeError("没找到微信窗口")
     log: List[str] = []
-    panel = open_comment_panel(h, log=log)
-    if not panel.get("ok"):
-        return {"ok": False, "count": 0, "items": [], "notes": log, "panel": panel}
-    res = collect_comments(h, max_comments=max_comments, max_scroll_rounds=max_scroll_rounds, **kw)
-    res["panel"] = panel
-    res["notes"] = log + list(res.get("notes") or [])
-    return res
+    try:
+        panel = open_comment_panel(h, log=log)
+        if not panel.get("ok"):
+            return {"ok": False, "count": 0, "items": [], "notes": log, "panel": panel}
+        res = collect_comments(h, max_comments=max_comments, max_scroll_rounds=max_scroll_rounds, **kw)
+        res["panel"] = panel
+        res["notes"] = log + list(res.get("notes") or [])
+        return res
+    finally:
+        unset_topmost(h)   # 置顶只是点击兜底，跑完必须还原
 
 
 def collect_comments(
