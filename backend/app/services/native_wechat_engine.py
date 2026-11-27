@@ -1703,6 +1703,17 @@ def _version_lte(value: str, upper: tuple[int, int, int, int]) -> bool:
     return parsed != (0, 0, 0, 0) and parsed <= upper
 
 
+# 2026-11-27: 用户装什么版本就走什么流程——
+#   4.2 及以上：自研驱动（replica 读会话/读消息 + UIA 操作），不依赖 wxauto4；
+#   4.1.x 及以下：继续用 wxauto4（老用户已经登录好的环境不动）。
+WECHAT_SELF_DRIVER_MIN_VERSION = (4, 2, 0, 0)
+
+
+def _wechat_driver_mode(version: str) -> str:
+    """返回本机微信该走哪条驱动链路：self（自研）/ wxauto4（旧版）。"""
+    return "self" if _parse_version_tuple(str(version or "")) >= WECHAT_SELF_DRIVER_MIN_VERSION else "wxauto4"
+
+
 def _module_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
@@ -1787,6 +1798,7 @@ def _probe_wxauto4_unlocked(item: Dict[str, Any]) -> Dict[str, Any]:
         "installed": _module_available("wxauto4"),
         "usable": False,
         "version": version,
+        "mode": _wechat_driver_mode(version),
         "supported_free": _version_lte(version, WXAUTO4_MAX_FREE_VERSION),
         "supported_plus": _version_lte(version, WXAUTO4_MAX_PLUS_VERSION),
         "reason": "",
@@ -2001,6 +2013,7 @@ def _local_driver_status(*, passive: bool = False, launch: bool = False) -> Dict
     return {
         "ok": bool(windows),
         "driver_ready": all(deps.get(name, False) for name in ("win32gui", "win32process", "win32api", "win32con")),
+        "driver_mode": _wechat_driver_mode(str((windows[0] if windows else {}).get("version") or "")),
         "full_driver_ready": bool(full_probe.get("usable")),
         "full_driver": full_probe,
         "dependencies": deps,
@@ -24472,7 +24485,7 @@ def _send_files_local(account_id: str, peer_id: str, attachments: List[Dict[str,
     # 而且它失败前会把界面折腾 10 秒、留下搜索下拉，反而让后面的粘贴第一次落空。
     # 4.2 及以上直接走剪贴板粘贴，不再先试 SendFiles。
     _acct = _find_local_account(account_id) or {}
-    if _parse_version_tuple(str(_acct.get("version") or "")) >= (4, 2, 0, 0):
+    if _wechat_driver_mode(str(_acct.get("version") or "")) == "self":
         return _send_files_local_via_paste(account_id, peer_id, files)
     wx = _get_wxauto4_client(account_id)
     try:
