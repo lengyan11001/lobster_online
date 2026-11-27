@@ -362,7 +362,6 @@ def _start_todesk_process(exe: Path) -> None:
                     exe,
                     *_todesk_run_args(
                         exe,
-                        *( [] if exe.suffix.lower() == ".py" else ["--no-update"] ),
                         "--config",
                         str(config_path),
                     ),
