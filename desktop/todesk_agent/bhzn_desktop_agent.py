@@ -71,18 +71,18 @@ MAX_IN_FLIGHT_FRAMES = 2
 FRAME_BACKPRESSURE_GRACE = 1.25
 FRAME_BACKPRESSURE_PAUSE = 0.75
 try:
-    RTC_TARGET_FPS = max(1, min(30, int(os.environ.get("BHZN_RTC_FPS", "18"))))
+    RTC_TARGET_FPS = max(1, min(30, int(os.environ.get("BHZN_RTC_FPS", "24"))))
 except Exception:
-    RTC_TARGET_FPS = 18
+    RTC_TARGET_FPS = 24
 RTC_FRAME_TIME_BASE = Fraction(1, 90000)
 APPLICATION_SERVICES = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
 BINARY_FRAME_MAGIC = b"BHZF1"
 BINARY_FRAME_HEADER_LIMIT = 64 * 1024
 RTC_QUALITY_PROFILES = {
-    "data": {"profile": "data", "maxSide": 1280, "fps": 10, "jpegQuality": 42, "bitrateKbps": 1200},
-    "balanced": {"profile": "balanced", "maxSide": 1920, "fps": 18, "jpegQuality": 58, "bitrateKbps": 3000},
-    "hd": {"profile": "hd", "maxSide": 2560, "fps": 24, "jpegQuality": 66, "bitrateKbps": 6000},
-    "lan": {"profile": "lan", "maxSide": 3840, "fps": 30, "jpegQuality": 74, "bitrateKbps": 12000},
+    "data": {"profile": "data", "maxSide": 1280, "fps": 20, "jpegQuality": 50, "bitrateKbps": 1500},
+    "balanced": {"profile": "balanced", "maxSide": 1600, "fps": 24, "jpegQuality": 62, "bitrateKbps": 3000},
+    "hd": {"profile": "hd", "maxSide": 1920, "fps": 24, "jpegQuality": 70, "bitrateKbps": 6000},
+    "lan": {"profile": "lan", "maxSide": 1920, "fps": 30, "jpegQuality": 78, "bitrateKbps": 10000},
     "relay": {"profile": "relay", "maxSide": 1280, "fps": 10, "jpegQuality": 45, "bitrateKbps": 1200},
 }
 
@@ -1475,6 +1475,8 @@ class DesktopAgent:
                 self.mouse_up(button)
             self.dragging = False
             self.drag_button = "left"
+        elif action == "move":
+            self.move_pointer(x, y)
         elif action == "scroll":
             delta_y = int(msg.get("deltaY") or 0)
             pyautogui.scroll(-max(-10, min(10, delta_y)))
