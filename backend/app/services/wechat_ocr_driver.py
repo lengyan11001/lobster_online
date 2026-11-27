@@ -735,8 +735,12 @@ def extract_rows(
     （面板头"评论 78"、搜索框）与末条之后的输入框全部丢弃。
     兜底：竖直间距聚类（无 img 或无头像时）。
     """
-    # 底部输入框占位（"XX 发表评论"）不属于评论区内容
-    items = [it for it in items if "发表评论" not in it["text"]]
+    # 底部输入框占位（"XX 发表评论"）不属于评论区内容；
+    # 头像所在窄带以左是视频页（+关注/点赞数），不是评论区文字
+    items = [
+        it for it in items
+        if "发表评论" not in it["text"] and it["left"] >= region[0] + 40
+    ]
     rows: List[Dict[str, Any]] = []
     tops: List[int] = []
     if img is not None:
@@ -867,7 +871,8 @@ def _panel_open(items: Sequence[Dict[str, Any]]) -> bool:
     texts = _texts(items)
     if any("发表评论" in t for t in texts):
         return True
-    return any(t.startswith("评论") and any(c.isdigit() for c in t) for t in texts)
+    # 面板头 OCR 常带前缀（"×评论1"、"评论 826"）
+    return any(re.search(r"评论\s*\d", t) for t in texts)
 
 
 def _pane_blank(hwnd: int, *, secs: int = 3) -> bool:
@@ -903,8 +908,9 @@ def _flyout_visible(hwnd: int, rel_y: int) -> List[Dict[str, Any]]:
     l, t, r, b = window_rect(hwnd)
     box = (int(l), int(t + max(0, rel_y - 40)), int(min(r, l + 240)), int(min(b, t + rel_y + 320)))
     items = read_window(hwnd, region=box)
-    marks = {it["text"].replace("W", "").strip() for it in items}
-    return items if len(marks & set(_FLYOUT_MARKS)) >= 2 else []
+    # 图标常被 OCR 成前缀字符（"六搜一搜"、"α视频号"、"W朋友圈"）→ 用包含匹配
+    hits = sum(1 for m in _FLYOUT_MARKS if any(m in it["text"] for it in items))
+    return items if hits >= 2 else []
 
 
 def _open_channels_feed(hwnd: int, *, notes: List[str], timeout: float = 20.0) -> bool:
@@ -919,7 +925,7 @@ def _open_channels_feed(hwnd: int, *, notes: List[str], timeout: float = 20.0) -
         if not probe:
             continue
         hit = next((it for it in probe
-                    if it["text"].replace("W", "").strip().endswith("视频号")), None)
+                    if it["text"].rstrip().endswith("视频号") and "文案" not in it["text"]), None)
         if not hit:
             continue
         notes.append(f"click: 左侧栏发现 @rel_y={rel}")
@@ -1051,6 +1057,7 @@ def collect_comments(
     prev_fp: Optional[int] = None
     same_fp = 0
     stale = 0
+    lost = 0
     reached_bottom = False
     want_full = True
 
@@ -1059,6 +1066,17 @@ def collect_comments(
         strip = want_full or not incremental or scroll_rounds == 0
         area = region if strip else _bottom_strip(region, strip_ratio)
         items, img = read_region_fast(hwnd, area)
+        if frame_no and not _panel_open(items):
+            # 面板被滚动/误点关掉了：这一帧是视频页，不能当评论收
+            lost += 1
+            notes.append(f"f{frame_no + 1}: 无面板头（面板被关），尝试重开")
+            if lost > 2:
+                reached_bottom = False
+                break
+            open_comment_panel(hwnd)
+            time.sleep(0.8)
+            continue
+        lost = 0
         frame_rows = extract_rows(items, region=area, img=img)
         added, overlap = _add_rows(
             rows, seen, frame_rows,
