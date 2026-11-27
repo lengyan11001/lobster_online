@@ -1,7 +1,7 @@
 {
-  "version": "2.0.372",
-  "build": 683,
-  "applied_at": "2026-11-27T17:53:32+08:00",
-  "note": "开机自启白屏：系统稳定后再建 WebView",
-  "bundle_sha256": "c1143be6f59df8acc4e5a9bac09bb2985955de486032cd85aea4014df98cfe5d"
+  "version": "2.0.373",
+  "build": 684,
+  "applied_at": "2026-11-27T18:10:32+08:00",
+  "note": "原生启动窗 + 白屏自动重启一次",
+  "bundle_sha256": "9b875a7bd5c4ae4e32c1ac83d837287284fd208b4cf86f9bc1442609ba7495fa"
 }
