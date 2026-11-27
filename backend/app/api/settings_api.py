@@ -480,6 +480,27 @@ def _todesk_download_and_replace(exe: Path, manifest: dict[str, Any]) -> bool:
         return False
     temp = exe.with_name(exe.name + ".update")
     temp.write_bytes(data)
+    # 防止中继把旧二进制标成新版本：先问下载下来的文件它自己是什么版本，
+    # 不比当前新就不替换——否则会 替换→重启→再判定要更新 的死循环，
+    # 每次循环还会弹一个 cmd 更新窗口。
+    try:
+        running_exe = _todesk_running_exe() or exe
+        current = _todesk_agent_version(running_exe)
+        downloaded = _todesk_agent_version(temp)
+        if downloaded and current and not _todesk_version_is_newer(downloaded, current):
+            logger.warning(
+                "[remote-support] downloaded agent not newer; skip replace manifest=%s binary=%s current=%s",
+                latest,
+                downloaded,
+                current,
+            )
+            try:
+                temp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False
+    except Exception as exc:
+        logger.debug("[remote-support] agent version probe before replace failed: %s", exc)
     _todesk_stop_agent(exe)
     backup = exe.with_name(exe.name + ".bak_" + time.strftime("%Y%m%d_%H%M%S"))
     try:
