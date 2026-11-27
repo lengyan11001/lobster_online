@@ -68,8 +68,10 @@ DEFAULT_BOT_TYPE = "3"
 LOGIN_TTL_SECONDS = 5 * 60
 LOCAL_ACCOUNT_PREFIX = "pc-wechat-"
 LOCAL_DEFAULT_ACCOUNT_ID = f"{LOCAL_ACCOUNT_PREFIX}default"
-WXAUTO4_MAX_FREE_VERSION = (4, 1, 8, 107)
-WXAUTO4_MAX_PLUS_VERSION = (4, 1, 9, 35)
+# 2026-11-27: 微信 4.2.0.53 + wxauto4 41.1.7 实测可连（登录窗口/会话列表可取），
+# 老的 4.1.x 上限会把 4.2 全系判成“驱动不可用”。这里放到 4.2.x 全系列。
+WXAUTO4_MAX_FREE_VERSION = (4, 2, 99, 99)
+WXAUTO4_MAX_PLUS_VERSION = (4, 2, 99, 99)
 WECHAT_PROCESS_NAMES = {"weixin.exe", "wechat.exe"}
 WECHAT_WINDOW_TITLES = {"微信", "Weixin", "WeChat"}
 WECHAT_WINDOW_CLASSES = {
@@ -1713,25 +1715,39 @@ def _probe_wechat_uia_unlocked(hwnd: int) -> Dict[str, Any]:
         "has_mmui_controls": False,
     }
     try:
+        import time as _time
+
         import uiautomation as auto  # type: ignore
 
-        root = auto.ControlFromHandle(int(hwnd))
-        queue = [(root, 0)]
+        # 2026-11-27: 微信 4.2 刚启动/刚登录的 1~2 秒里，UIA 只挂出渲染壳
+        # （Qt 顶层 + MMUIRenderSubWindowHW，约 2 个节点），随后才补上 mmui 控件树。
+        # 只探一次会把“还没醒”误判成“驱动不可用”，进而把 full_driver_ready 打 false。
+        # 这里最多重试 3 次；有 mmui 立刻返回，正常情况耗时不变。
+        attempts = 3
         seen = 0
         has_mmui = False
-        while queue and seen < 80:
-            node, depth = queue.pop(0)
-            seen += 1
-            class_name = str(getattr(node, "ClassName", "") or "")
-            name = str(getattr(node, "Name", "") or "")
-            if class_name.startswith("mmui::") or name.startswith("mmui::"):
-                has_mmui = True
-            if depth < 4:
-                try:
-                    for child in node.GetChildren():
-                        queue.append((child, depth + 1))
-                except Exception:
-                    pass
+        for attempt in range(attempts):
+            root = auto.ControlFromHandle(int(hwnd))
+            queue = [(root, 0)]
+            seen = 0
+            has_mmui = False
+            while queue and seen < 80:
+                node, depth = queue.pop(0)
+                seen += 1
+                class_name = str(getattr(node, "ClassName", "") or "")
+                name = str(getattr(node, "Name", "") or "")
+                if class_name.startswith("mmui::") or name.startswith("mmui::"):
+                    has_mmui = True
+                if depth < 4:
+                    try:
+                        for child in node.GetChildren():
+                            queue.append((child, depth + 1))
+                    except Exception:
+                        pass
+            if has_mmui:
+                break
+            if attempt + 1 < attempts:
+                _time.sleep(0.35)
         result.update(
             {
                 "available": has_mmui,
@@ -24265,6 +24281,184 @@ def _send_auto_reply_text_with_diagnostics(
             _LOCAL_WECHAT_THREAD_STATE.auto_reply_diagnostic_context = previous
 
 
+def _set_clipboard_files(paths: List[str]) -> None:
+    """把文件按 CF_HDROP 放进剪贴板（等价于在资源管理器里 Ctrl+C）。"""
+    import struct
+
+    import win32clipboard  # type: ignore
+    import win32con  # type: ignore
+
+    payload = struct.pack("IiiII", 20, 0, 0, 0, 1) + ("\0".join(paths) + "\0\0").encode("utf-16-le")
+    win32clipboard.OpenClipboard()
+    try:
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32con.CF_HDROP, payload)
+    finally:
+        win32clipboard.CloseClipboard()
+
+
+def _send_files_local_via_paste(
+    account_id: str,
+    peer_id: str,
+    files: List[Dict[str, Any]],
+    *,
+    original_error: Optional[BaseException] = None,
+) -> Dict[str, Any]:
+    """微信 4.2 的发文件兜底：打开会话 → 文件进剪贴板 → Ctrl+V → 回车。
+
+    2026-11-27 实测（微信 4.2.0.53 + wxauto4 41.1.7）：SendFiles 内部找不到搜索框
+    （Find Control Timeout: EditControl），但 ChatWith + 剪贴板粘贴可用，
+    文件卡片能正常发出，消息库里落成「文件/链接/卡片」。
+    """
+    item = _find_local_account(account_id)
+    hwnd = int(item.get("hwnd") or 0)
+    if not hwnd:
+        raise RuntimeError("未找到本机微信主窗口")
+    paths = [str(entry.get("local_path") or "") for entry in files]
+    if not paths or not all(Path(path).is_file() for path in paths):
+        raise RuntimeError("附件文件不存在")
+
+    started_at = int(time.time())
+    _focus_local_wechat(hwnd)
+    # ChatWith 是按界面搜索框匹配的：传 wxid / filehelper 这类内部 ID 搜不到人，
+    # 必须换成会话里显示的名字（filehelper 固定叫「文件传输助手」）。
+    search_names: List[str] = []
+    if str(peer_id).strip().lower() == "filehelper":
+        search_names.append("文件传输助手")
+    display_name = ""
+    try:
+        with _connect() as _conn:
+            _row = _conn.execute(
+                "select display_name from wechat_peers where account_id=? and peer_id=?",
+                (account_id, peer_id),
+            ).fetchone()
+        display_name = str((_row["display_name"] if _row is not None else "") or "").strip()
+    except Exception:
+        display_name = ""
+    if display_name and display_name not in search_names:
+        search_names.append(display_name)
+    if peer_id not in search_names:
+        search_names.append(str(peer_id))
+    # 打开会话：先用 replica 的读消息（它走的是接管链路，实测 3/3 稳定，
+    # 只是慢 8~20s）；wxauto4.ChatWith 在 4.2 上要“热”几次才找得到搜索框，
+    # 只作为兜底，避免第一次调用卡 13s 还失败。
+    open_error: Optional[BaseException] = None
+    opened = False
+    try:
+        from . import wechat_transport_replica as _rt_open
+
+        _rt_open.read_messages(peer_id, max_messages=1)
+        opened = True
+    except Exception as exc:
+        open_error = exc
+    if not opened:
+        wx = _get_wxauto4_client(account_id)
+        for name in search_names:
+            try:
+                wx.ChatWith(name, exact=True)
+                opened = True
+                open_error = None
+                break
+            except Exception as exc:  # 搜索名不对时 wxauto4 会卡满 10s，逐个试
+                open_error = exc
+    if not opened:
+        raise RuntimeError(
+            "微信文件发送失败：打不开目标会话(%s%s)"
+            % (
+                str(open_error or "")[:120],
+                ("；wxauto4.SendFiles: " + str(original_error)[:80]) if original_error else "",
+            )
+        ) from open_error
+    time.sleep(0.8)
+    import win32gui as _win32gui  # type: ignore
+
+    if _win32gui.GetForegroundWindow() != hwnd:
+        _focus_local_wechat(hwnd)
+        time.sleep(0.25)
+    if _win32gui.GetForegroundWindow() != hwnd:
+        # 合成按键会落到当前前台窗口，绝不能盲粘到别的程序里。
+        raise RuntimeError("微信窗口未在前台，已取消文件发送")
+    _set_clipboard_files(paths)
+    input_control = _local_wechat_input_control(hwnd)
+    if input_control is None:
+        raise RuntimeError("未找到微信聊天输入框")
+    input_rect = _uia_rect_tuple(input_control)
+    if input_rect is not None:
+        _uia_click_screen_point((input_rect[0] + input_rect[2]) // 2, (input_rect[1] + input_rect[3]) // 2)
+    else:
+        input_control.SetFocus()
+    time.sleep(0.25)
+    _send_hotkey("v", ctrl=True, pause=0.3)
+    time.sleep(1.4)
+    _send_hotkey("enter", pause=0.3)
+    time.sleep(1.5)
+
+    verified = False
+    for _ in range(3):
+        try:
+            from . import wechat_transport_replica as _rt_verify
+
+            for row in (_rt_verify.history(peer_id, limit=5).get("messages") or []):
+                if str(row.get("attr") or "") == "self" and int(row.get("create_time") or 0) >= started_at - 2:
+                    verified = True
+                    break
+        except Exception:
+            pass
+        if verified:
+            break
+        time.sleep(0.8)
+
+    now = _now_iso()
+    client_id = f"lobster-local-wechat-file-{uuid.uuid4().hex}"
+    with _connect() as conn:
+        for entry in files:
+            conn.execute(
+                """
+                insert into wechat_messages(id, account_id, peer_id, direction, msg_type, content, client_id, status, raw_json, created_at)
+                values(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    account_id,
+                    peer_id,
+                    "out",
+                    entry.get("kind") or "file",
+                    entry.get("filename") or Path(entry["local_path"]).name,
+                    client_id,
+                    "sent" if verified else "sent_unverified",
+                    _json_dumps(
+                        {
+                            "driver": "uia_clipboard_paste",
+                            "file": entry,
+                            "verified": verified,
+                            "wxauto4_error": str(original_error or "")[:200],
+                        }
+                    ),
+                    now,
+                ),
+            )
+        conn.execute(
+            """
+            insert into wechat_peers(id, account_id, peer_id, display_name, chat_type, last_outbound_at, raw_json, created_at, updated_at)
+            values(?,?,?,?,?,?,?,?,?)
+            on conflict(account_id, peer_id) do update set
+              display_name=excluded.display_name,
+              last_outbound_at=excluded.last_outbound_at,
+              raw_json=excluded.raw_json,
+              updated_at=excluded.updated_at
+            """,
+            (_stable_key(account_id, peer_id), account_id, peer_id, peer_id, "direct", now, _json_dumps({"files": files}), now, now),
+        )
+    return {
+        "ok": True,
+        "client_id": client_id,
+        "peer_id": peer_id,
+        "driver": "uia_clipboard_paste",
+        "files": files,
+        "verified": verified,
+    }
+
+
 def _send_files_local(account_id: str, peer_id: str, attachments: List[Dict[str, Any]]) -> Dict[str, Any]:
     _find_local_account(account_id)
     peer_id = str(peer_id or "").strip()
@@ -24274,11 +24468,19 @@ def _send_files_local(account_id: str, peer_id: str, attachments: List[Dict[str,
     if not files:
         raise RuntimeError("缺少附件")
     _enforce_local_send_rate(account_id)
+    # 2026-11-27: 微信 4.2 起 wxauto4.SendFiles 必挂（找不到搜索框），
+    # 而且它失败前会把界面折腾 10 秒、留下搜索下拉，反而让后面的粘贴第一次落空。
+    # 4.2 及以上直接走剪贴板粘贴，不再先试 SendFiles。
+    _acct = _find_local_account(account_id) or {}
+    if _parse_version_tuple(str(_acct.get("version") or "")) >= (4, 2, 0, 0):
+        return _send_files_local_via_paste(account_id, peer_id, files)
     wx = _get_wxauto4_client(account_id)
     try:
         resp = wx.SendFiles([item["local_path"] for item in files], who=peer_id, exact=True)
     except Exception as exc:
-        raise RuntimeError(f"local WeChat SendFiles failed: {exc}") from exc
+        # 2026-11-27: 微信 4.2 起 SendFiles 的搜索框定位失效，回落到剪贴板粘贴发送。
+        logger.info("[native-wechat] wxauto4.SendFiles 失败，改用剪贴板粘贴: %s", str(exc)[:200])
+        return _send_files_local_via_paste(account_id, peer_id, files, original_error=exc)
     raw = _obj_dict(resp)
     if not bool(resp):
         raise RuntimeError(f"local WeChat SendFiles failed: {resp}")

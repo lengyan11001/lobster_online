@@ -110,7 +110,7 @@ uvicorn==0.30.6
 websockets==16.0
 webencodings==0.5.1
 wrapt==1.16.0
-wxauto4==41.1.2
+wxauto4==41.1.7
 xlrd==2.0.2
 XlsxWriter==3.2.9
 yarl==1.22.0
