@@ -739,6 +739,57 @@ async def tasks_from_search(request: Request):
     return _ok({"created": created})
 
 
+def _ocr_fallback_enabled() -> bool:
+    try:
+        return bool(_settings().get("comment_ocr_fallback", True))
+    except Exception:
+        return True
+
+
+def _collect_comments_via_ocr(*, max_comments: int, max_scroll_rounds: int = 20) -> Dict[str, Any]:
+    """UIA 树失效时的读屏兜底：自己打开视频号评论区再滚动采集。
+
+    返回结构与 channels_ui.collect_comments 对齐（items/count/detail），
+    每行额外带 source="ocr"，上层 merge_comments 不需要改。
+    """
+    from backend.app.services import wechat_ocr_driver as ocr
+
+    t0 = time.time()
+    res = ocr.collect_auto(None, max_comments=max_comments, max_scroll_rounds=max_scroll_rounds)
+    if not res.get("ok"):
+        notes = "；".join(str(n) for n in (res.get("notes") or []))[-240:]
+        raise channels_ui.ChannelsUiError(f"OCR 通道也没能打开评论区：{notes}")
+    items: List[Dict[str, Any]] = []
+    for row in res.get("items") or []:
+        items.append({
+            "nickname": row.get("nickname") or "",
+            "content": row.get("content") or "",
+            "like": row.get("like") or "",
+            "region": row.get("region") or "",
+            "time": row.get("time") or "",
+            "reply_count": row.get("reply_count") or "",
+            "is_author": bool(row.get("is_author")),
+            "avatar": "",
+            "y": int(row.get("y") or 0),
+            "key": row.get("key") or f"{row.get('nickname') or ''}|{row.get('content') or ''}",
+            "source": "ocr",
+        })
+    _log(f"OCR 兜底采集 {len(items)} 条 / {int((time.time() - t0) * 1000)}ms"
+         f"（面板总数 {res.get('total')}，帧 {res.get('frames')}）")
+    return {
+        "items": items,
+        "count": len(items),
+        "source": "ocr",
+        "detail": {
+            "total": res.get("total"),
+            "engine": res.get("engine"),
+            "elapsed_ms": res.get("elapsed_ms"),
+            "frames": res.get("frames"),
+            "scroll_rounds": res.get("scroll_rounds"),
+        },
+    }
+
+
 @router.post("/tasks/{task_id}/run")
 async def run_task(task_id: int, request: Request):
     import asyncio
@@ -755,13 +806,26 @@ async def run_task(task_id: int, request: Request):
         settings = _settings()
         deep_target = int(body.get("max_comments") or task.get("deep_target") or task.get("target_count") or settings.get("max_comments_deep") or 200)
         initial_target = max(20, min(deep_target, int(settings.get("max_comments_initial") or 80)))
-        result = await asyncio.to_thread(
-            channels_ui.collect_comments_for_card,
-            task.get("source_query") or task.get("keyword") or "",
-            task.get("card_key") or "",
-            max_comments=initial_target,
-            close_after=False,
-        )
+        collect_source = "uia"
+        try:
+            result = await asyncio.to_thread(
+                channels_ui.collect_comments_for_card,
+                task.get("source_query") or task.get("keyword") or "",
+                task.get("card_key") or "",
+                max_comments=initial_target,
+                close_after=False,
+            )
+        except Exception as exc:
+            if not _ocr_fallback_enabled():
+                raise
+            _log(f"UIA 采集失败（{str(exc)[:120]}），改走 OCR 读屏兜底")
+            collect_source = "ocr"
+            result = await asyncio.to_thread(
+                _collect_comments_via_ocr,
+                max_comments=initial_target,
+                max_scroll_rounds=8,
+            )
+        task["collect_source"] = collect_source
 
         def merge_comments(existing: List[Dict[str, Any]], rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             by_key = {str(row.get("comment_id") or ""): row for row in existing if row.get("comment_id")}
@@ -798,7 +862,17 @@ async def run_task(task_id: int, request: Request):
         rate = len(high) / max(1, len(comments))
         extended = False
         if ai_result.get("ok") and deep_target > initial_target and (len(high) >= int(settings.get("extend_min_leads") or 3) or rate >= float(settings.get("extend_rate") or 0.05)):
-            extra = await asyncio.to_thread(channels_ui.collect_comments, max_comments=deep_target)
+            try:
+                extra = await asyncio.to_thread(channels_ui.collect_comments, max_comments=deep_target)
+            except Exception as exc:
+                if not _ocr_fallback_enabled():
+                    raise
+                _log(f"UIA 深采失败（{str(exc)[:120]}），改走 OCR 读屏兜底")
+                extra = await asyncio.to_thread(
+                    _collect_comments_via_ocr,
+                    max_comments=deep_target,
+                    max_scroll_rounds=20,
+                )
             comments = merge_comments(comments, extra.get("items") or [])
             ai_result = await asyncio.to_thread(
                 ai_filter_comments,

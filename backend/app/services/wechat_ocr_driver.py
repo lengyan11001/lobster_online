@@ -1066,6 +1066,7 @@ def collect_auto(
         if not panel.get("ok"):
             return {"ok": False, "count": 0, "items": [], "notes": log, "panel": panel}
         res = collect_comments(h, max_comments=max_comments, max_scroll_rounds=max_scroll_rounds, **kw)
+        res["ok"] = True
         res["panel"] = panel
         res["notes"] = log + list(res.get("notes") or [])
         return res
