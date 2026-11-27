@@ -3236,11 +3236,29 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             background_color=_window_background,
             js_api=DesktopApi(recover_local_services),
             frameless=_use_frameless,
+            # 启动页先隐藏，等首帧真正画出来再显示，避免开机时先闪一整块白/底色。
+            hidden=True,
             # 2026-10-21：pywebview 的 easy_drag 在 frameless 下会给整页挂
             # window mousedown → 点正文/选文字也会拖动窗口。关掉它，只让
             # 顶部 pywebview-drag-region 拖动条生效。
             easy_drag=False,
         )
+        def _reveal_window() -> None:
+            try:
+                window.show()
+            except Exception as exc:
+                log("window reveal failed: %s" % exc)
+
+        def _schedule_reveal() -> None:
+            # loaded 事件在首帧提交后触发；再兜一个 2 秒定时器，保证一定能显示。
+            try:
+                window.events.loaded += lambda: threading.Timer(0.15, _reveal_window).start()
+            except Exception as exc:
+                log("window loaded hook failed: %s" % exc)
+            threading.Timer(2.0, _reveal_window).start()
+
+        _schedule_reveal()
+
         if _use_frameless:
             _CHROME_HOOKS["apply"] = _apply_frameless_chrome
             _CHROME_HOOKS["applied"] = lambda: bool(_chrome_state["applied"])
