@@ -42,6 +42,10 @@ CONFIRM_CLOSE_BODY_TEMPLATE = (
     "\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c"
     "\u53ef\u4ee5\u5148\u70b9\u51fb\u300c\u9000\u51fa\u5168\u5c4f\u300d\u6216\u6309 Esc\u3002"
 )
+_TRANSPARENT_PIXEL_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+)
 BLANK_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title></title></head>
@@ -2283,18 +2287,25 @@ class DesktopApi:
 
 
 def desktop_loading_html(url: str, title: str) -> str:
-    if not _ACTIVE_DESKTOP_BRANDING or _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable"):
-        return BLANK_HTML
+    """启动页：永远不要返回纯白页。
+
+    2026-11-27 客户现场：开机自启后窗口长时间白屏、看不到登录界面。
+    OEM 品牌解析失败时这里以前直接返回 BLANK_HTML（空 body），叠加开机冷启动
+    （OTA 更新 + 后端预热）就表现成一直白屏。现在退化成无 logo 的加载页，
+    至少能看到「正在启动…」和进度。
+    """
+    profile_ok = bool(_ACTIVE_DESKTOP_BRANDING) and not _ACTIVE_DESKTOP_BRANDING.get("_branding_unavailable")
     match = re.match(r"^(https?://[^/]+)", url)
     base = match.group(1) if match else "http://127.0.0.1:8000"
-    mark_src = "data:,"
-    try:
-        if LOADING_MARK_PATH and LOADING_MARK_PATH.is_file():
-            data = base64.b64encode(LOADING_MARK_PATH.read_bytes()).decode("ascii")
-            mark_src = f"data:image/png;base64,{data}"
-    except Exception as exc:
-        log(f"load desktop loading mark failed: {exc}")
-    safe_title = escape(title or "")
+    mark_src = _TRANSPARENT_PIXEL_DATA_URI
+    if profile_ok:
+        try:
+            if LOADING_MARK_PATH and LOADING_MARK_PATH.is_file():
+                data = base64.b64encode(LOADING_MARK_PATH.read_bytes()).decode("ascii")
+                mark_src = f"data:image/png;base64,{data}"
+        except Exception as exc:
+            log(f"load desktop loading mark failed: {exc}")
+    safe_title = escape(title or "") or "正在启动"
     return LOADING_HTML.replace("__LOADING_MARK__", mark_src).replace("__APP_TITLE__", safe_title)
 
 
@@ -2951,8 +2962,31 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 ).start()
 
         def start_services_then_load(window) -> None:
+            ready_state = {"done": False}
+
+            def _startup_timeout_guard() -> None:
+                if ready_state["done"] or runtime["closing"].is_set():
+                    return
+                log("webview startup timeout after 300s; showing diagnostic page")
+                try:
+                    window.load_html(
+                        desktop_error_html(
+                            "本机服务启动超时（已等待 300 秒）。\n"
+                            "请关闭窗口后重新打开；仍然失败请把下面这个日志发给技术支持：\n"
+                            + str(LOG_PATH)
+                        ),
+                        base_uri=str(ROOT),
+                    )
+                except Exception:
+                    pass
+
+            timeout_timer = threading.Timer(300.0, _startup_timeout_guard)
+            timeout_timer.daemon = True
+            timeout_timer.start()
             try:
                 ok, actual_url, backend_proc, mcp_proc, error = start_services_blocking(port, mcp_port, env, wait_seconds, ensure_runtime=False)
+                ready_state["done"] = True
+                timeout_timer.cancel()
                 runtime["backend_proc"] = backend_proc
                 runtime["backend_started_at"] = time.monotonic()
                 runtime["mcp_proc"] = mcp_proc
