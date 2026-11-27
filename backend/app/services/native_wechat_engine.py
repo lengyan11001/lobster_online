@@ -1922,6 +1922,25 @@ def _scan_local_wechat_windows(*, max_age_seconds: float = 1.5) -> List[Dict[str
     return [dict(x) for x in out]
 
 
+def _moments_window_is_file_picker(hwnd: int) -> bool:
+    """4.2 起朋友圈的选图窗口标题也叫「朋友圈」，用窗口内的固定文案区分。"""
+    try:
+        import uiautomation as auto  # type: ignore
+
+        root = auto.ControlFromHandle(int(hwnd))
+        if root is None:
+            return False
+        for name in ("选择文件", "文件名(N):"):
+            try:
+                if auto.Control(searchFromControl=root, Name=name).Exists(0, 0):
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        return False
+    return False
+
+
 def _find_visible_local_moments_hwnd() -> int:
     try:
         import win32gui  # type: ignore
@@ -1940,6 +1959,8 @@ def _find_visible_local_moments_hwnd() -> int:
             title = win32gui.GetWindowText(hwnd) or ""
             class_name = win32gui.GetClassName(hwnd) or ""
             if title != "朋友圈":
+                return
+            if _moments_window_is_file_picker(int(hwnd)):
                 return
             _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
             if not _looks_like_wechat_process(_process_meta(int(pid or 0))):
@@ -19107,6 +19128,57 @@ def _open_existing_global_moments(hwnd: int, steps: List[Dict[str, Any]], attemp
     )
 
 
+def _open_moments_via_discover(hwnd: int, steps: List[Dict[str, Any]], attempt: int) -> bool:
+    """微信 4.2：朋友圈收在「发现」里；内嵌打开后再点「独立窗口显示」拿独立窗口。
+
+    4.1 及以下不进这里（没有「发现」这个结构时直接返回 False，走原有查找逻辑）。
+    """
+    try:
+        import uiautomation as auto  # type: ignore
+    except Exception:
+        return False
+    try:
+        root = auto.ControlFromHandle(int(hwnd))
+        if root is None:
+            return False
+        opened = bool(_find_visible_local_moments_hwnd())
+        if not opened:
+            pub = auto.Control(searchFromControl=root, Name="发表", ControlType=auto.ControlType.ButtonControl)
+            opened = bool(pub.Exists(0, 0))
+        if not opened:
+            tab = auto.Control(searchFromControl=root, Name="发现", ControlType=auto.ControlType.ButtonControl)
+            if not tab.Exists(1, 1):
+                return False
+            rect = tab.BoundingRectangle
+            _uia_click_screen_point((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+            time.sleep(0.8)
+            root = auto.ControlFromHandle(int(hwnd))
+            entry = auto.Control(searchFromControl=root, Name="朋友圈", ControlType=auto.ControlType.ButtonControl)
+            if not entry.Exists(2, 1):
+                steps.append({"step": "open_moments_from_discover", "ok": False, "attempt": attempt, "reason": "entry_missing"})
+                return False
+            rect = entry.BoundingRectangle
+            _uia_click_screen_point((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+            time.sleep(1.4)
+            steps.append({"step": "open_moments_from_discover", "ok": True, "attempt": attempt})
+        if not _find_visible_local_moments_hwnd():
+            root = auto.ControlFromHandle(int(hwnd))
+            pop = auto.Control(searchFromControl=root, Name="独立窗口显示", ControlType=auto.ControlType.ButtonControl)
+            if pop.Exists(1, 1):
+                rect = pop.BoundingRectangle
+                _uia_click_screen_point((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+                time.sleep(1.6)
+                steps.append({
+                    "step": "pop_out_moments_window",
+                    "ok": bool(_find_visible_local_moments_hwnd()),
+                    "attempt": attempt,
+                })
+        return bool(_find_visible_local_moments_hwnd())
+    except Exception as exc:
+        steps.append({"step": "open_moments_from_discover", "ok": False, "attempt": attempt, "error": str(exc)[:160]})
+        return False
+
+
 def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     """Open the global Moments timeline inside this publish.
 
@@ -19119,6 +19191,8 @@ def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     last_seen = 0
     for attempt in range(1, 4):
         _focus_local_wechat(hwnd)
+        if _open_moments_via_discover(hwnd, steps, attempt):
+            return
         if _open_existing_global_moments(hwnd, steps, attempt):
             return
         found = False
