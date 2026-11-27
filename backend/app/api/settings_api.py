@@ -343,6 +343,38 @@ def _todesk_process_alive() -> bool:
     return False
 
 
+def _todesk_disable_self_update(exe: Path) -> None:
+    """彻底掐掉 agent 的自更新入口，保证升级过程对用户不可见。
+
+    agent 的 Rust 二进制会：
+      1) 注册计划任务 `BHZN-ToDesk-Agent-Update`（每 4 小时跑 --check-update）；
+      2) 发现新版本时执行 `cmd /C start "" BHZN-ToDesk-Agent.update.cmd` —— 会弹黑窗。
+    中继的 /api/releases/windows-agent 已默认 404，这里再把历史计划任务和残留脚本清掉，
+    双保险。agent 版本统一随客户端 OTA 包（desktop/BHZN-ToDesk-Agent.exe）静默替换。
+    """
+    if os.name != "nt":
+        return
+    try:
+        subprocess.run(
+            ["schtasks", "/Delete", "/TN", "BHZN-ToDesk-Agent-Update", "/F"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
+    except Exception:
+        pass
+    try:
+        for leftover in exe.parent.glob("*.update.cmd"):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def _start_todesk_process(exe: Path) -> None:
     """Start the agent once, writing output to a rotating-friendly log file."""
     global _TODSK_PROCESS
@@ -353,6 +385,7 @@ def _start_todesk_process(exe: Path) -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "todesk-agent.log"
         flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+        _todesk_disable_self_update(exe)
         state = _load_todesk_state()
         config_path = _ensure_todesk_main_server_config(exe, state)
         handle = log_file.open("a", encoding="utf-8")
