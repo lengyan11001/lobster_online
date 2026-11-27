@@ -1,7 +1,7 @@
 {
-  "version": "2.0.363",
-  "build": 672,
-  "applied_at": "2026-11-26T22:59:33+08:00",
-  "note": "海外：远程中继切至 todesk.bhos.online；OTA 断点续传；旧后端自愈",
-  "bundle_sha256": "6beff0434c2530a451ba7892cc2793c3b0c1af59d8dccc70ae89b8eb0dc20982"
+  "version": "2.0.365",
+  "build": 674,
+  "applied_at": "2026-11-27T12:00:57+08:00",
+  "note": "修复开机白屏：启动页永不为空、白屏自动重载、启动超时诊断（海外）",
+  "bundle_sha256": "518c7ac04577cdd2bc566435796dfb592cdb2e6ab9ff1c50b5a4e7db730f0b9e"
 }
