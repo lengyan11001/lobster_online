@@ -1,7 +1,7 @@
 {
-  "version": "2.0.366",
-  "build": 675,
-  "applied_at": "2026-11-27T14:34:09+08:00",
-  "note": "Online 自动处理 ToDesk 升级：agent 0.2.12 + 2K 档位 + 悬停移动",
-  "bundle_sha256": "40ec9138931d9c54903a3a3519a566cbd61c65429b1fc9460858e04eeb07d47a"
+  "version": "2.0.367",
+  "build": 676,
+  "applied_at": "2026-11-27T16:57:03+08:00",
+  "note": "国内 OTA：remote-support agent 0.2.20 + RTC 直连/点击修复",
+  "bundle_sha256": "7a41ff5b3203e1b61a0258ad3b441ac5dfecd899c12b3683963c6cf35ce4729f"
 }
