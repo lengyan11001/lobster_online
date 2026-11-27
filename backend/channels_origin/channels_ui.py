@@ -104,19 +104,27 @@ def _dump_on_error(tag: str) -> str:
 def _activate_hwnd(hwnd: int) -> bool:
     if not hwnd or not win32gui.IsWindow(hwnd):
         return False
+    # 4.2 的视频号是主窗口的子窗，激活要落到根窗口上
+    target = int(hwnd)
     try:
-        eng._focus_local_wechat(int(hwnd))
+        root = int(win32gui.GetAncestor(target, win32con.GA_ROOT) or 0)
+        if root:
+            target = root
     except Exception:
         pass
-    if win32gui.GetForegroundWindow() == int(hwnd):
+    try:
+        eng._focus_local_wechat(target)
+    except Exception:
+        pass
+    if win32gui.GetForegroundWindow() == target:
         return True
     try:
-        win32gui.ShowWindow(int(hwnd), win32con.SW_RESTORE)
-        win32gui.BringWindowToTop(int(hwnd))
-        win32gui.SetForegroundWindow(int(hwnd))
+        win32gui.ShowWindow(target, win32con.SW_RESTORE)
+        win32gui.BringWindowToTop(target)
+        win32gui.SetForegroundWindow(target)
     except Exception:
         pass
-    return win32gui.GetForegroundWindow() == int(hwnd)
+    return win32gui.GetForegroundWindow() == target
 
 
 def _doc_names(hwnd: int) -> List[str]:
@@ -139,6 +147,45 @@ def main_window() -> Dict[str, Any]:
         raise ChannelsUiError("微信主窗口未找到，请先登录微信 PC 端")
     wins.sort(key=lambda row: int(row.get("area") or 0), reverse=True)
     return wins[0]
+
+
+def _embedded_channels_hwnd(main_hwnd: int) -> Optional[int]:
+    """微信 4.2：视频号是主窗口里的子窗口（Chrome_WidgetWin_0），不是独立顶层窗口。
+
+    这里只用 Win32 判断（可见 + 尺寸），不走 UIA —— 这个内嵌 WebView 的控件树
+    极大，深挖会把调用线程卡死（实测 3 分钟无返回）。
+    """
+    found: List[int] = []
+
+    def callback(win: int, _extra: Any) -> None:
+        try:
+            cls = str(win32gui.GetClassName(win) or "")
+            if cls != "Chrome_WidgetWin_0":
+                return
+            if not win32gui.IsWindowVisible(win):
+                return
+            title = str(win32gui.GetWindowText(win) or "")
+            if title and title not in ("微信", "WeChat", "Weixin"):
+                return
+            left, top, right, bottom = win32gui.GetWindowRect(win)
+            if (right - left) < 300 or (bottom - top) < 200:
+                return
+            found.append(int(win))
+        except Exception:
+            return
+
+    try:
+        win32gui.EnumChildWindows(int(main_hwnd), callback, None)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def _is_embedded_webview(hwnd: int) -> bool:
+    try:
+        return bool(win32gui.GetParent(int(hwnd)))
+    except Exception:
+        return False
 
 
 def channels_hwnd(*, required: bool = True) -> Optional[int]:
@@ -182,6 +229,9 @@ def channels_hwnd(*, required: bool = True) -> Optional[int]:
         return int(candidates[0][0])
     if fallback:
         return int(fallback[0])
+    embedded = _embedded_channels_hwnd(main_hwnd)
+    if embedded:
+        return int(embedded)
     if required:
         raise ChannelsUiError("视频号窗口未打开，请先在微信左侧点『视频号』")
     return None
@@ -189,6 +239,9 @@ def channels_hwnd(*, required: bool = True) -> Optional[int]:
 
 def active_doc_name(hwnd: Optional[int] = None) -> str:
     target = hwnd or channels_hwnd()
+    if _is_embedded_webview(int(target)):
+        # 4.2 内嵌 WebView 的控件树深挖会卡死，状态里不回显文档名
+        return ""
     names = _doc_names(int(target))
     return names[0] if names else ""
 
@@ -228,6 +281,8 @@ def _tabs(hwnd: int) -> List[Any]:
 def ensure_feed_tab(hwnd: Optional[int] = None) -> bool:
     target = int(hwnd or channels_hwnd())
     _activate_hwnd(target)
+    if _is_embedded_webview(target):
+        return True
     doc = active_doc_name(target)
     if doc == "视频号" or doc.startswith("视频号"):
         return True
@@ -302,7 +357,13 @@ def _click(node: Any, *, label: str = "") -> None:
                 raise ChannelsUiError(f"微信窗口无法切到前台，已停止点击：{label}")
             time.sleep(0.15)
         if target and win32gui.GetForegroundWindow() != target:
-            raise ChannelsUiError(f"前台窗口校验失败，已停止点击：{label}")
+            # 4.2 WebView 子窗不会成为前台，前台是它的根窗口
+            try:
+                root = int(win32gui.GetAncestor(target, win32con.GA_ROOT) or 0)
+            except Exception:
+                root = 0
+            if not (root and win32gui.GetForegroundWindow() == root and win32gui.IsWindowVisible(target)):
+                raise ChannelsUiError(f"前台窗口校验失败，已停止点击：{label}")
         if not _foreground_is_wechat():
             raise ChannelsUiError(f"前台不是微信，已停止点击：{label}")
     elif not _foreground_is_wechat():
@@ -316,8 +377,18 @@ def _click(node: Any, *, label: str = "") -> None:
 def _foreground_channels(hwnd: int) -> None:
     if not _activate_hwnd(hwnd):
         raise ChannelsUiError("无法把视频号窗口切到前台")
-    if win32gui.GetForegroundWindow() != hwnd:
-        raise ChannelsUiError("前台窗口不是视频号，停止操作")
+    fg = int(win32gui.GetForegroundWindow() or 0)
+    if fg == int(hwnd):
+        return
+    # 微信 4.2：视频号是主窗口里的 WebView，它本身永远不是前台，
+    # 前台只能是它的根窗口；只要视频号窗口可见就允许继续。
+    try:
+        root = int(win32gui.GetAncestor(int(hwnd), win32con.GA_ROOT) or 0)
+    except Exception:
+        root = 0
+    if root and fg == root and win32gui.IsWindowVisible(int(hwnd)):
+        return
+    raise ChannelsUiError("前台窗口不是视频号，停止操作")
 
 
 def _wheel(x: int, y: int, notches: int = 6) -> None:
