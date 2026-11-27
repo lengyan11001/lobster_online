@@ -378,6 +378,168 @@ def _start_todesk_process(exe: Path) -> None:
             handle.close()
 
 
+_TODSK_UPDATE_LOCK = threading.Lock()
+_TODSK_UPDATE_LAST_CHECK = 0.0
+_TODSK_UPDATE_INTERVAL_SECONDS = 3600.0
+
+
+def _todesk_version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", value or "")[:4])
+
+
+def _todesk_version_is_newer(latest: str, current: str) -> bool:
+    return _todesk_version_tuple(latest) > _todesk_version_tuple(current)
+
+
+def _todesk_running_exe() -> Optional[Path]:
+    try:
+        import psutil  # type: ignore
+        for proc in psutil.process_iter(["exe", "cmdline"]):
+            info = proc.info
+            exe = str(info.get("exe") or "").strip()
+            cmd = " ".join(str(x) for x in (info.get("cmdline") or []))
+            if "BHZN-ToDesk-Agent" in (exe + " " + cmd) or "bhzn_desktop_agent.py" in cmd:
+                path = Path(exe) if exe else None
+                if path and path.is_file():
+                    return path
+    except Exception:
+        pass
+    return None
+
+
+def _todesk_agent_version(exe: Path) -> str:
+    try:
+        cp = subprocess.run(
+            _todesk_command(exe, "--show-id", "--no-auto-install"),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=8,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0,
+        )
+        raw = cp.stdout or b""
+        text = raw.decode("utf-8", errors="replace")
+        if "Agent" not in text:
+            text = raw.decode("gbk", errors="replace")
+        match = re.search(r"Agent\s+([0-9][0-9A-Za-z._-]*)", text)
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def _todesk_stop_agent(exe: Path) -> None:
+    global _TODSK_PROCESS
+    proc = _TODSK_PROCESS
+    _TODSK_PROCESS = None
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    try:
+        import psutil  # type: ignore
+        target = str(exe.resolve()).lower()
+        for item in psutil.process_iter(["exe", "cmdline"]):
+            info = item.info
+            path = str(info.get("exe") or "").strip()
+            cmd = " ".join(str(x) for x in (info.get("cmdline") or []))
+            try:
+                matches = bool(path and str(Path(path).resolve()).lower() == target)
+            except Exception:
+                matches = False
+            if matches or ("BHZN-ToDesk-Agent" in (path + " " + cmd) and target in (path + " " + cmd).lower()):
+                try:
+                    item.terminate()
+                    item.wait(timeout=5)
+                except Exception:
+                    try:
+                        item.kill()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def _todesk_download_and_replace(exe: Path, manifest: dict[str, Any]) -> bool:
+    url = str(manifest.get("url") or "").strip()
+    expected = str(manifest.get("sha256") or "").strip().lower()
+    latest = str(manifest.get("version") or "").strip()
+    if not url or not expected or not latest:
+        return False
+    with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+        data = resp.content
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected:
+        logger.warning("[remote-support] agent update sha mismatch expected=%s actual=%s", expected, actual)
+        return False
+    temp = exe.with_name(exe.name + ".update")
+    temp.write_bytes(data)
+    _todesk_stop_agent(exe)
+    backup = exe.with_name(exe.name + ".bak_" + time.strftime("%Y%m%d_%H%M%S"))
+    try:
+        if exe.is_file():
+            backup.write_bytes(exe.read_bytes())
+        os.replace(temp, exe)
+    except Exception:
+        try:
+            temp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    state = _load_todesk_state()
+    state["agent_version"] = latest
+    state["agent_updated_at"] = int(time.time() * 1000)
+    _save_todesk_state(state)
+    logger.info("[remote-support] agent updated to %s path=%s backup=%s", latest, exe, backup)
+    _start_todesk_process(exe)
+    return True
+
+
+def _todesk_update_worker(exe: Path) -> None:
+    with _TODSK_UPDATE_LOCK:
+        try:
+            manifest_url = _TODSK_SERVER_URL.rstrip("/") + "/api/releases/windows-agent"
+            with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+                manifest = client.get(manifest_url).json()
+            latest = str(manifest.get("version") or "").strip()
+            running_exe = _todesk_running_exe() or exe
+            current = _todesk_agent_version(running_exe)
+            if latest and current and _todesk_version_is_newer(latest, current):
+                logger.info("[remote-support] agent update available current=%s latest=%s", current, latest)
+                _todesk_download_and_replace(running_exe, manifest)
+            elif not _todesk_process_alive():
+                _start_todesk_process(running_exe)
+        except Exception as exc:
+            logger.warning("[remote-support] agent auto-update failed: %s", exc)
+            try:
+                if not _todesk_process_alive():
+                    _start_todesk_process(exe)
+            except Exception:
+                pass
+
+
+def _schedule_todesk_agent_update(exe: Path) -> None:
+    global _TODSK_UPDATE_LAST_CHECK
+    if exe.suffix.lower() != ".exe":
+        return
+    now = time.time()
+    if now - _TODSK_UPDATE_LAST_CHECK < _TODSK_UPDATE_INTERVAL_SECONDS:
+        return
+    _TODSK_UPDATE_LAST_CHECK = now
+    threading.Thread(
+        target=_todesk_update_worker,
+        args=(exe,),
+        name="lobster-todesk-update",
+        daemon=True,
+    ).start()
+
+
 def resume_remote_support_if_enabled(*, log_missing: bool = True) -> bool:
     """Resume a persisted remote-support session after a client restart."""
     state = _load_todesk_state()
@@ -394,6 +556,7 @@ def resume_remote_support_if_enabled(*, log_missing: bool = True) -> bool:
     try:
         if not _todesk_process_alive():
             _start_todesk_process(exe)
+        _schedule_todesk_agent_update(exe)
         return True
     except Exception as exc:
         logger.warning("[remote-support] auto-resume failed: %s", exc)
@@ -1045,6 +1208,7 @@ async def update_remote_support(
                 state["updated_at"] = int(time.time() * 1000)
                 _save_todesk_state(state)
                 raise
+            _schedule_todesk_agent_update(exe)
         else:
             proc = _TODSK_PROCESS
             if proc is not None and proc.poll() is None:

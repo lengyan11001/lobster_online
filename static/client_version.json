@@ -1,7 +1,7 @@
 {
-  "version": "2.0.365",
-  "build": 674,
-  "applied_at": "2026-11-27T12:00:57+08:00",
-  "note": "修复开机白屏：启动页永不为空、白屏自动重载、启动超时诊断（海外）",
-  "bundle_sha256": "518c7ac04577cdd2bc566435796dfb592cdb2e6ab9ff1c50b5a4e7db730f0b9e"
+  "version": "2.0.366",
+  "build": 675,
+  "applied_at": "2026-11-27T14:34:09+08:00",
+  "note": "Online 自动处理 ToDesk 升级：agent 0.2.12 + 2K 档位 + 悬停移动",
+  "bundle_sha256": "40ec9138931d9c54903a3a3519a566cbd61c65429b1fc9460858e04eeb07d47a"
 }
