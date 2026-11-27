@@ -945,6 +945,51 @@ def webview2_runtime_available() -> bool:
 # ---------------------------------------------------------------------------
 SHELL_BACKGROUND_COLOR = os.environ.get("LOBSTER_DESKTOP_BG_COLOR", "#fbfaf8")
 
+SOFTWARE_RENDER_ENV = "LOBSTER_DESKTOP_SOFTWARE_RENDER"
+SOFTWARE_RENDER_ARGS = "--disable-gpu --disable-gpu-compositing --disable-direct-composition"
+
+
+def apply_software_render_args() -> None:
+    """GPU 合成是 WebView 白屏(有 DOM 不绘制)最常见的原因；仅在兜底重启时启用。"""
+    if os.environ.get(SOFTWARE_RENDER_ENV) != "1":
+        return
+    current = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
+    if "--disable-gpu" not in current:
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (current + " " + SOFTWARE_RENDER_ARGS).strip()
+    log("desktop webview software rendering enabled")
+
+
+def purge_webview_cache_if_build_changed() -> None:
+    """OTA 换版后清掉 WebView2 的 GPU/JS 缓存，避免旧缓存导致整页不绘制。"""
+    try:
+        meta = json.loads((ROOT / "CLIENT_CODE_VERSION.json").read_text(encoding="utf-8"))
+        key = "%s-%s" % (meta.get("version"), meta.get("build"))
+    except Exception:
+        return
+    base = ROOT / "browser_data" / "desktop_webview"
+    marker = base / ".ota_build"
+    try:
+        old = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        if old and old != key:
+            removed = []
+            for rel in (
+                "EBWebView/Default/GPUCache",
+                "EBWebView/Default/Cache",
+                "EBWebView/Default/Code Cache",
+                "EBWebView/Default/ShaderCache",
+                "EBWebView/GPUCache",
+            ):
+                target = base / rel
+                if target.is_dir():
+                    shutil.rmtree(target, ignore_errors=True)
+                    removed.append(rel)
+            log("webview cache purged after update %s -> %s removed=%s" % (old, key, removed))
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(key, encoding="utf-8")
+    except Exception as exc:
+        log("webview cache purge skipped: %s" % exc)
+
+
 
 def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
     try:
@@ -2893,6 +2938,19 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     return False
                 time.sleep(3.0)
             log("webview page still blank reason=%s after %s attempts" % (reason, attempts))
+            # 兜底：重载无效说明不是"没加载"，而是 GPU 合成没画出来。
+            # 带软件渲染标记重启自身，下一次启动用 --disable-gpu 重新建 WebView。
+            if os.environ.get(SOFTWARE_RENDER_ENV) != "1":
+                log("webview blank persists; restarting launcher with software rendering")
+                os.environ[SOFTWARE_RENDER_ENV] = "1"
+                try:
+                    subprocess.Popen(
+                        [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+                        close_fds=True,
+                    )
+                except Exception as exc:
+                    log("software render relaunch failed: %s" % exc)
+                os._exit(3)
             return False
 
         def watch_backend(window, client_url: str) -> None:
@@ -3157,6 +3215,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             except Exception:
                 pass
         window_x, window_y, width, height = restore_window_geometry(width, height)
+        purge_webview_cache_if_build_changed()
+        apply_software_render_args()
         window = webview.create_window(
             title,
             html=desktop_loading_html(url, title),
