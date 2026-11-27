@@ -258,8 +258,23 @@ def open_channels() -> Dict[str, Any]:
     main = main_window()
     main_hwnd = int(main["hwnd"])
     _activate_hwnd(main_hwnd)
-    root = eng._uia_main_root(main_hwnd)
+    root = auto.ControlFromHandle(int(main_hwnd))
     tab = eng._find_tab_item(root, ["视频号"])
+    if not tab:
+        # 微信 4.2：视频号收在「发现」里，先点发现再点视频号
+        disc = auto.Control(searchFromControl=root, Name="发现", ControlType=auto.ControlType.ButtonControl)
+        if disc.Exists(1, 1):
+            rect = disc.BoundingRectangle
+            eng._uia_click_screen_point((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+            time.sleep(0.9)
+            root = auto.ControlFromHandle(int(main_hwnd))
+            tab = auto.Control(searchFromControl=root, Name="视频号", ControlType=auto.ControlType.ButtonControl)
+            if tab.Exists(2, 1):
+                rect = tab.BoundingRectangle
+                eng._uia_click_screen_point((rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2)
+                tab = True
+            else:
+                tab = None
     if not tab:
         raise ChannelsUiError("微信左侧栏未找到『视频号』入口")
     _click(tab, label="微信左侧栏视频号入口")
@@ -267,7 +282,10 @@ def open_channels() -> Dict[str, Any]:
     if not hwnd:
         raise ChannelsUiError("点击视频号后未出现视频号窗口")
     _activate_hwnd(int(hwnd))
-    ensure_feed_tab(int(hwnd))
+    try:
+        ensure_feed_tab(int(hwnd))
+    except Exception:
+        pass
     return {"ok": True, "hwnd": int(hwnd), "doc": active_doc_name(int(hwnd))}
 
 
@@ -371,6 +389,11 @@ def _click(node: Any, *, label: str = "") -> None:
     try:
         eng._click_uia_node(node)
     except Exception as exc:
+        # 4.2 视频号 WebView 的节点是 _PwaNode，没有 _element；退回坐标点击
+        rect = _rect(node)
+        if rect:
+            eng._uia_click_screen_point((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+            return
         raise ChannelsUiError(f"点击失败：{label} {exc}") from exc
 
 
