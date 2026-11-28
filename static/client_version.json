@@ -1,7 +1,7 @@
 {
-  "version": "2.0.373",
-  "build": 684,
-  "applied_at": "2026-11-27T18:10:32+08:00",
-  "note": "原生启动窗 + 白屏自动重启一次",
-  "bundle_sha256": "9b875a7bd5c4ae4e32c1ac83d837287284fd208b4cf86f9bc1442609ba7495fa"
+  "version": "2.0.376",
+  "build": 687,
+  "applied_at": "2026-11-28T19:10:14+08:00",
+  "note": "海外：YouTube 素材 id 纠正 + 封面不再当素材；白屏探测/诊断包；agent 更新防护",
+  "bundle_sha256": "e693e4edc7bcb53a0a26f24464a88f0a2ccc59e8f4be8a2334dc44d184f9b7cb"
 }
