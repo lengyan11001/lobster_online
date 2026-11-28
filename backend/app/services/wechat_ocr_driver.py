@@ -31,6 +31,7 @@ import sys
 import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import win32api
 import win32gui
 from PIL import Image, ImageGrab
 
@@ -302,6 +303,16 @@ def covered_by(hwnd: int, x: int, y: int) -> Optional[str]:
         root = int(win32gui.GetAncestor(w, 2) or w)
         if root == _root_window(hwnd):
             return None
+        # 微信自己的弹出菜单/浮层是独立顶层窗（Qt51514QWindowToolSaveBits 等），
+        # 同进程就算"没被遮挡"
+        import win32process
+
+        try:
+            if win32process.GetWindowThreadProcessId(root)[1] == \
+                    win32process.GetWindowThreadProcessId(int(hwnd))[1]:
+                return None
+        except Exception:
+            pass
         return f"{win32gui.GetClassName(root)} {win32gui.GetWindowText(root)[:24]!r}"
     except Exception as e:
         return f"probe-error {e}"
@@ -313,6 +324,28 @@ def unset_topmost(hwnd: int) -> None:
     try:
         win32gui.SetWindowPos(int(hwnd), win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
                               win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+    except Exception:
+        pass
+
+
+def click_plain(x: int, y: int) -> None:
+    """不做遮挡校验的点击。
+
+    用于微信自己的弹出菜单：菜单是临时顶层窗，一旦把主窗口提到前面
+    （TOPMOST/SetForegroundWindow）菜单就会被系统关掉，点了等于没点。
+    调用方必须保证此前的窗口层级已经摆好。
+    """
+    click_point(x, y)
+
+
+def make_topmost(hwnd: int) -> None:
+    """把微信整体提到最前（会压过 Chrome 等普通窗口），只调一次。"""
+    import win32con
+
+    try:
+        win32gui.SetWindowPos(int(hwnd), win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+        time.sleep(0.3)
     except Exception:
         pass
 
@@ -1219,6 +1252,120 @@ def _weixin_pids() -> set:
         return set()
 
 
+_PAGE_CLASSES = ("Qt51514QWindowIcon",)
+
+
+def _tool_window(cls: str) -> bool:
+    return ("ToolSaveBits" in cls) or ("MessageWindow" in cls) or ("IME" in cls) or cls.startswith("#")
+
+
+def wechat_pages(pid: Optional[int] = None) -> List[Dict[str, Any]]:
+    """微信进程下的所有顶层页面窗（4.2 的子页面是独立窗口，不是主窗内嵌）。"""
+    import win32process
+
+    if pid is None:
+        h = find_wechat_hwnd()
+        pid = win32process.GetWindowThreadProcessId(int(h))[1] if h else 0
+    out: List[Dict[str, Any]] = []
+
+    def _cb(w, _):
+        try:
+            if not win32gui.IsWindowVisible(w) or win32gui.IsIconic(w):
+                return True
+            cls = win32gui.GetClassName(w)
+            if cls not in _PAGE_CLASSES:
+                return True
+            if pid and win32process.GetWindowThreadProcessId(w)[1] != pid:
+                return True
+            l, t, r, b = win32gui.GetWindowRect(w)
+            if r - l < 180 or b - t < 120:
+                return True
+            out.append({"hwnd": w, "title": win32gui.GetWindowText(w),
+                        "rect": (l, t, r, b), "area": (r - l) * (b - t)})
+        except Exception:
+            pass
+        return True
+
+    win32gui.EnumWindows(_cb, None)
+    return out
+
+
+def activate_window(hwnd: int) -> bool:
+    """强激活：AttachThreadInput 绕开前台锁（SetForegroundWindow 常被拒）。"""
+    import win32process
+
+    h = int(hwnd)
+    try:
+        if win32gui.GetForegroundWindow() == h:
+            return True
+        fg = win32gui.GetForegroundWindow()
+        t_fg = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
+        me = win32api.GetCurrentThreadId()
+        if t_fg:
+            win32process.AttachThreadInput(me, t_fg, True)
+        try:
+            win32gui.BringWindowToTop(h)
+            win32gui.SetForegroundWindow(h)
+        finally:
+            if t_fg:
+                win32process.AttachThreadInput(me, t_fg, False)
+        time.sleep(0.3)
+    except Exception:
+        pass
+    return win32gui.GetForegroundWindow() == h
+
+
+def bring_page_front(hwnd: int) -> Tuple[int, int, int, int]:
+    """子页面窗提到最前（点击后它常常开在主窗后面，看起来像"没反应"）。"""
+    import ctypes
+    import win32con
+
+    w = int(hwnd)
+    try:
+        win32gui.ShowWindow(w, win32con.SW_SHOW)
+        time.sleep(0.15)
+        win32gui.ShowWindow(w, win32con.SW_RESTORE)
+        time.sleep(0.15)
+        try:
+            ctypes.windll.user32.SwitchToThisWindow(ctypes.c_void_p(w), True)
+        except Exception:
+            pass
+        activate_window(w)
+        # 主窗若是 TOPMOST，子页面永远压不上去；子页面自己也置顶
+        try:
+            win32gui.SetWindowPos(w, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+        except Exception:
+            pass
+        time.sleep(0.35)
+    except Exception:
+        pass
+    return window_rect(w)
+
+
+def page_by_title(title_part: str) -> Optional[Dict[str, Any]]:
+    for p in wechat_pages():
+        if title_part and title_part in (p["title"] or ""):
+            return p
+    return None
+
+
+def current_page(main_hwnd: int) -> Tuple[int, Tuple[int, int, int, int]]:
+    """当前该操作哪一层窗：前台若是微信的页面窗就用它，否则用主窗。"""
+    import win32process
+
+    try:
+        fg = int(win32gui.GetForegroundWindow() or 0)
+        if fg and fg != int(main_hwnd):
+            pid_main = win32process.GetWindowThreadProcessId(int(main_hwnd))[1]
+            if win32process.GetWindowThreadProcessId(fg)[1] == pid_main \
+                    and win32gui.GetClassName(fg) in _PAGE_CLASSES:
+                return fg, window_rect(fg)
+    except Exception:
+        pass
+    return int(main_hwnd), window_rect(int(main_hwnd))
+
+
 def find_wechat_hwnd() -> int:
     """微信主窗口：按进程名（Weixin.exe）认，隐藏/最小化也返回，供 ensure_visible 拉回。"""
     import win32process
@@ -1228,8 +1375,7 @@ def find_wechat_hwnd() -> int:
 
     def _cb(hwnd, _):
         try:
-            if win32gui.IsIconic(hwnd):
-                return True
+            # 最小化/收进托盘也要返回：调用方用 ensure_visible 拉回来
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             if pids and pid not in pids:
                 return True
@@ -1237,11 +1383,16 @@ def find_wechat_hwnd() -> int:
             title = win32gui.GetWindowText(hwnd)
             if not (cls in _WECHAT_CLASSES or "微信" in (title or "") or "WeChat" in (title or "")):
                 return True
+            iconic = bool(win32gui.IsIconic(hwnd))
             l, t, r, b = win32gui.GetWindowRect(hwnd)
             area = max(0, r - l) * max(0, b - t)
+            if iconic:
+                area = 10 ** 6          # 最小化时 rect 是 160x32 的占位，别按它筛掉
             if area <= 200 * 200:
                 return True
             score = area
+            if win32gui.IsIconic(hwnd):
+                score -= 10 ** 6          # 最小化的排后面，但不排除
             if cls == "Qt51514QWindowIcon":
                 score += 10 ** 8
             if title == "微信":
