@@ -4681,7 +4681,16 @@ def _ensure_video_poster(asset_id: str, source: Path) -> Path:
         source_mtime = source.stat().st_mtime
         if dest.exists() and dest.stat().st_size > 0 and dest.stat().st_mtime >= source_mtime:
             return dest
-        tmp = dest.with_suffix(".tmp.jpg")
+        # 2026-11-28 现场：固定名 *.tmp.jpg 在上一次失败后可能残留成文件/目录，
+        # ffmpeg 打开就报 "Invalid argument"。每次用唯一临时名，并先清理。
+        import uuid as _uuid
+
+        tmp = _POSTER_DIR / f"{asset_id}.{_uuid.uuid4().hex[:8]}.tmp.jpg"
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
         last_err = ""
         for ss in ("0.1", "0"):
             try:
@@ -4702,6 +4711,11 @@ def _ensure_video_poster(asset_id: str, source: Path) -> Path:
                 tmp.replace(dest)
                 return dest
             last_err = (proc.stderr or b"").decode("utf-8", errors="replace")[-300:]
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
         logger.warning("[assets] poster failed asset=%s err=%s", asset_id, last_err)
         raise HTTPException(500, detail="视频缩略图生成失败")
 

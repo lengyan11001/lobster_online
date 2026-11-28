@@ -2500,6 +2500,23 @@ async def create_publish_task(
                 _asset_id_s,
             )
             raise HTTPException(404, detail=f"素材不存在: {_asset_id_s}")
+    if acct.platform == "youtube" and asset is not None:
+        # 内容记录里选的是视频，但同 id 可能被封面 png 占了（media_type=image）；
+        # 这里先换回真正的视频，避免 YouTube 误判「不是视频」。
+        try:
+            from .youtube_publish import resolve_video_asset
+
+            resolved = resolve_video_asset(db, current_user.id, asset)
+            if resolved is not None and resolved is not asset:
+                logger.info(
+                    "[PUBLISH-API] 素材 %s 是图片，自动改用同名视频 %s (filename=%s)",
+                    _asset_id_s,
+                    getattr(resolved, "asset_id", ""),
+                    getattr(resolved, "filename", ""),
+                )
+                asset = resolved
+        except Exception as exc:
+            logger.warning("[PUBLISH-API] 视频素材纠正失败 asset=%s err=%s", _asset_id_s, exc)
     if acct.platform == "youtube":
         import re as _re
 

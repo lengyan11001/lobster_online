@@ -874,6 +874,53 @@ async def _resolve_asset_to_temp_path(
     return path
 
 
+_VIDEO_SUFFIXES = (".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v")
+
+
+def _asset_is_video(asset) -> bool:
+    mt = (getattr(asset, "media_type", "") or "").lower()
+    fn = (getattr(asset, "filename", "") or "").lower()
+    return mt == "video" or mt.startswith("video/") or fn.endswith(_VIDEO_SUFFIXES)
+
+
+def resolve_video_asset(db, user_id: int, asset):
+    """同一个 id 可能被封面 png 占用：按 asset_id / 文件名 / 来源 id 找真正的视频。
+
+    2026-11-28 现场：内容记录里选的是视频（预览也是视频），但服务端这条 id
+    被同名封面 e42336400aea.png 登记成了 image，导致 YouTube 报「不是视频」。
+    """
+    if asset is None or _asset_is_video(asset):
+        return asset
+    meta = asset.meta if isinstance(asset.meta, dict) else {}
+    candidates = set()
+    for value in (meta.get("source_asset_id"), getattr(asset, "asset_id", ""), asset_filename_stem(asset)):
+        text = str(value or "").strip()
+        if text:
+            candidates.add(text.lower())
+    if not candidates:
+        return None
+    rows = (
+        db.query(Asset)
+        .filter(Asset.user_id == int(user_id), Asset.media_type == "video")
+        .order_by(Asset.id.desc())
+        .limit(300)
+        .all()
+    )
+    for row in rows:
+        row_key = str(getattr(row, "asset_id", "") or "").strip().lower()
+        if row_key and row_key in candidates:
+            return row
+    for row in rows:
+        if asset_filename_stem(row).lower() in candidates:
+            return row
+    return None
+
+
+def asset_filename_stem(asset) -> str:
+    name = str(getattr(asset, "filename", "") or "").strip()
+    return Path(name).stem if name else ""
+
+
 async def perform_youtube_upload(
     db: Session,
     user_id: int,
@@ -915,12 +962,17 @@ async def perform_youtube_upload(
     if not asset:
         raise YoutubeUploadUserError("素材不存在或无权访问", status_code=404)
 
-    mt = (asset.media_type or "").lower()
-    fn = (asset.filename or "").lower()
-    is_video = (mt == "video") or mt.startswith("video/") or fn.endswith(
-        (".mp4", ".mov", ".webm", ".mkv", ".avi")
-    )
-    if not is_video:
+    if not _asset_is_video(asset):
+        alt = resolve_video_asset(db, user_id, asset)
+        if alt is not None:
+            logger.info(
+                "[youtube-upload] asset %s 解析为图片，自动改用同名视频 %s (filename=%s)",
+                getattr(asset, "asset_id", ""),
+                getattr(alt, "asset_id", ""),
+                getattr(alt, "filename", ""),
+            )
+            asset = alt
+    if not _asset_is_video(asset):
         raise YoutubeUploadUserError("当前素材不是视频类型，请选择视频素材")
     if body.self_declared_made_for_kids is None:
         raise YoutubeUploadUserError("必须选择内容是否面向儿童（self_declared_made_for_kids）", status_code=400)
