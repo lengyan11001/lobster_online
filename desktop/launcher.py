@@ -972,6 +972,7 @@ def wait_for_boot_settle(min_uptime: float = 0.0, max_wait: float = 0.0) -> None
 
 
 _SPLASH = {"state": None}
+_WATCHDOG_STARTED = {"on": False}
 
 
 def start_native_splash(title: str) -> None:
@@ -1036,6 +1037,54 @@ def _window_is_blank(hwnd: int) -> bool:
     except Exception as exc:
         log("blank check skipped: %s" % exc)
         return False
+
+
+def _restart_client(reason: str) -> None:
+    """带冷却的重启：同一问题 10 分钟内最多自动重启一次。"""
+    try:
+        last = float(os.environ.get("LOBSTER_DESKTOP_LAST_AUTORESTART", "0") or 0)
+    except Exception:
+        last = 0.0
+    if time.time() - last < 600:
+        log("blank restart suppressed (cooldown) reason=%s" % reason)
+        return
+    log("restarting client reason=%s" % reason)
+    os.environ["LOBSTER_DESKTOP_LAST_AUTORESTART"] = str(time.time())
+    try:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], close_fds=True)
+    except Exception as exc:
+        log("client restart failed: %s" % exc)
+        return
+    os._exit(0)
+
+
+def _watch_window_paint(title: str, client_url: str) -> None:
+    """运行期看门狗：锁屏/休眠回来后 WebView 可能整块不重绘，自动重载或重启。"""
+    try:
+        import ctypes as _ctypes
+
+        user32 = _ctypes.windll.user32
+        blank_hits = 0
+        while True:
+            time.sleep(45)
+            hwnd = user32.FindWindowW(None, title)
+            if not hwnd:
+                continue
+            if user32.IsIconic(hwnd):
+                blank_hits = 0
+                continue
+            if user32.GetForegroundWindow() != hwnd:
+                continue
+            if not _window_is_blank(hwnd):
+                blank_hits = 0
+                continue
+            blank_hits += 1
+            log("paint watchdog: window blank hits=%s" % blank_hits)
+            if blank_hits >= 2:
+                _restart_client("paint_watchdog_blank")
+                return
+    except Exception as exc:
+        log("paint watchdog stopped: %s" % exc)
 
 
 def _restart_once_if_blank(title: str) -> None:
@@ -3106,6 +3155,9 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         else:
                             close_native_splash()
                             threading.Thread(target=_restart_once_if_blank, args=(title,), daemon=True).start()
+                            if not _WATCHDOG_STARTED.get("on"):
+                                _WATCHDOG_STARTED["on"] = True
+                                threading.Thread(target=_watch_window_paint, args=(title, client_url), daemon=True).start()
                             return True
                     time.sleep(0.8)
                 log(
