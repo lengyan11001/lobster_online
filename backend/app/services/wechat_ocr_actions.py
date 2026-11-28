@@ -37,7 +37,7 @@ RAIL_CHAT_Y = 107
 RAIL_DISCOVER_Y = 257
 SEARCH_DX, SEARCH_DY = 159, 56      # 会话列表顶部搜索框
 PLUS_DX, PLUS_DY = 195, 56          # 会话列表顶部 + 号
-CAMERA_DR, CAMERA_DY = 82, 62       # 朋友圈相机：距右缘 / 距顶
+CAMERA_DR, CAMERA_DY = 87, 62       # 朋友圈相机：距右缘 / 距顶
 
 
 def _rail(hwnd: int, rect: Tuple[int, int, int, int], dy: int) -> None:
