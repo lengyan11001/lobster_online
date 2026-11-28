@@ -2417,9 +2417,22 @@ def _register_local_user_upload_assets_to_auth_server(
         candidates.append(row)
     if not candidates:
         return 0
+    # 视频封面（文件名 stem == 视频 asset_id 的图片）不往云端登记成独立素材，
+    # 否则云端会多出一条同来源 id 的 image 记录，发布时按 id 取素材就会拿到图片。
+    video_ids = {
+        str(item[0] or "").strip().lower()
+        for item in db.query(Asset.asset_id)
+        .filter(Asset.user_id == current_user.id, Asset.media_type == "video")
+        .all()
+        if str(item[0] or "").strip()
+    }
     registered = 0
     with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
         for row in candidates:
+            if (row.media_type or "").lower() == "image" and video_ids:
+                stem = Path(str(row.filename or "")).stem.strip().lower()
+                if stem and stem in video_ids:
+                    continue
             payload = {
                 "url": row.source_url or "",
                 "media_type": row.media_type or "image",
@@ -3314,6 +3327,36 @@ async def upload_asset(
 # ── List / search ─────────────────────────────────────────────────
 
 @router.get("/api/assets", summary="列出本地素材")
+def _drop_video_poster_assets(db, user_id: int, rows: list) -> list:
+    """把「文件名 stem == 某个视频 asset_id」的图片当作视频封面，不在素材列表单独展示。
+
+    2026-11-28 现场：封面 png 被登记成同 id 的图片素材，内容记录里点视频发布却
+    命中图片。封面应该只是视频的属性，不应作为可选素材出现。
+    """
+    if not rows:
+        return rows
+    try:
+        video_ids = {
+            str(item[0] or "").strip().lower()
+            for item in db.query(Asset.asset_id)
+            .filter(Asset.user_id == user_id, Asset.media_type == "video")
+            .all()
+            if str(item[0] or "").strip()
+        }
+    except Exception:
+        return rows
+    if not video_ids:
+        return rows
+    kept = []
+    for row in rows:
+        if str(getattr(row, "media_type", "") or "").lower() == "image":
+            stem = Path(str(getattr(row, "filename", "") or "")).stem.strip().lower()
+            if stem and stem in video_ids:
+                continue
+        kept.append(row)
+    return kept
+
+
 def list_assets(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -3385,6 +3428,7 @@ def list_assets(
     else:
         total = query.count()
         rows = query.order_by(Asset.created_at.desc()).offset(clean_offset).limit(max_limit).all()
+    rows = _drop_video_poster_assets(db, current_user.id, rows)
     out = []
     for r in rows:
         mt = (r.media_type or "").lower()
