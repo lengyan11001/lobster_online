@@ -18622,8 +18622,27 @@ def add_local_friend(
             error = str(exc)
             raw = {"message": "已经是好友，跳过"}
         else:
+            # UIA 原语失败 → 换 OCR 原语（4.2 的 UIA 树整体失效时唯一可走的路）
             status = "failed"
             error = str(exc)
+            try:
+                from . import wechat_ocr_fallback as _ocr_fb
+
+                if _ocr_fb.enabled():
+                    ocr_res = _ocr_fb.add_friend(
+                        account_id, keyword,
+                        apply_message=apply_message, remark=remark,
+                        submit=not prepare_only,
+                    )
+                    raw = {"driver": "ocr", "message": ocr_res.get("message"),
+                           "raw": ocr_res.get("raw"), "uia_error": error[:300]}
+                    if ocr_res.get("status") in ("submitted", "prepared", "already_friend"):
+                        status = ocr_res["status"]
+                        error = ""
+                    else:
+                        error = f"{error}；OCR 兜底也失败：{ocr_res.get('message')}"[:800]
+            except Exception as ocr_exc:
+                error = f"{error}；OCR 兜底异常：{ocr_exc}"[:800]
     with _connect() as conn:
         conn.execute(
             """
@@ -23217,12 +23236,19 @@ def _send_text_local(account_id: str, peer_id: str, text: str) -> Dict[str, Any]
     # A successful wxauto4 call only means the API accepted the request. The
     # visible chat record is the source of truth, so every local send now uses
     # the same click-and-verify path as automatic replies.
-    return _send_text_local_slow(
-        account_id,
-        peer_id,
-        text,
-        {"driver": "native_wechat_verified_send", "source": "send_text"},
-    )
+    try:
+        return _send_text_local_slow(
+            account_id,
+            peer_id,
+            text,
+            {"driver": "native_wechat_verified_send", "source": "send_text"},
+        )
+    except Exception as exc:
+        from . import wechat_ocr_fallback as _ocr_fb
+
+        if not _ocr_fb.enabled():
+            raise
+        return _ocr_fb.send_text(account_id, peer_id, text, reason=str(exc))
 
 
 def _wxauto_visible_message_snapshot(wx: Any) -> Dict[str, Any]:
@@ -26451,18 +26477,26 @@ def publish_moments_local(
     media_type: str = "image_text",
     visibility: str = "public",
 ) -> Dict[str, Any]:
-    return _run_local_driver_operation(
-        account_id,
-        "发布朋友圈",
-        lambda: _publish_moments_local_once(
+    try:
+        return _run_local_driver_operation(
             account_id,
-            content,
-            attachments=attachments,
-            media_type=media_type,
-            visibility=visibility,
-        ),
-        retry_on_failure=False,
-    )
+            "发布朋友圈",
+            lambda: _publish_moments_local_once(
+                account_id,
+                content,
+                attachments=attachments,
+                media_type=media_type,
+                visibility=visibility,
+            ),
+            retry_on_failure=False,
+        )
+    except Exception as exc:
+        from . import wechat_ocr_fallback as _ocr_fb
+
+        if not _ocr_fb.enabled():
+            raise
+        return _ocr_fb.publish_moments(account_id, content, attachments=attachments,
+                                       visibility=visibility)
 
 
 def _group_picker_root(hwnd: int) -> Any:

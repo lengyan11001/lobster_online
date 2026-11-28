@@ -245,6 +245,85 @@ def _click_item(hwnd: int, it: Dict[str, Any]) -> None:
 
 
 def _ensure_chat_page(hwnd: int, rect: Tuple[int, int, int, int]) -> bool:
+    """回到「聊天」主页面（4.2 聊天页没有「搜索」占位文字，只有图标）。"""
+    def _on_chat(items) -> bool:
+        texts = [it["text"] for it in items]
+        if any("搜索" in t for t in texts):
+            return True
+        return any(t.strip() in ("服务号", "公众号", "订阅号", "文件传输助手") for t in texts)
+
+    for _ in range(3):
+        if _on_chat(_ocr(hwnd)):
+            return True
+        _rail(hwnd, rect, RAIL_CHAT_Y)
+        time.sleep(1.0)
+    return _on_chat(_ocr(hwnd))
+
+
+def _ocr(hwnd: int, region=None) -> List[Dict[str, Any]]:
+    try:
+        return drv.read_window(hwnd, region=region)
+    except Exception:
+        return []
+
+
+def wechat_page(main_hwnd: int):
+    """当前该操作的微信窗：前台若是微信页面窗就用它，否则用非主窗子页面，最后才主窗。"""
+    import win32process
+    try:
+        fg = int(win32gui.GetForegroundWindow() or 0)
+        if fg:
+            pid_main = win32process.GetWindowThreadProcessId(int(main_hwnd))[1]
+            if fg != int(main_hwnd) and \
+                    win32process.GetWindowThreadProcessId(fg)[1] == pid_main and \
+                    win32gui.GetClassName(fg) == "Qt51514QWindowIcon":
+                return fg, drv.window_rect(fg)
+    except Exception:
+        pass
+    pages = [x for x in drv.wechat_pages() if (x["title"] or "") != "微信"]
+    if pages:
+        pages.sort(key=lambda x: x["area"])
+        return pages[0]["hwnd"], drv.window_rect(pages[0]["hwnd"])
+    return int(main_hwnd), drv.window_rect(int(main_hwnd))
+
+
+def _norm(text: str) -> str:
+    """去空白比较：OCR 会把 'OCR 自测 21:05' 读成 'OCR自测21:05'。"""
+    return re.sub(r"\s+", "", text or "")
+
+
+def _has(items: Sequence[Dict[str, Any]], needle: str) -> bool:
+    if not needle:
+        return False
+    n = _norm(needle)
+    return any(n in _norm(it["text"]) for it in items)
+
+
+def _find_exact(items: Sequence[Dict[str, Any]], needle: str) -> Optional[Dict[str, Any]]:
+    return next((it for it in items if it["text"].strip() == needle), None)
+
+
+def _wait(pred, timeout: float = 6.0, interval: float = 0.5):
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = pred()
+        if last:
+            return last
+        time.sleep(interval)
+    return last
+
+
+def _click_at(hwnd: int, rect: Tuple[int, int, int, int], fx: float, fy: float) -> None:
+    l, t, r, b = rect
+    drv.click_checked(hwnd, int(l + (r - l) * fx), int(t + (b - t) * fy))
+
+
+def _click_item(hwnd: int, it: Dict[str, Any]) -> None:
+    drv.click_checked(hwnd, it["cx"], it["cy"])
+
+
+def _ensure_chat_page(hwnd: int, rect: Tuple[int, int, int, int]) -> bool:
     """回到「聊天」主页面（侧栏第一个图标）。"""
     l, t, r, b = rect
     for _ in range(3):
@@ -496,8 +575,12 @@ def add_friend(
 
     _click_item(ph, btn)
     time.sleep(1.8)
-    ah, arect = drv.current_page(main)
-    notes.append(f"apply_page={win32gui.GetWindowText(ah)!r}")
+    page = _await_page("申请添加朋友", timeout=3.0)
+    if page:
+        ah, arect = page
+    else:
+        ah, arect = drv.current_page(main)
+    notes.append(f"apply_page={win32gui.GetWindowText(ah)!r} rect={arect}")
     if not submit:
         return {"ok": True, "status": "pending_submit", "keyword": keyword, "notes": notes}
 
@@ -512,11 +595,18 @@ def add_friend(
             _paste_text(hello)
         time.sleep(0.6)
         notes.append("hello=" + (hello[:12]))
+    page = drv.page_by_title("申请添加朋友")
+    if page:
+        ah, arect = page["hwnd"], drv.bring_page_front(page["hwnd"])
     btn = _find_exact(_ocr(ah), "确定") or _find_exact(_ocr(ah), "发送")
-    if not btn:
-        return {"ok": False, "status": "pending_submit", "keyword": keyword,
-                "error": "找不到确定/发送按钮", "notes": notes}
-    _click_item(ah, btn)
+    if btn:
+        _click_item(ah, btn)
+    else:
+        # 兜底：申请页底部左起约 1/3 处就是绿色「确定」
+        cx = int(arect[0] + (arect[2] - arect[0]) * 0.32)
+        cy = int(arect[3] - 26)
+        drv.click_checked(ah, cx, cy)
+        notes.append(f"fallback_click=({cx},{cy})")
     time.sleep(2.5)
     closed = not win32gui.IsWindow(ah)
     texts = [it["text"] for it in _ocr(ah)] if not closed else []
