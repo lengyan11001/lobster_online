@@ -1350,6 +1350,25 @@ def page_by_title(title_part: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def close_other_pages(main_hwnd: int) -> int:
+    """关掉遗留的微信子页面窗（添加朋友/申请页 …）。
+
+    这些窗会盖在主窗上，连左侧栏图标都点不到，表现为"点了没反应"。
+    """
+    closed = 0
+    for p in wechat_pages():
+        if (p["title"] or "") == "微信" or p["hwnd"] == int(main_hwnd):
+            continue
+        try:
+            win32gui.PostMessage(p["hwnd"], 0x0010, 0, 0)   # WM_CLOSE
+            closed += 1
+        except Exception:
+            pass
+    if closed:
+        time.sleep(0.6)
+    return closed
+
+
 def current_page(main_hwnd: int) -> Tuple[int, Tuple[int, int, int, int]]:
     """当前该操作哪一层窗：前台若是微信的页面窗就用它，否则用主窗。"""
     import win32process

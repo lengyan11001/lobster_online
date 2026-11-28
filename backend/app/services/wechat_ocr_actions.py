@@ -348,6 +348,7 @@ def send_text(chat: str, text: str, *, submit: bool = True) -> Dict[str, Any]:
     if not hwnd:
         return {"ok": False, "error": "没找到微信窗口"}
     rect = _focus(hwnd)
+    drv.close_other_pages(hwnd)
     l, t, r, b = rect
     w, hh = r - l, b - t
     notes: List[str] = []
@@ -628,10 +629,11 @@ def _open_moments(hwnd: int, rect: Tuple[int, int, int, int]) -> bool:
         if not hit:
             continue
         _click_item(hwnd, hit)
-        time.sleep(2.2)
-        # 朋友圈页标题在右半区（发现面板里的「朋友圈」在左列，不能当判据）
-        if any(it["text"].strip() == "朋友圈" and (it["left"] - l) > (r - l) * 0.35
-               for it in _ocr(hwnd)):
+        time.sleep(2.4)
+        # 判据放宽：标题「朋友圈」常被 OCR 读错（真机读成「良试」），
+        # 只要右侧内容区出现文字就认为朋友圈页已打开（发现面板本身只在左侧 x<0.25w）
+        items = _ocr(hwnd)
+        if any((it["left"] - l) > (r - l) * 0.55 for it in items):
             return True
     return False
 
@@ -677,6 +679,7 @@ def post_moments(
     if missing:
         return {"ok": False, "error": f"图片不存在: {missing[0]}"}
     rect = _focus(hwnd)
+    drv.close_other_pages(hwnd)
     l, t, r, b = rect
     notes: List[str] = []
 
@@ -731,14 +734,20 @@ def post_moments(
     if not submit:
         return {"ok": True, "submitted": False, "images": len(paths), "notes": notes}
 
-    pub = _find_exact(_ocr(hwnd), "发表")
+    # 发表按钮在编辑窗里（4.2 的编辑窗是独立顶层窗，标题就叫「朋友圈」）
+    comp = drv.page_by_title("朋友圈")
+    ch = comp["hwnd"] if comp and comp["hwnd"] != hwnd else hwnd
+    crect = drv.bring_page_front(ch) if ch != hwnd else rect
+    pub = _find_exact(_ocr(ch), "发表")
     if not pub:
         return {"ok": False, "error": "找不到「发表」按钮", "notes": notes}
-    _click_item(hwnd, pub)
-    gone = _wait(lambda: not _has(_ocr(hwnd), "这一刻的想法"), timeout=8.0, interval=0.6)
-    if gone:
-        return {"ok": True, "submitted": True, "images": len(paths), "notes": notes}
-    return {"ok": False, "error": "点了发表但编辑页没关闭", "notes": notes}
+    drv.click_checked(ch, pub["cx"], pub["cy"])
+    # 判据：编辑窗消失 = 已提交（真机验证：点发表后 composer alive=0）
+    gone = _wait(lambda: not win32gui.IsWindow(ch), timeout=8.0, interval=0.5)
+    notes.append(f"composer_closed={gone}")
+    if not gone:
+        return {"ok": False, "error": "点了发表但编辑窗没关闭", "notes": notes}
+    return {"ok": True, "submitted": True, "verified": True, "images": len(paths), "notes": notes}
 
 
 # ------------------------------------------------------------------ CLI

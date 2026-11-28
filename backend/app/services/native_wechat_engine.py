@@ -18574,6 +18574,88 @@ def _prepare_local_add_friend_form(
     }
 
 
+# ---------------------------------------------------------------- UIA 失效短路
+# 4.2 的 UIA 树失效后，每次调用都要先跑 1~2 分钟的 UIA 重试才落到 OCR。
+# 这里记住"最近确认失效"的账号并做一次轻量探针，命中就直接走 OCR。
+_UIA_DEAD_UNTIL: Dict[str, float] = {}
+_UIA_DEAD_TTL = 600.0
+_UIA_DEAD_SIGNS = (
+    "未在加号菜单中找到",
+    "未进入发送添加朋友申请界面",
+    "无法激活",
+    "控件树",
+    "SearchNewFriendWnd",
+    "无效的窗口句柄",
+)
+
+
+def _mark_uia_dead(account_id: str, reason: str) -> None:
+    if not any(sign in (reason or "") for sign in _UIA_DEAD_SIGNS):
+        return
+    _UIA_DEAD_UNTIL[str(account_id)] = time.time() + _UIA_DEAD_TTL
+
+
+def clear_uia_dead(account_id: str = "") -> None:
+    if account_id:
+        _UIA_DEAD_UNTIL.pop(str(account_id), None)
+    else:
+        _UIA_DEAD_UNTIL.clear()
+
+
+def uia_dead_state(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "")
+    left = max(0.0, _UIA_DEAD_UNTIL.get(key, 0.0) - time.time()) if key else 0.0
+    return {"account_id": key, "marked": bool(key and left > 0), "seconds_left": int(left)}
+
+
+def _uia_tree_alive(account_id: str) -> bool:
+    """轻量探针：主窗 UIA 子节点 > 1 才算活着（4.2 失效时只有 1 个渲染占位）。"""
+    try:
+        hwnd = _local_wechat_hwnd(account_id)
+        if not hwnd:
+            return False
+        import uiautomation as auto
+
+        root = auto.ControlFromHandle(int(hwnd))
+        return len(root.GetChildren()) > 1
+    except Exception:
+        return False
+
+
+def _should_short_circuit_uia(account_id: str) -> bool:
+    """命中条件：OCR 兜底可用 + 之前判过失效 + 探针确认树还是死的。"""
+    try:
+        from . import wechat_ocr_fallback as _ocr_fb
+
+        if not _ocr_fb.enabled():
+            return False
+    except Exception:
+        return False
+    if time.time() >= _UIA_DEAD_UNTIL.get(str(account_id), 0.0):
+        return False
+    if _uia_tree_alive(account_id):
+        clear_uia_dead(account_id)      # 微信恢复了，下次走 UIA
+        return False
+    return True
+
+
+def _ocr_add_friend_result(account_id: str, keyword: str, *, apply_message: str,
+                           remark: str, submit: bool) -> tuple:
+    """跑 OCR 加好友并映射成 (status, raw, error)。"""
+    from . import wechat_ocr_fallback as _ocr_fb
+
+    try:
+        res = _ocr_fb.add_friend(account_id, keyword, apply_message=apply_message,
+                                 remark=remark, submit=submit)
+    except Exception as exc:
+        return "failed", {"driver": "ocr"}, f"OCR 兜底异常：{exc}"[:600]
+    status = str(res.get("status") or "failed")
+    raw = {"driver": "ocr", "message": res.get("message"), "raw": res.get("raw")}
+    if status in ("submitted", "prepared", "already_friend"):
+        return status, raw, ""
+    return "failed", raw, str(res.get("message") or "OCR 加好友未完成")[:600]
+
+
 def add_local_friend(
     account_id: str,
     keyword: str,
@@ -18595,7 +18677,15 @@ def add_local_friend(
     status = "prepared" if prepare_only else "submitted"
     error = ""
     raw: Dict[str, Any] = {}
-    try:
+    if _should_short_circuit_uia(account_id):
+        status, raw, error = _ocr_add_friend_result(
+            account_id, keyword,
+            apply_message=apply_message, remark=remark, submit=not prepare_only,
+        )
+        raw["short_circuit"] = True
+        raw["driver"] = "ocr"
+    else:
+      try:
         raw = _run_local_driver_operation(
             account_id,
             "添加微信好友",
@@ -18610,13 +18700,14 @@ def add_local_friend(
             ),
         )
         status = "prepared" if prepare_only else "submitted"
-    except FriendAlreadyAdded as exc:
+      except FriendAlreadyAdded as exc:
         # 已经是好友：不算失败，也不用重试
         status = "already_friend"
         error = str(exc)
         raw = {"message": "已经是好友，跳过"}
-    except Exception as exc:
+      except Exception as exc:
         # _run_local_driver_operation 会把异常重新包装，类型丢了，所以再按文案兜一层
+        _mark_uia_dead(account_id, str(exc))
         if "已经是好友" in str(exc):
             status = "already_friend"
             error = str(exc)
